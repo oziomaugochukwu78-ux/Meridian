@@ -28,6 +28,7 @@ public:
 
     std::function<juce::ValueTree (juce::Point<int>)> trackAtScreenPosition;
     std::function<void (juce::ValueTree)> openElasticDialog;
+    std::function<void (juce::ValueTree)> openPianoRoll;
     /** Ctrl+wheel (zoom) and Shift+wheel (horizontal scroll); plain wheel scrolls tracks. */
     std::function<void (const juce::MouseEvent&, const juce::MouseWheelDetails&)> onModifiedWheel;
 

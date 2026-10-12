@@ -1767,6 +1767,7 @@ void SelfTest::timerCallback()
                 else
                 {
                     testUserInterface();
+                    testPianoRoll();
                     buildShowcaseSession(); // for the screenshots
                     phase = 4;
                 }
@@ -1787,6 +1788,7 @@ void SelfTest::timerCallback()
             {
                 finishRecordingTest();
                 testUserInterface();
+                testPianoRoll();
                 buildShowcaseSession();
                 ticks = 0;
                 phase = 4;
@@ -1931,6 +1933,17 @@ void SelfTest::buildShowcaseSession()
         for (const auto& [seconds, level] : { std::pair { 1.0, -30.0 }, { 2.0, -2.0 }, { 3.2, -2.0 }, { 4.0, -18.0 } })
             automation::addPoint (lane, (juce::int64) (seconds * sampleRate), level, nullptr);
     }
+    // An instrument track with chords, so the screenshots show MIDI too.
+    auto synth = session->addTrack ("Synth", 2, nullptr, Session::TrackKind::instrument);
+    auto synthClip = session->addMidiClip (synth, 0, 16 * 24000, "Chords", nullptr); // 4 bars at 120 BPM
+    const int chords[4][3] = { { 60, 64, 67 }, { 59, 62, 67 }, { 57, 60, 64 }, { 57, 60, 65 } };
+    for (int bar = 0; bar < 4; ++bar)
+        for (const int p : chords[bar])
+            midimodel::addNote (synthClip, { p, 0.7f, bar * 3840, 3600 }, nullptr);
+    for (int i = 0; i < 16; ++i)
+        midimodel::addNote (synthClip, { 72 + (i % 3) * 4, 0.9f, i * 960, 480 }, nullptr);
+    synth.setProperty (ids::volumeDb, -8.0, nullptr);
+
     vox.setProperty (ids::solo, false, nullptr);
     vox.setProperty (ids::pan, 0.25, nullptr);
     drums.setProperty (ids::mute, false, nullptr);
@@ -2081,6 +2094,89 @@ void SelfTest::drag (juce::Component& c, juce::Point<float> from, juce::Point<fl
     c.mouseDown (mouseEvent (c, from, from, false, modifiers));
     c.mouseDrag (mouseEvent (c, from + delta, from, true, modifiers));
     c.mouseUp (mouseEvent (c, from + delta, from, true, modifiers));
+}
+
+void SelfTest::testPianoRoll()
+{
+    beginGroup ("MIDI editor (piano roll, simulated mouse)");
+    auto* session = app.getSession();
+    auto& um = session->getUndoManager();
+    auto& editView = main.getEditView();
+    main.showWindow (WindowKind::edit);
+
+    auto keys = session->addTrack ("Piano Roll Test", 2, nullptr, Session::TrackKind::instrument);
+    auto clipNode = session->addMidiClip (keys, 0, 8 * 24000, "Riff", nullptr);
+    um.clearUndoHistory();
+
+    editView.openPianoRoll (clipNode);
+    auto* pr = editView.getPianoRoll();
+    expect ("double-click/menu opens the MIDI editor for the clip", pr != nullptr && pr->getClip() == clipNode, {});
+    if (pr == nullptr)
+        return;
+
+    auto notes = clip::notes (clipNode);
+    const float mid = pr->rowHeight() * 0.5f;
+    auto at = [&] (int64_t tick, int pitch, float dx = 3.0f) { return pr->positionFor (tick, pitch) + juce::Point<float> (dx, mid); };
+    auto click = [&] (juce::Point<float> p, juce::ModifierKeys mods = {})
+    {
+        pr->mouseDown (mouseEvent (*pr, p, p, false, mods));
+        pr->mouseUp (mouseEvent (*pr, p, p, false, mods));
+    };
+
+    // Click on empty grid: a 1/16 note on the beat and pitch under the mouse.
+    pr->setGridTicks (240);
+    click (at (960 + 10, 64));
+    auto note = notes.getChild (0);
+    expect ("click adds a note snapped to the 1/16 grid (E4 on beat 2)",
+            notes.getNumChildren() == 1 && (int) note[ids::pitch] == 64 && (juce::int64) note[ids::start] == 960
+                && (juce::int64) note[ids::length] == 240,
+            juce::String (notes.getNumChildren()) + " notes; pitch " + note[ids::pitch].toString() + ", start "
+                + note[ids::start].toString() + ", length " + note[ids::length].toString());
+
+    // Drag its right edge out to a quarter note.
+    const auto edge = pr->positionFor (960 + 240, 64) + juce::Point<float> (-2.0f, mid);
+    drag (*pr, edge, { pr->positionFor (1920, 64).x - pr->positionFor (1200, 64).x, 0.0f });
+    expect ("dragging the right edge sets the length (one beat)", (juce::int64) note[ids::length] == 960, note[ids::length].toString());
+
+    // Drag the body one beat later and two semitones up.
+    drag (*pr, at (960, 64, 20.0f), { pr->positionFor (1920, 64).x - pr->positionFor (960, 64).x, -2.0f * pr->rowHeight() });
+    expect ("dragging moves the note in time and pitch (F#4 on beat 3)",
+            (juce::int64) note[ids::start] == 1920 && (int) note[ids::pitch] == 66,
+            "start " + note[ids::start].toString() + ", pitch " + note[ids::pitch].toString());
+
+    // A second note, both selected, transposed an octave.
+    click (at (0, 60));
+    click (at (1920, 66, 20.0f), juce::ModifierKeys::shiftModifier);
+    expect ("shift-click selects several notes", pr->getSelection().size() == 2, juce::String ((int) pr->getSelection().size()));
+    pr->transposeSelection (12);
+    bool transposed = true;
+    for (const auto& n : notes)
+        transposed = transposed && ((int) n[ids::pitch] == 72 || (int) n[ids::pitch] == 78);
+    expect ("transpose +12 moves the selected notes up an octave", transposed && notes.getNumChildren() == 2, {});
+
+    // Quantize: an off-grid note snaps to the quarter-note grid.
+    notes.getChild (1).setProperty (ids::start, 1000, nullptr);
+    pr->setGridTicks (960);
+    pr->quantizeSelection();
+    expect ("quantize snaps notes to the grid (1000 -> 960 ticks)", (juce::int64) notes.getChild (1)[ids::start] == 960,
+            notes.getChild (1)[ids::start].toString());
+
+    // Delete with the keyboard, double-click to delete, undo to restore.
+    click (at (960, 72, 6.0f)); // the quantized note, now on beat 2
+    pr->keyPressed (juce::KeyPress (juce::KeyPress::deleteKey));
+    expect ("Delete removes the selected note", notes.getNumChildren() == 1, juce::String (notes.getNumChildren()));
+    const auto remaining = notes.getChild (0);
+    pr->mouseDoubleClick (mouseEvent (*pr, at ((juce::int64) remaining[ids::start], (int) remaining[ids::pitch], 6.0f),
+                                      at ((juce::int64) remaining[ids::start], (int) remaining[ids::pitch], 6.0f), false));
+    expect ("double-click deletes a note", notes.getNumChildren() == 0, juce::String (notes.getNumChildren()));
+    um.undo();
+    um.undo();
+    expect ("undo brings both notes back", notes.getNumChildren() == 2, juce::String (notes.getNumChildren()));
+    expect ("piano-roll edits leave the session valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+
+    editView.closePianoRoll();
+    session->removeTrack (keys, nullptr);
+    um.clearUndoHistory();
 }
 
 void SelfTest::testUserInterface()
@@ -2259,6 +2355,15 @@ void SelfTest::captureScreens()
     auto firstClip = track::clips (app.getSession()->getTrack (0)).getChild (0);
     TimeStretchComponent elastic (app, firstClip);
     snapshot (elastic, "06_elastic_audio.png");
+
+    // The MIDI editor on the showcase's chord clip.
+    const auto synth = app.getSession()->getTracksNode().getChildWithProperty (ids::name, "Synth");
+    main.getEditView().openPianoRoll (track::clips (synth).getChild (0));
+    if (auto* pr = main.getEditView().getPianoRoll())
+        snapshot (*pr, "07_piano_roll.png");
+    else
+        expect ("MIDI editor opens for the screenshot", false, {});
+    main.getEditView().closePianoRoll();
 }
 
 void SelfTest::finish()

@@ -40,12 +40,14 @@ public:
     /** Wired by the Edit window. */
     std::function<juce::ValueTree (juce::Point<int> screenPosition)> trackAtScreenPosition;
     std::function<void (juce::ValueTree clip)> openElasticDialog;
+    std::function<void (juce::ValueTree clip)> openPianoRoll;
 
     void paint (juce::Graphics&) override;
     void mouseMove (const juce::MouseEvent&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override; // MIDI clips: open the MIDI editor
 
 private:
     enum class Action { none, select, move, trimStart, trimEnd, stretchEnd, fadeIn, fadeOut };

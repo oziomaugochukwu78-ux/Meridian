@@ -51,6 +51,8 @@ EditView::~EditView()
 //==============================================================================
 void EditView::bindSession()
 {
+    pianoRoll.reset(); // its clip belonged to the previous session
+
     if (tracksNode.isValid())
         tracksNode.removeListener (this);
 
@@ -79,6 +81,7 @@ void EditView::rebuildTracks()
         auto* lane = lanes.add (new TrackLane (app, state, t));
         lane->trackAtScreenPosition = [this] (juce::Point<int> p) { return trackAtScreenPosition (p); };
         lane->openElasticDialog = [this] (juce::ValueTree c) { openElasticDialog (c); };
+        lane->openPianoRoll = [this] (juce::ValueTree c) { openPianoRoll (c); };
         lane->onModifiedWheel = [this] (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
         {
             if (e.mods.isCommandDown())
@@ -333,6 +336,22 @@ void EditView::openElasticDialog (juce::ValueTree c)
         return;
     }
     TimeStretchComponent::show (app, c);
+}
+
+void EditView::openPianoRoll (juce::ValueTree c)
+{
+    if (! c.isValid() || ! clip::isMidi (c))
+        return;
+    if (pianoRoll != nullptr && pianoRoll->getEditor().getClip() == c)
+    {
+        pianoRoll->toFront (true);
+        return;
+    }
+    pianoRoll = std::make_unique<PianoRollWindow> (app, c, [safe = juce::Component::SafePointer<EditView> (this)]
+    {
+        if (safe != nullptr)
+            safe->pianoRoll.reset();
+    });
 }
 
 //==============================================================================

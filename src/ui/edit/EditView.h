@@ -2,6 +2,7 @@
 
 #include "EditState.h"
 #include "EditToolbar.h"
+#include "PianoRoll.h"
 #include "TimelineRuler.h"
 #include "TrackHeader.h"
 #include "TrackLane.h"
@@ -39,6 +40,11 @@ public:
     void deleteSelection();
     void openElasticDialog (juce::ValueTree clip);
     void zoomBy (double factor);
+
+    /** Opens (or brings forward) the MIDI editor for a MIDI clip. */
+    void openPianoRoll (juce::ValueTree clip);
+    PianoRollComponent* getPianoRoll() noexcept { return pianoRoll != nullptr ? &pianoRoll->getEditor() : nullptr; }
+    void closePianoRoll() { pianoRoll.reset(); }
 
     void resized() override;
     void paint (juce::Graphics&) override;
@@ -79,6 +85,7 @@ private:
     juce::OwnedArray<TrackLane> lanes;
     juce::ValueTree tracksNode;
     std::unique_ptr<juce::FileFilter> audioFileFilter;
+    std::unique_ptr<PianoRollWindow> pianoRoll;
 };
 
 } // namespace meridian

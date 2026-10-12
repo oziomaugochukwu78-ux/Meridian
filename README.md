@@ -19,7 +19,7 @@ This is an early foundation, not a finished DAW. Everything listed as working co
 | Audio engine | Lock-free render graph, double-buffered disk streaming, record to disk with round-trip latency compensation, input monitoring, sample-accurate volume automation, ramped gain/mute/pan, automatic plug-in delay compensation across tracks, sends and buses, offline bounce to WAV/AIFF (File > Bounce Mix) | Multi-core track rendering, dither options, manual recording offset |
 | Mixing maths | 64-bit compensated summing bus, SIMD (SSE2/AVX/NEON) mix kernels, constant-power pan, 4x-oversampled tanh/cubic console saturation | Per-track console channels |
 | Plug-ins | VST3 and LV2 hosting (plus AU on macOS), scanning with crash protection, editors, bypass, state saved in the session | CLAP hosting (needs a CLAP-SDK format adapter), sidechains, VST3 instruments |
-| Instruments and MIDI | Instrument tracks playing MIDI clips through a built-in polyphonic synth with measured quality: in tune, sample-accurate, folded aliasing under -87 dB; session tempo, with notes stored in beats so they follow it; double-click a lane to create a MIDI clip; AI tools to write notes and shape the sound | Piano roll, MIDI input recording, tempo and meter changes, VST3 instruments |
+| Instruments and MIDI | Instrument tracks playing MIDI clips through a built-in polyphonic synth with measured quality: in tune, sample-accurate, folded aliasing under -87 dB; session tempo, with notes stored in beats so they follow it; double-click a lane to create a MIDI clip; MIDI editor (piano roll: add, move, resize, delete, multi-select, quantize, transpose, velocity); AI tools to write notes and shape the sound | MIDI input recording, tempo and meter changes, VST3 instruments, note audition |
 | Elastic Audio | Offline time-compress/expand and pitch shift with Rubber Band (R3 engine), Alt-drag TCE on clip edges | Real-time (preview) elastic mode, warp markers |
 | AI remote | MCP server (25 tools; every argument checked against the published schema), JSON tools and text commands (PLAY, STOP, RECORD, TOGGLE_WINDOW, MUTE_TRACK_X, SET_VOLUME_TRACK_X_YdB, BOUNCE, STATUS, HELP) on 127.0.0.1; strict input validation (RFC 8259 JSON, UTF-8, nesting limit) | Presets applied by plain request (see the roadmap) |
 
@@ -208,6 +208,20 @@ $ws.SendAsync([ArraySegment[byte]]$msg, 'Text', $true, [Threading.CancellationTo
 | Ctrl+Shift+N | new tracks |
 | Ctrl+Shift+I | import audio |
 | Ctrl+Alt+B | bounce mix to a file |
+
+**MIDI editor** (double-click a MIDI clip, or right-click it > Edit Notes):
+
+| Action | Effect |
+|---|---|
+| click empty grid | add a note (snapped to the grid); drag while adding to set its length |
+| drag a note | move it in time and pitch (with every selected note) |
+| drag a note's right edge | change its length |
+| shift-click | add a note to, or remove it from, the selection |
+| double-click a note | delete it |
+| Delete / Backspace | delete the selected notes |
+| Ctrl+A | select all notes |
+| wheel / Shift+wheel / Ctrl+wheel | scroll pitch / scroll time / zoom time |
+| Space | play / stop |
 
 ## Testing
 

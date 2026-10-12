@@ -31,6 +31,7 @@ void TrackLane::rebuildClips()
         auto* comp = clips.add (new ClipComponent (app, editState, c, track::colour (trackNode)));
         comp->trackAtScreenPosition = [this] (juce::Point<int> p) { return trackAtScreenPosition ? trackAtScreenPosition (p) : juce::ValueTree(); };
         comp->openElasticDialog = [this] (juce::ValueTree clipNode) { if (openElasticDialog) openElasticDialog (clipNode); };
+        comp->openPianoRoll = [this] (juce::ValueTree clipNode) { if (openPianoRoll) openPianoRoll (clipNode); };
         addAndMakeVisible (comp);
     }
     layoutClips();

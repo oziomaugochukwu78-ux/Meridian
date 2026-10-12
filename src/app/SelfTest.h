@@ -114,6 +114,7 @@ private:
     bool startRecordingTest();
     void finishRecordingTest();
     void testUserInterface();
+    void testPianoRoll();
     void captureScreens();
     void finish();
 

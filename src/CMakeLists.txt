@@ -92,6 +92,8 @@ target_sources(Meridian PRIVATE
     ui/edit/EditToolbar.h
     ui/edit/EditView.cpp
     ui/edit/EditView.h
+    ui/edit/PianoRoll.cpp
+    ui/edit/PianoRoll.h
     ui/edit/TimelineRuler.cpp
     ui/edit/TimelineRuler.h
     ui/edit/TrackHeader.cpp

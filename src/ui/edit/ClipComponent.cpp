@@ -422,10 +422,21 @@ void ClipComponent::mouseUp (const juce::MouseEvent& e)
     }
 }
 
+void ClipComponent::mouseDoubleClick (const juce::MouseEvent&)
+{
+    if (clip::isMidi (clipNode) && openPianoRoll)
+        openPianoRoll (clipNode);
+}
+
 void ClipComponent::showMenu()
 {
     juce::PopupMenu menu;
     const bool midi = clip::isMidi (clipNode);
+    if (midi)
+    {
+        menu.addItem (4, "Edit Notes (MIDI Editor)...");
+        menu.addSeparator();
+    }
     menu.addItem (1, "Elastic Audio: Time / Pitch...", isTimeStretchAvailable() && ! midi);
     menu.addSeparator();
     menu.addItem (2, "Remove Fades", ! midi && (clip::fadeIn (clipNode) > 0 || clip::fadeOut (clipNode) > 0));
@@ -444,6 +455,10 @@ void ClipComponent::showMenu()
                             if (result == 1 && safe->openElasticDialog)
                             {
                                 safe->openElasticDialog (clipCopy);
+                            }
+                            else if (result == 4 && safe->openPianoRoll)
+                            {
+                                safe->openPianoRoll (clipCopy);
                             }
                             else if (result == 2)
                             {
