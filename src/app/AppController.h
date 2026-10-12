@@ -3,6 +3,7 @@
 #include "engine/AudioEngine.h"
 #include "engine/DiskStreamer.h"
 #include "engine/EngineBridge.h"
+#include "media/Bouncer.h"
 #include "model/Session.h"
 #include "model/SessionTemplates.h"
 #include "plugins/PluginHost.h"
@@ -51,6 +52,7 @@ public:
     juce::Result openSession (const juce::File& sessionFile);
     juce::Result saveSession();
     juce::File getDefaultSessionsFolder() const;
+    void setRememberRecentSessions (bool shouldRemember) noexcept { rememberRecentSessions = shouldRemember; }
 
     /** Pushes the session's master fader and console settings into the engine. */
     void applyMasterSettings();
@@ -80,6 +82,23 @@ public:
 
     int getNumBackgroundJobs() const noexcept { return runningJobs.load(); }
 
+    // Bounce (mixdown to a file) ---------------------------------------------------------
+    /** Whole session (to the end of the last clip, plus a one-second tail) into
+        <session>/Bounced Files/, in the session's format. */
+    BounceRequest makeSessionBounceRequest() const;
+    juce::int64 getSessionEnd() const;
+
+    /** Renders on the calling (message) thread and returns when done. Live
+        playback is paused for the duration. */
+    BounceResult bounceNow (const BounceRequest&);
+
+    /** Renders on a background thread; `onDone` runs on the message thread. */
+    juce::Result startBounce (const BounceRequest&, std::function<void (const BounceResult&)> onDone = {});
+
+    bool isBouncing() const noexcept           { return offlineEngine != nullptr; }
+    double getBounceProgress() const noexcept  { return bounceProgress.load(); }
+    const BounceResult& getLastBounce() const noexcept { return lastBounce; }
+
     // Remote control ----------------------------------------------------------------------
     juce::Result startRemoteControl();
     void stopRemoteControl();
@@ -98,6 +117,7 @@ public:
     remote::ActionResult toggleWindow() override;
     remote::ActionResult toggleTrackMute (int trackNumber) override;
     remote::ActionResult setTrackVolume (int trackNumber, double decibels) override;
+    remote::ActionResult bounce() override;
     std::string statusJson() override;
 
 private:
@@ -108,6 +128,7 @@ private:
     void reportProblem (const juce::String& title, const juce::String& message);
     juce::String nextTrackName (const juce::String& baseName) const;
     juce::String describePosition() const;
+    std::unique_ptr<AudioEngine> createOfflineEngine (juce::String& error);
 
     // Declaration order is destruction order in reverse: the engine must die
     // before the plug-in host and disk streamer whose objects it references.
@@ -119,6 +140,7 @@ private:
     DiskStreamer diskStreamer;
     AudioEngine engine;
     std::unique_ptr<EngineBridge> bridge;
+    std::unique_ptr<AudioEngine> offlineEngine;   // exists only while a background bounce runs
     std::unique_ptr<Session> session;
     RemoteControlServer remoteServer { [this] (const std::string& message) { return remote::handleRemoteMessage (message, *this); } };
     juce::RecentlyOpenedFilesList recentSessions;
@@ -126,7 +148,10 @@ private:
 
     std::atomic<int> runningJobs { 0 };
     std::atomic<bool> shuttingDown { false };
+    std::atomic<double> bounceProgress { 0.0 };
+    BounceResult lastBounce;
     int sessionGeneration = 0; // invalidates background results meant for a replaced session
+    bool rememberRecentSessions = true;
     std::shared_ptr<bool> lifetime = std::make_shared<bool> (true);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AppController)

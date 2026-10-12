@@ -160,6 +160,7 @@ void DashboardComponent::updateEnablement()
     const bool useTemplate = fromTemplate.getToggleState();
     templateGroup.setEnabled (useTemplate);
     templateList.setEnabled (useTemplate);
+    templateList.setAlpha (useTemplate ? 1.0f : 0.4f); // a disabled ListBox does not dim itself
     for (auto* c : { &fileType, &sampleRate, &bitDepth })
         c->setEnabled (true); // template sessions still use these format settings
 

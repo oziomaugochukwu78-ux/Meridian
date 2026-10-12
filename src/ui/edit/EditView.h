@@ -32,6 +32,7 @@ public:
     ~EditView() override;
 
     EditState& getEditState() noexcept { return state; }
+    TrackLane* getLane (int index) const noexcept { return lanes[index]; }
 
     // Edit commands (invoked from menus and shortcuts)
     void separateAtSelection();

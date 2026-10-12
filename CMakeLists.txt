@@ -28,6 +28,9 @@ include(Dependencies)
 
 add_subdirectory(src/core)
 if(MERIDIAN_BUILD_APP)
+    if(MERIDIAN_BUILD_TESTS)
+        add_subdirectory(tests/plugin) # test VST3 for the self test; defined first so src/ can refer to it
+    endif()
     add_subdirectory(src)
 endif()
 

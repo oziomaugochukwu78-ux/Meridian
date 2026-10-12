@@ -83,6 +83,18 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     const double sr = device->getCurrentSampleRate();
     const int blockSize = juce::jmax (1, device->getCurrentBufferSizeSamples());
 
+    prepare (sr, blockSize);
+    deviceRunning.store (true);
+    transport.setAudioRunning (true);
+
+    if (listener != nullptr)
+        listener->engineAboutToStart (sr, blockSize);
+}
+
+void AudioEngine::prepare (double sr, int blockSize)
+{
+    blockSize = juce::jmax (1, blockSize);
+
     for (int ch = 0; ch < 2; ++ch)
     {
         busSum[ch].assign ((size_t) blockSize, 0.0);
@@ -98,11 +110,6 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 
     sampleRate.store (sr);
     maxBlockSize.store (blockSize);
-    deviceRunning.store (true);
-    transport.setAudioRunning (true);
-
-    if (listener != nullptr)
-        listener->engineAboutToStart (sr, blockSize);
 }
 
 void AudioEngine::audioDeviceStopped()
@@ -131,7 +138,18 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
                                                     int numSamples, const juce::AudioIODeviceCallbackContext&)
 {
     juce::ScopedNoDenormals noDenormals;
+    renderBlock (inputs, numInputs, outputs, numOutputs, numSamples);
+}
 
+void AudioEngine::renderOffline (float* const* outputs, int numOutputs, int numSamples) noexcept
+{
+    juce::ScopedNoDenormals noDenormals;
+    renderBlock (nullptr, 0, outputs, numOutputs, numSamples);
+}
+
+void AudioEngine::renderBlock (const float* const* inputs, int numInputs,
+                               float* const* outputs, int numOutputs, int numSamples) noexcept
+{
     adoptPendingGraph();
 
     int chunkLimit = (int) masterOut[0].size();
@@ -288,7 +306,10 @@ void AudioEngine::renderSegments (TrackRender& t, const BlockContext& ctx) noexc
         const int destOffset = (int) (s - pos);
 
         float* scratch[2] = { t.clipScratch.getWritePointer (0), t.clipScratch.getWritePointer (1) };
-        if (! seg.stream->read (seg.sourceOffset + (s - seg.start), scratch, t.numChannels, count))
+        const auto sourcePosition = seg.sourceOffset + (s - seg.start);
+        if (offline)
+            seg.stream->loadBlocking (sourcePosition, count); // a bounce may take longer, but never drops audio
+        if (! seg.stream->read (sourcePosition, scratch, t.numChannels, count))
             diskUnderruns.fetch_add (1, std::memory_order_relaxed);
 
         // Equal-power fades, evaluated per sample only inside fade regions.

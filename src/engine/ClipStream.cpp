@@ -132,6 +132,27 @@ bool ClipStream::read (juce::int64 sourcePosition, float* const* dest, int numDe
     return complete;
 }
 
+void ClipStream::loadBlocking (juce::int64 sourcePosition, int numFrames)
+{
+    const auto first = juce::jmax<juce::int64> (0, sourcePosition);
+    const auto last = juce::jmin (length - 1, sourcePosition + numFrames - 1);
+    if (last < first)
+        return;
+
+    for (int attempt = 0; attempt < 1000; ++attempt)
+    {
+        cue (first);
+        if (findReadyHalf (first / halfSize) >= 0 && findReadyHalf (last / halfSize) >= 0)
+            return;
+
+        // The calling thread is this stream's only disk reader: offline graphs
+        // build their own streams and never register them with the disk thread
+        // (AudioFormatReader is not thread-safe).
+        if (! service())
+            juce::Thread::sleep (1);
+    }
+}
+
 bool ClipStream::service()
 {
     bool didWork = false;

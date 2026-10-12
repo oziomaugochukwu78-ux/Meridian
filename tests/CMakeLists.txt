@@ -8,6 +8,7 @@ add_executable(meridian_core_tests
     dsp/MixKernelsTests.cpp
     dsp/PanLawTests.cpp
     dsp/SaturationCurveTests.cpp
+    dsp/SignalAnalysisTests.cpp
     remote/CommandDispatcherTests.cpp
     remote/CommandParserTests.cpp
     remote/HandshakeTests.cpp

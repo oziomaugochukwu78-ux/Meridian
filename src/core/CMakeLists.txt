@@ -16,6 +16,8 @@ add_library(meridian_core STATIC
     dsp/PanLaw.h
     dsp/SaturationCurve.cpp
     dsp/SaturationCurve.h
+    dsp/SignalAnalysis.cpp
+    dsp/SignalAnalysis.h
     dsp/SimdConfig.h
 
     remote/Base64.cpp

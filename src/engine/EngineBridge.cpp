@@ -382,10 +382,11 @@ void EngineBridge::rebuildNow()
 //==============================================================================
 // Graph construction
 
-std::shared_ptr<ClipStream> EngineBridge::getOrCreateStream (const juce::String& key, const juce::File& file)
+std::shared_ptr<ClipStream> EngineBridge::getOrCreateStream (const juce::String& key, const juce::File& file, bool shared)
 {
-    if (const auto it = streams.find (key); it != streams.end())
-        return it->second;
+    if (shared)
+        if (const auto it = streams.find (key); it != streams.end())
+            return it->second;
 
     std::unique_ptr<juce::AudioFormatReader> reader (formatManager.createReaderFor (file));
     if (reader == nullptr)
@@ -412,7 +413,7 @@ std::shared_ptr<ClipStream> EngineBridge::getOrCreateStream (const juce::String&
     return std::make_shared<ClipStream> (std::move (reader), diskCacheFrames);
 }
 
-void EngineBridge::buildSegments (const juce::ValueTree& t, TrackRender& render,
+void EngineBridge::buildSegments (const juce::ValueTree& t, TrackRender& render, bool sharedStreams,
                                   std::vector<std::shared_ptr<ClipStream>>& usedStreams,
                                   std::map<juce::String, std::shared_ptr<ClipStream>>& keep)
 {
@@ -444,7 +445,7 @@ void EngineBridge::buildSegments (const juce::ValueTree& t, TrackRender& render,
             // read different file regions and must not fight over buffers.
             const auto key = juce::String (clip::id (c)) + "|" + juce::String (sourceOffset) + "|"
                              + juce::String (diskCacheFrames) + "|" + file.getFullPathName();
-            auto stream = getOrCreateStream (key, file);
+            auto stream = getOrCreateStream (key, file, sharedStreams);
             if (stream == nullptr)
                 continue;
 
@@ -469,14 +470,13 @@ void EngineBridge::buildSegments (const juce::ValueTree& t, TrackRender& render,
                [] (const ClipSegment& a, const ClipSegment& b) { return a.start < b.start; });
 }
 
-void EngineBridge::rebuildGraph()
+std::unique_ptr<RenderGraph> EngineBridge::buildGraph (double sampleRate, int maxBlockSize, bool sharedStreams,
+                                                       std::vector<std::shared_ptr<ClipStream>>& usedStreams,
+                                                       std::map<juce::String, std::shared_ptr<ClipStream>>& keep)
 {
     auto graph = std::make_unique<RenderGraph>();
-    graph->sampleRate = engine.getSampleRate();
-    graph->maxBlockSize = engine.getMaxBlockSize() > 0 ? engine.getMaxBlockSize() : 4096;
-
-    std::vector<std::shared_ptr<ClipStream>> usedStreams;
-    std::map<juce::String, std::shared_ptr<ClipStream>> keep;
+    graph->sampleRate = sampleRate;
+    graph->maxBlockSize = maxBlockSize;
 
     if (session != nullptr)
     {
@@ -487,7 +487,7 @@ void EngineBridge::rebuildGraph()
             render.numChannels = track::channels (t);
             render.inputChannel = track::inputChannel (t);
 
-            buildSegments (t, render, usedStreams, keep);
+            buildSegments (t, render, sharedStreams, usedStreams, keep);
 
             for (int slot = 0; slot < Session::maxInserts; ++slot)
                 if (auto s = getInsert (track::id (t), slot); s != nullptr && s->plugin != nullptr)
@@ -513,9 +513,54 @@ void EngineBridge::rebuildGraph()
         }
     }
 
+    return graph;
+}
+
+void EngineBridge::rebuildGraph()
+{
+    const int maxBlock = engine.getMaxBlockSize() > 0 ? engine.getMaxBlockSize() : 4096;
+
+    if (liveSuspended)
+    {
+        // An offline render owns the plug-ins: the live engine plays nothing.
+        auto silent = std::make_unique<RenderGraph>();
+        silent->maxBlockSize = maxBlock;
+        engine.publishGraph (std::move (silent));
+        return;
+    }
+
+    std::vector<std::shared_ptr<ClipStream>> usedStreams;
+    std::map<juce::String, std::shared_ptr<ClipStream>> keep;
+    auto graph = buildGraph (engine.getSampleRate(), maxBlock, true, usedStreams, keep);
+
     streams.swap (keep); // streams no longer referenced are released (or kept alive by the old graph)
     diskStreamer.setStreams (std::move (usedStreams));
     engine.publishGraph (std::move (graph));
+}
+
+std::unique_ptr<RenderGraph> EngineBridge::buildOfflineGraph (double sampleRate, int maxBlockSize)
+{
+    std::vector<std::shared_ptr<ClipStream>> unusedList;
+    std::map<juce::String, std::shared_ptr<ClipStream>> unusedKeep;
+    return buildGraph (sampleRate, maxBlockSize, false, unusedList, unusedKeep);
+}
+
+bool EngineBridge::suspendLive()
+{
+    liveSuspended = true;
+    rebuildNow(); // publishes a silent graph
+
+    // Wait (briefly) until the audio thread has adopted it, i.e. has stopped
+    // touching the session's plug-ins.
+    for (int i = 0; i < 500 && engine.isDeviceRunning() && engine.hasPendingGraph(); ++i)
+        juce::Thread::sleep (2);
+    return ! (engine.isDeviceRunning() && engine.hasPendingGraph());
+}
+
+void EngineBridge::resumeLive()
+{
+    liveSuspended = false;
+    rebuildNow();
 }
 
 void EngineBridge::setDiskCacheFrames (int frames)

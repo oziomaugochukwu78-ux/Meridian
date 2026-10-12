@@ -40,6 +40,9 @@ MeridianLookAndFeel::MeridianLookAndFeel()
     setColour (TextEditor::focusedOutlineColourId, theme::selectionEdge);
     setColour (TextEditor::highlightColourId, theme::selection);
 
+    setColour (Slider::backgroundColourId, theme::well);  // the unfilled part of a horizontal slider's track
+    setColour (Slider::trackColourId, theme::selectionEdge);
+    setColour (Slider::thumbColourId, theme::text);
     setColour (Slider::textBoxTextColourId, theme::text);
     setColour (Slider::textBoxBackgroundColourId, theme::well);
     setColour (Slider::textBoxOutlineColourId, theme::divider);

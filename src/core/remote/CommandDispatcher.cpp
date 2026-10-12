@@ -57,6 +57,7 @@ std::string handleRemoteMessage (std::string_view message, RemoteActions& action
         case Command::Type::toggleWindow: return reply (command, actions.toggleWindow());
         case Command::Type::muteTrack:    return reply (command, actions.toggleTrackMute (command.track));
         case Command::Type::setVolume:    return reply (command, actions.setTrackVolume (command.track, command.volumeDb));
+        case Command::Type::bounce:       return reply (command, actions.bounce());
 
         case Command::Type::status:
             return JsonObject()

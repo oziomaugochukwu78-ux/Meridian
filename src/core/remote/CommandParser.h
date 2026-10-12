@@ -11,7 +11,7 @@ namespace meridian::remote
 
 /** Grammar (case-insensitive, surrounding whitespace ignored):
 
-        PLAY | STOP | RECORD | TOGGLE_WINDOW | STATUS | HELP
+        PLAY | STOP | RECORD | TOGGLE_WINDOW | BOUNCE | STATUS | HELP
         MUTE_TRACK_<X>
         SET_VOLUME_TRACK_<X>_<Y>[dB]
 

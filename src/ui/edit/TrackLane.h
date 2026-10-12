@@ -22,6 +22,7 @@ public:
     ~TrackLane() override;
 
     const juce::ValueTree& getTrack() const noexcept { return trackNode; }
+    ClipComponent* getClipComponent (int index) const noexcept { return clips[index]; }
 
     void setPlayhead (juce::int64 sample);
 

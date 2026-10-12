@@ -17,6 +17,8 @@ target_sources(Meridian PRIVATE
     app/MainComponent.h
     app/MainWindow.cpp
     app/MainWindow.h
+    app/SelfTest.cpp
+    app/SelfTest.h
 
     engine/AudioEngine.cpp
     engine/AudioEngine.h
@@ -41,6 +43,8 @@ target_sources(Meridian PRIVATE
 
     media/AudioImporter.cpp
     media/AudioImporter.h
+    media/Bouncer.cpp
+    media/Bouncer.h
     media/TimeStretchEngine.cpp
     media/TimeStretchEngine.h
 
@@ -120,6 +124,13 @@ target_link_libraries(Meridian
 
 if(MERIDIAN_WITH_RUBBERBAND)
     target_link_libraries(Meridian PRIVATE Meridian::rubberband)
+endif()
+
+# The self test loads the test plug-in from the build tree.
+if(TARGET MeridianTestGain_VST3)
+    target_compile_definitions(Meridian PRIVATE
+        MERIDIAN_TEST_PLUGIN_BINARY="$<TARGET_FILE:MeridianTestGain_VST3>")
+    add_dependencies(Meridian MeridianTestGain_VST3)
 endif()
 
 # Strict IEEE semantics in the app as well: the engine includes the core DSP

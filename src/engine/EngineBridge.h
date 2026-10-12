@@ -69,6 +69,18 @@ public:
     /** Rebuilds immediately instead of waiting for the next message-loop pass. */
     void rebuildNow();
 
+    // Offline rendering ----------------------------------------------------------------
+    /** Takes the live engine off the session (it renders silence) so plug-in
+        instances can be used by an offline render. Returns once the audio
+        thread has let go of the session graph (or no device is running). */
+    bool suspendLive();
+    void resumeLive();
+    bool isLiveSuspended() const noexcept { return liveSuspended; }
+
+    /** A render graph for an offline engine, with its own disk streams that are
+        NOT registered with the disk thread (the offline thread reads them). */
+    std::unique_ptr<RenderGraph> buildOfflineGraph (double sampleRate, int maxBlockSize);
+
 private:
     // AudioEngine::Listener
     void engineAboutToStart (double sampleRate, int maxBlockSize) override;
@@ -83,9 +95,13 @@ private:
     void timerCallback() override;
 
     void rebuildGraph();
-    void buildSegments (const juce::ValueTree& track, TrackRender&, std::vector<std::shared_ptr<ClipStream>>& usedStreams,
+    std::unique_ptr<RenderGraph> buildGraph (double sampleRate, int maxBlockSize, bool sharedStreams,
+                                             std::vector<std::shared_ptr<ClipStream>>& usedStreams,
+                                             std::map<juce::String, std::shared_ptr<ClipStream>>& keep);
+    void buildSegments (const juce::ValueTree& track, TrackRender&, bool sharedStreams,
+                        std::vector<std::shared_ptr<ClipStream>>& usedStreams,
                         std::map<juce::String, std::shared_ptr<ClipStream>>& keep);
-    std::shared_ptr<ClipStream> getOrCreateStream (const juce::String& key, const juce::File&);
+    std::shared_ptr<ClipStream> getOrCreateStream (const juce::String& key, const juce::File&, bool shared);
 
     std::shared_ptr<TrackRealtimeState> ensureTrackState (const juce::ValueTree& track);
     void syncTrackState (const juce::ValueTree& track);
@@ -113,6 +129,7 @@ private:
     std::unique_ptr<juce::AudioPluginInstance> preparedInstance; // handed from insertPlugin() to the listener
     std::pair<int, int> preparedKey { -1, -1 };
     int diskCacheFrames = 32768;
+    bool liveSuspended = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EngineBridge)
 };

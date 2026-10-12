@@ -186,6 +186,43 @@ void MainComponent::showImportDialog()
                           });
 }
 
+void MainComponent::showBounceDialog()
+{
+    if (app.getSession() == nullptr)
+        return;
+
+    const auto suggested = app.makeSessionBounceRequest();
+    chooser = std::make_unique<juce::FileChooser> ("Bounce Mix", suggested.destination, suggested.aiff ? "*.aif" : "*.wav");
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                              | juce::FileBrowserComponent::warnAboutOverwriting,
+                          [this, suggested] (const juce::FileChooser& fc)
+                          {
+                              auto file = fc.getResult();
+                              if (file == juce::File())
+                                  return;
+
+                              auto request = suggested;
+                              request.destination = file.withFileExtension (suggested.aiff ? ".aif" : ".wav");
+                              const auto started = app.startBounce (request, [] (const BounceResult& result)
+                              {
+                                  if (! result.ok)
+                                  {
+                                      showMessage (juce::MessageBoxIconType::WarningIcon, "Bounce Mix", result.error);
+                                      return;
+                                  }
+                                  showMessage (juce::MessageBoxIconType::InfoIcon, "Bounce Complete",
+                                               result.file.getFullPathName() + "\n\nPeak: L "
+                                                   + juce::String (dsp::gainToDb (result.left.peak), 1) + " dBFS, R "
+                                                   + juce::String (dsp::gainToDb (result.right.peak), 1) + " dBFS"
+                                                   + (juce::jmax (result.left.peak, result.right.peak) > 1.0
+                                                          ? juce::String ("\n\nWarning: the mix exceeds 0 dBFS and will clip in the file. Lower the master fader.")
+                                                          : juce::String()));
+                              });
+                              if (started.failed())
+                                  showMessage (juce::MessageBoxIconType::WarningIcon, "Bounce Mix", started.getErrorMessage());
+                          });
+}
+
 void MainComponent::openSessionFromDisk()
 {
     chooser = std::make_unique<juce::FileChooser> ("Open Session", app.getDefaultSessionsFolder(),
@@ -231,7 +268,7 @@ void MainComponent::showRemoteControlInfo()
 void MainComponent::getAllCommands (juce::Array<juce::CommandID>& c)
 {
     using namespace commands;
-    c.addArray ({ dashboard, openSession, saveSession, importAudio,
+    c.addArray ({ dashboard, openSession, saveSession, importAudio, bounceMix,
                   undo, redo, separateClip, deleteSelection, elasticAudio, zoomIn, zoomOut,
                   slipMode, gridMode, trimTool, selectorTool, grabberTool, smartTool,
                   newTracks, deleteTrack,
@@ -259,6 +296,9 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                                info.addDefaultKeypress ('s', cmd); info.setActive (hasSession); break;
         case importAudio:      info.setInfo ("Import Audio...", "Copy audio files into the session", "File", 0);
                                info.addDefaultKeypress ('i', cmd | shift); info.setActive (hasSession); break;
+        case bounceMix:        info.setInfo ("Bounce Mix...", "Mix the session down to an audio file", "File", 0);
+                               info.addDefaultKeypress ('b', cmd | juce::ModifierKeys::altModifier);
+                               info.setActive (hasSession && ! app.isBouncing()); break;
 
         case undo:
         {
@@ -347,6 +387,7 @@ bool MainComponent::perform (const InvocationInfo& info)
                 showMessage (juce::MessageBoxIconType::WarningIcon, "Save Failed", result.getErrorMessage());
             break;
         case importAudio:     showImportDialog(); break;
+        case bounceMix:       showBounceDialog(); break;
 
         case undo:            if (auto* um = app.getUndoManager()) um->undo(); break;
         case redo:            if (auto* um = app.getUndoManager()) um->redo(); break;
@@ -419,6 +460,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int index, const juce::String&)
             add (saveSession);
             menu.addSeparator();
             add (importAudio);
+            add (bounceMix);
             menu.addSeparator();
             menu.addCommandItem (&commandManager, juce::StandardApplicationCommandIDs::quit);
             break;

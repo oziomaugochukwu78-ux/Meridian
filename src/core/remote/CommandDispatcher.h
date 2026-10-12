@@ -33,6 +33,7 @@ public:
     virtual ActionResult toggleWindow() = 0;
     virtual ActionResult toggleTrackMute (int trackNumber) = 0;                    ///< 1-based
     virtual ActionResult setTrackVolume (int trackNumber, double decibels) = 0;   ///< 1-based
+    virtual ActionResult bounce() = 0;                                           ///< starts a mixdown
 
     /** A JSON object describing transport and tracks (returned verbatim by STATUS). */
     virtual std::string statusJson() = 0;

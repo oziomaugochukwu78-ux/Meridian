@@ -33,6 +33,12 @@ public:
 
     void updateMeter();
 
+    // For the self test, which drives the strip's real controls.
+    juce::Slider& getFader() noexcept          { return fader; }
+    juce::Slider& getPanKnob() noexcept        { return panKnob; }
+    juce::TextButton& getMuteButton() noexcept { return muteButton; }
+    juce::String getPanReadout() const         { return panReadout.getText(); }
+
     void paint (juce::Graphics&) override;
     void resized() override;
 

@@ -124,6 +124,7 @@ std::string Command::toString() const
         case Type::stop:         return "STOP";
         case Type::record:       return "RECORD";
         case Type::toggleWindow: return "TOGGLE_WINDOW";
+        case Type::bounce:       return "BOUNCE";
         case Type::status:       return "STATUS";
         case Type::help:         return "HELP";
         case Type::muteTrack:    return "MUTE_TRACK_" + std::to_string (track);
@@ -156,6 +157,7 @@ ParseResult parseCommand (std::string_view text)
     if (upper == "STOP")          return succeed ({ Command::Type::stop });
     if (upper == "RECORD")        return succeed ({ Command::Type::record });
     if (upper == "TOGGLE_WINDOW") return succeed ({ Command::Type::toggleWindow });
+    if (upper == "BOUNCE")        return succeed ({ Command::Type::bounce });
     if (upper == "STATUS")        return succeed ({ Command::Type::status });
     if (upper == "HELP")          return succeed ({ Command::Type::help });
 
@@ -213,6 +215,7 @@ std::string commandReference()
            "TOGGLE_WINDOW                switch between the Edit and Mix windows\n"
            "MUTE_TRACK_<X>               toggle mute on track X (1 = first track)\n"
            "SET_VOLUME_TRACK_<X>_<Y>dB   ramp track X's fader to Y dB (-INF, or -144 .. +12)\n"
+           "BOUNCE                       mix the session down to a file (progress in STATUS)\n"
            "STATUS                       transport state and every track as JSON\n"
            "HELP                         this list";
 }

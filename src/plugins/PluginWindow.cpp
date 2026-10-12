@@ -39,7 +39,7 @@ PluginWindow::PluginWindow (std::shared_ptr<InsertSlot> s, const juce::String& t
 {
     setUsingNativeTitleBar (true);
 
-    juce::AudioProcessorEditor* editor = slot->plugin->hasEditor() ? slot->plugin->createEditorIfNeeded() : nullptr;
+    juce::AudioProcessorEditor* editor = slot->plugin->hasEditor() ? slot->plugin->createEditorAndMakeActive() : nullptr;
     if (editor == nullptr)
         editor = new juce::GenericAudioProcessorEditor (*slot->plugin);
 

@@ -21,6 +21,8 @@ public:
     explicit MixView (AppController&);
     ~MixView() override;
 
+    ChannelStrip* getStrip (int index) const noexcept { return strips[index]; }
+
     void paint (juce::Graphics&) override;
     void resized() override;
     void visibilityChanged() override;

@@ -26,6 +26,8 @@ public:
     ~MainComponent() override;
 
     juce::ApplicationCommandManager& getCommandManager() noexcept { return commandManager; }
+    EditView& getEditView() noexcept { return editView; }
+    MixView& getMixView() noexcept   { return mixView; }
 
     void showWindow (WindowKind);
     WindowKind getActiveWindow() const noexcept { return activeWindow; }
@@ -55,6 +57,7 @@ private:
     void timerCallback() override;
     void updateWindowTitle();
     void showImportDialog();
+    void showBounceDialog();
     void openSessionFromDisk();
     void showRemoteControlInfo();
 

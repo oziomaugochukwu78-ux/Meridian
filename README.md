@@ -16,11 +16,11 @@ This is an early foundation, not a finished DAW. Everything listed as working co
 | Sessions | Dashboard (create from template or blank, recent, open), save/load, full undo/redo | Save As, session import |
 | Edit window | Tracks, clips with waveforms, Smart Tool (select/move/trim/fade zones), Slip and Grid modes, separate, delete, zoom, page-scroll, drag-and-drop import | Shuffle and Spot modes, Zoomer and Pencil tools, automation lane drawing, playlists |
 | Mix window | Channel strips: 10 inserts, I/O, automation mode, pan, R/S/M, console-taper fader, segmented meters; master strip with console controls | Sends, aux/bus tracks, routing matrix, VCAs |
-| Audio engine | Lock-free render graph, double-buffered disk streaming, record to disk, input monitoring, sample-accurate volume automation, ramped gain/mute/pan | Plug-in delay compensation, multi-core track rendering, bounce/export |
+| Audio engine | Lock-free render graph, double-buffered disk streaming, record to disk, input monitoring, sample-accurate volume automation, ramped gain/mute/pan, offline bounce to WAV/AIFF (File > Bounce Mix) | Plug-in delay compensation, multi-core track rendering, dither options |
 | Mixing maths | 64-bit compensated summing bus, SIMD (SSE2/AVX/NEON) mix kernels, constant-power pan, 4x-oversampled tanh/cubic console saturation | Per-track console channels |
 | Plug-ins | VST3 and LV2 hosting (plus AU on macOS), scanning with crash protection, editors, bypass, state saved in the session | CLAP hosting (needs a CLAP-SDK format adapter), sidechains, instruments |
 | Elastic Audio | Offline time-compress/expand and pitch shift with Rubber Band (R3 engine), Alt-drag TCE on clip edges | Real-time (preview) elastic mode, warp markers |
-| AI remote | WebSocket on 127.0.0.1: PLAY, STOP, RECORD, TOGGLE_WINDOW, MUTE_TRACK_X, SET_VOLUME_TRACK_X_YdB, STATUS, HELP | A Model Context Protocol (MCP) server bridging to this port |
+| AI remote | WebSocket on 127.0.0.1: PLAY, STOP, RECORD, TOGGLE_WINDOW, MUTE_TRACK_X, SET_VOLUME_TRACK_X_YdB, BOUNCE, STATUS, HELP | A Model Context Protocol (MCP) server bridging to this port |
 
 ## Building
 
@@ -126,6 +126,7 @@ When the app runs, it listens on `ws://127.0.0.1:47800/`. Send one command per t
 | `TOGGLE_WINDOW` | switch between the Edit and Mix windows |
 | `MUTE_TRACK_<X>` | toggle mute on track X (1 = first track); 5 ms ramp |
 | `SET_VOLUME_TRACK_<X>_<Y>dB` | glide track X's fader to Y dB (`-INF`, or up to `+12`); 30 ms ramp |
+| `BOUNCE` | mix the session down to `<session>/Bounced Files/`; progress and peak levels appear in `STATUS` |
 | `STATUS` | transport state and every track, as JSON |
 | `HELP` | the command list |
 
@@ -165,6 +166,37 @@ $ws.SendAsync([ArraySegment[byte]]$msg, 'Text', $true, [Threading.CancellationTo
 | F6 / F7 / F8 / F9 | Trim / Selector / Grabber / Smart Tool |
 | Ctrl+Shift+N | new tracks |
 | Ctrl+Shift+I | import audio |
+| Ctrl+Alt+B | bounce mix to a file |
+
+## Testing
+
+Two layers, both automated:
+
+**Unit tests** (`tests/`, Catch2): the mixing maths, ramps, pan law, saturation, automation, signal analysis, and the WebSocket and command protocol. No JUCE or audio hardware needed.
+
+```bash
+ctest --test-dir build/core -C Debug
+```
+
+**End-to-end self test**, built into the app:
+
+```bash
+build\app\src\Meridian_artefacts\Debug\Meridian.exe --self-test build\self-test
+```
+
+It drives the real application and checks the results numerically. Each scenario is bounced offline and the audio measured against exact expected values:
+
+- levels, pan law, mute, solo and summing
+- fades and volume automation
+- separate, delete and undo, including a seamless split point
+- console harmonics, DC and aliasing
+- session save/load
+- import with sample-rate conversion, including anti-aliasing
+- Elastic Audio length and pitch
+- VST3 hosting, using a bundled test plug-in (`tests/plugin`): effect, bypass, parameter, state recall and undo
+- AI commands, live playback with disk streaming, and the Edit and Mix windows driven by simulated mouse input
+
+It writes `report.txt`, `report.json`, every bounce, and PNG screenshots of every window and dialog to the output folder, and exits with 0 only if every check passed.
 
 ## Licensing
 

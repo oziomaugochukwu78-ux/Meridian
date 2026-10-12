@@ -52,6 +52,12 @@ public:
         Returns false if any frame was not yet loaded; those frames are silent. */
     bool read (juce::int64 sourcePosition, float* const* dest, int numDestChannels, int numFrames) noexcept;
 
+    /** Offline renders only (never the audio thread): makes sure the cells
+        covering [sourcePosition, sourcePosition + numFrames) are loaded,
+        reading from disk on the calling thread. Only for streams that are NOT
+        registered with the DiskStreamer, so the reader has a single user. */
+    void loadBlocking (juce::int64 sourcePosition, int numFrames);
+
     //==============================================================================
     // Disk thread
 

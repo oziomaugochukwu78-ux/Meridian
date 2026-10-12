@@ -31,6 +31,8 @@ public:
         return ActionResult::success ("Ramping");
     }
 
+    ActionResult bounce() override { calls.push_back ("bounce"); return ActionResult::success ("Bouncing"); }
+
     std::string statusJson() override { return R"({"transport":"stopped"})"; }
 };
 
@@ -46,8 +48,9 @@ TEST_CASE ("Dispatcher routes each command to exactly one action", "[dispatcher]
     handleRemoteMessage ("TOGGLE_WINDOW", actions);
     handleRemoteMessage ("MUTE_TRACK_2", actions);
     handleRemoteMessage ("SET_VOLUME_TRACK_1_-6dB", actions);
+    handleRemoteMessage ("bounce", actions);
 
-    REQUIRE (actions.calls == std::vector<std::string> { "play", "stop", "toggle", "mute 2", "volume 1 -6.000000" });
+    REQUIRE (actions.calls == std::vector<std::string> { "play", "stop", "toggle", "mute 2", "volume 1 -6.000000", "bounce" });
 }
 
 TEST_CASE ("Action failures are reported, not swallowed", "[dispatcher]")

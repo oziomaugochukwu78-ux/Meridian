@@ -159,7 +159,7 @@ void AppController::installSession (std::unique_ptr<Session> newSession)
     bridge->attachSession (session.get());
     applyMasterSettings();
 
-    if (session != nullptr)
+    if (session != nullptr && rememberRecentSessions)
     {
         recentSessions.addFile (session->getSessionFile());
         getSettings().setValue (recentSessionsKey, recentSessions.toString());
@@ -229,6 +229,8 @@ juce::Result AppController::transportPlay()
 {
     if (session == nullptr)
         return juce::Result::fail ("No session is open.");
+    if (isBouncing())
+        return juce::Result::fail ("A bounce is in progress; playback resumes when it finishes.");
     if (! engine.isDeviceRunning())
         return juce::Result::fail ("No audio device is running. Choose one in Setup > Playback Engine.");
     if (! isRolling())
@@ -419,6 +421,120 @@ void AppController::renderElasticAudio (juce::ValueTree c, double timeRatio, dou
 }
 
 //==============================================================================
+// Bounce
+
+juce::int64 AppController::getSessionEnd() const
+{
+    juce::int64 end = 0;
+    if (session != nullptr)
+        for (const auto& t : session->getTracksNode())
+            for (const auto& c : track::clips (t))
+                end = juce::jmax (end, clip::end (c));
+    return end;
+}
+
+BounceRequest AppController::makeSessionBounceRequest() const
+{
+    BounceRequest request;
+    if (session == nullptr)
+        return request;
+
+    request.start = 0;
+    request.end = getSessionEnd() + (juce::int64) session->getSampleRate(); // one-second tail for decays
+    request.sampleRate = session->getSampleRate();
+    request.bitDepth = session->getBitDepth();
+    request.aiff = session->getFileFormat() == "aiff";
+
+    const auto folder = session->getFolder().getChildFile ("Bounced Files");
+    folder.createDirectory();
+    request.destination = folder.getNonexistentChildFile (juce::File::createLegalFileName (session->getName()),
+                                                          request.aiff ? ".aif" : ".wav", false);
+    return request;
+}
+
+std::unique_ptr<AudioEngine> AppController::createOfflineEngine (juce::String& error)
+{
+    if (session == nullptr)
+    {
+        error = "No session is open.";
+        return nullptr;
+    }
+    if (offlineEngine != nullptr)
+    {
+        error = "A bounce is already running.";
+        return nullptr;
+    }
+
+    transportStop();
+    bridge->suspendLive(); // the offline render needs exclusive use of the plug-ins
+
+    auto offline = std::make_unique<AudioEngine>();
+    offline->setOfflineMode (true);
+    offline->masterVolumeDb.store (engine.masterVolumeDb.load());
+    auto& from = engine.getMasterBus();
+    auto& to = offline->getMasterBus();
+    to.consoleEnabled.store (from.consoleEnabled.load());
+    to.driveDb.store (from.driveDb.load());
+    to.character.store (from.character.load());
+    to.curveType.store (from.curveType.load());
+
+    // Plug-ins were prepared for the device's block size, so render in blocks no larger.
+    const int blockSize = engine.getMaxBlockSize() > 0 ? engine.getMaxBlockSize() : 512;
+    const double sampleRate = session->getSampleRate();
+    offline->prepare (sampleRate, blockSize);
+    offline->publishGraph (bridge->buildOfflineGraph (sampleRate, blockSize));
+    return offline;
+}
+
+BounceResult AppController::bounceNow (const BounceRequest& request)
+{
+    juce::String error;
+    auto offline = createOfflineEngine (error);
+    if (offline == nullptr)
+        return { false, error };
+
+    auto result = renderBounce (*offline, request, {});
+    offline.reset();
+    bridge->resumeLive();
+    lastBounce = result;
+    return result;
+}
+
+juce::Result AppController::startBounce (const BounceRequest& request, std::function<void (const BounceResult&)> onDone)
+{
+    juce::String error;
+    offlineEngine = createOfflineEngine (error);
+    if (offlineEngine == nullptr)
+        return juce::Result::fail (error);
+
+    bounceProgress.store (0.0);
+    ++runningJobs;
+
+    jobs.addJob ([this, request, onDone, engineForJob = offlineEngine.get(), alive = std::weak_ptr<bool> (lifetime)]
+    {
+        auto result = renderBounce (*engineForJob, request, [this] (double p)
+        {
+            bounceProgress.store (p);
+            return ! shuttingDown.load();
+        });
+
+        juce::MessageManager::callAsync ([this, alive, result, onDone]
+        {
+            if (alive.expired())
+                return;
+            --runningJobs;
+            offlineEngine.reset(); // graphs and plug-in references released on the message thread
+            bridge->resumeLive();
+            lastBounce = result;
+            if (onDone)
+                onDone (result);
+        });
+    });
+
+    return juce::Result::ok();
+}
+
+//==============================================================================
 // Remote control
 
 juce::Result AppController::startRemoteControl()
@@ -536,6 +652,20 @@ remote::ActionResult AppController::setTrackVolume (int trackNumber, double deci
     return remote::ActionResult::success ((trackLabel (trackNumber, t) + " ramping to " + level + " dB").toStdString());
 }
 
+remote::ActionResult AppController::bounce()
+{
+    if (session == nullptr)
+        return remote::ActionResult::failure ("No session is open.");
+
+    const auto request = makeSessionBounceRequest();
+    if (const auto started = startBounce (request); started.failed())
+        return remote::ActionResult::failure (started.getErrorMessage().toStdString());
+
+    return remote::ActionResult::success ("Bouncing " + timeformat::minSecs (request.end - request.start, request.sampleRate).toStdString()
+                                          + " to " + request.destination.getFullPathName().toStdString()
+                                          + ". Send STATUS to follow progress.");
+}
+
 std::string AppController::statusJson()
 {
     const auto& transport = engine.getTransport();
@@ -549,6 +679,17 @@ std::string AppController::statusJson()
         .addNumber ("sampleRate", engine.getSampleRate(), 0)
         .addString ("window", activeWindowQuery && activeWindowQuery() == WindowKind::mix ? "mix" : "edit")
         .addBool ("audioDeviceRunning", engine.isDeviceRunning());
+
+    remote::JsonObject bounceInfo;
+    bounceInfo.addBool ("running", isBouncing());
+    if (isBouncing())
+        bounceInfo.addNumber ("progress", getBounceProgress(), 3);
+    if (lastBounce.ok)
+        bounceInfo.addString ("lastFile", lastBounce.file.getFullPathName().toStdString())
+            .addNumber ("lastPeakDbLeft", dsp::gainToDb (lastBounce.left.peak), 2)
+            .addNumber ("lastPeakDbRight", dsp::gainToDb (lastBounce.right.peak), 2)
+            .addNumber ("lastSeconds", (double) lastBounce.length / juce::jmax (1.0, engine.getSampleRate()), 3);
+    status.addRaw ("bounce", bounceInfo.toString());
 
     if (session == nullptr)
         return status.addRaw ("session", "null").toString();

@@ -1,5 +1,6 @@
 #include "AppController.h"
 #include "MainWindow.h"
+#include "SelfTest.h"
 
 #include "ui/MeridianLookAndFeel.h"
 
@@ -22,6 +23,25 @@ public:
         controller = std::make_unique<AppController>();
         window = std::make_unique<MainWindow> (*controller);
 
+        // Meridian --self-test <folder>: run the end-to-end self test and exit
+        // with 0 (all passed) or 1.
+        const auto args = juce::StringArray::fromTokens (commandLine, true);
+        if (const int index = args.indexOf ("--self-test"); index >= 0)
+        {
+            const auto folder = args[index + 1].unquoted();
+            const auto outputFolder = juce::File::isAbsolutePath (folder)
+                                          ? juce::File (folder)
+                                          : juce::File::getCurrentWorkingDirectory().getChildFile (folder.isNotEmpty() ? folder : juce::String ("self-test"));
+            selfTest = std::make_unique<SelfTest> (*controller, window->getMainComponent(), outputFolder, [this] (int failures)
+            {
+                setApplicationReturnValue (failures == 0 ? 0 : 1);
+                quit();
+            });
+            // Start once the window is on screen (screenshots need it).
+            juce::MessageManager::callAsync ([this] { if (selfTest != nullptr) selfTest->start(); });
+            return;
+        }
+
         // A session file passed on the command line (e.g. double-clicked) opens
         // directly; otherwise show the Dashboard, as a console DAW does.
         const auto argument = commandLine.trim().unquoted(); // trim first: Windows passes a leading space
@@ -42,6 +62,7 @@ public:
 
     void shutdown() override
     {
+        selfTest.reset();
         window.reset();
         controller.reset();
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
@@ -71,6 +92,7 @@ private:
     MeridianLookAndFeel lookAndFeel;
     std::unique_ptr<AppController> controller;
     std::unique_ptr<MainWindow> window;
+    std::unique_ptr<SelfTest> selfTest;
 };
 
 } // namespace meridian

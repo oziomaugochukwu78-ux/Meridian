@@ -33,6 +33,7 @@ TEST_CASE ("Transport and window commands", "[parser]")
     REQUIRE (parseOk ("STOP").type == Type::stop);
     REQUIRE (parseOk ("RECORD").type == Type::record);
     REQUIRE (parseOk ("TOGGLE_WINDOW").type == Type::toggleWindow);
+    REQUIRE (parseOk ("BOUNCE").type == Type::bounce);
     REQUIRE (parseOk ("STATUS").type == Type::status);
     REQUIRE (parseOk ("HELP").type == Type::help);
 }

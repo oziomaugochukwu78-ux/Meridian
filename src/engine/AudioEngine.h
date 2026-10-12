@@ -73,6 +73,23 @@ public:
     /** UI: number of blocks with missing disk data since the last call. */
     int collectDiskUnderruns() noexcept { return diskUnderruns.exchange (0); }
 
+    /** True while a published graph has not yet been picked up by the audio thread. */
+    bool hasPendingGraph() const noexcept { return pendingGraph.load() != nullptr; }
+
+    //==============================================================================
+    // Offline rendering (bounce). An engine used this way is never attached to a
+    // device; one thread calls prepare() and then renderOffline() repeatedly.
+
+    /** Allocates scratch and prepares the master bus. No callbacks may be running. */
+    void prepare (double sampleRate, int maxBlockSize);
+
+    /** Offline mode reads disk synchronously (never drops data) instead of
+        relying on the disk thread's read-ahead. */
+    void setOfflineMode (bool shouldBeOffline) noexcept { offline = shouldBeOffline; }
+
+    /** Renders the next numSamples of the transport into `outputs` (no inputs). */
+    void renderOffline (float* const* outputs, int numOutputs, int numSamples) noexcept;
+
     //==============================================================================
     void audioDeviceIOCallbackWithContext (const float* const* inputChannelData, int numInputChannels,
                                            float* const* outputChannelData, int numOutputChannels,
@@ -94,6 +111,7 @@ private:
 
     void timerCallback() override;
     void adoptPendingGraph() noexcept;
+    void renderBlock (const float* const* inputs, int numInputs, float* const* outputs, int numOutputs, int numSamples) noexcept;
     void processChunk (const float* const* inputs, int numInputs, float* const* outputs, int numOutputs,
                        int offset, int numSamples) noexcept;
     void renderTrack (TrackRender&, const BlockContext&) noexcept;
@@ -113,6 +131,7 @@ private:
     std::atomic<double> sampleRate { 48000.0 };
     std::atomic<int> maxBlockSize { 0 };
     std::atomic<bool> deviceRunning { false };
+    bool offline = false;
 
     // Audio-thread scratch, sized in audioDeviceAboutToStart.
     std::vector<double> busSum[2], busComp[2], masterOut[2];

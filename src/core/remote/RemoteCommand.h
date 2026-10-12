@@ -16,6 +16,7 @@ struct Command
         toggleWindow,   ///< TOGGLE_WINDOW         - swap Edit <-> Mix
         muteTrack,      ///< MUTE_TRACK_<X>        - toggle mute of track X
         setVolume,      ///< SET_VOLUME_TRACK_<X>_<Y>dB
+        bounce,         ///< BOUNCE                - mix the session down to an audio file
         status,         ///< STATUS                - JSON snapshot of transport + tracks
         help,           ///< HELP                  - list of commands
     };
