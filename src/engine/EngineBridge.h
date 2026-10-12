@@ -58,7 +58,8 @@ public:
     // Recording --------------------------------------------------------------------
     /** hardwareLatency: the device's input + output latency in samples, used
         (with the engine's own latency) to place takes where they were played. */
-    juce::Result startRecording (int hardwareLatency);
+    /** countInSamples > 0: the click counts in for that long before recording starts. */
+    juce::Result startRecording (int hardwareLatency, juce::int64 countInSamples = 0);
     void stopRecording();
     bool isRecording() const noexcept { return ! activeTakes.empty(); }
     juce::int64 getLastRecordingCompensation() const noexcept { return lastRecordingCompensation; }

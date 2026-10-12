@@ -100,6 +100,7 @@ private:
     void testGoldenRenders();
     void testInstruments();
     void testBuiltinEffects();
+    void testLoopClickMarkers();
     void testStress();
     void testRobustness();
     void testDamagedSessions (const juce::File& originalSession);

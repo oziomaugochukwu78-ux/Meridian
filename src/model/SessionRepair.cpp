@@ -97,6 +97,39 @@ private:
         if (s.hasProperty (ids::consoleCurve) && (int) s[ids::consoleCurve] != 0 && (int) s[ids::consoleCurve] != 1)
             set (s, ids::consoleCurve, 0, "session", "console curve");
         clampNumber (s, ids::tempo, 20.0, 999.0, 120.0, "session");
+        clampNumber (s, ids::clickLevelDb, -60.0, 0.0, -6.0, "session");
+        clampNumber (s, ids::countInBars, 0.0, 8.0, 0.0, "session");
+        clampNumber (s, ids::loopStart, 0.0, 1.0e15, 0.0, "session");
+        clampNumber (s, ids::loopEnd, 0.0, 1.0e15, 0.0, "session");
+        if ((bool) s.getProperty (ids::loopEnabled, false)
+            && (juce::int64) s.getProperty (ids::loopEnd, 0) <= (juce::int64) s.getProperty (ids::loopStart, 0))
+            set (s, ids::loopEnabled, false, "session", "loop playback with an empty range");
+
+        auto markers = s.getChildWithName (ids::MARKERS);
+        if (! markers.isValid())
+            return;
+        removeChildrenNotOfType (markers, ids::MARKER, "markers");
+        std::set<int> numbers;
+        int highest = 0;
+        for (const auto& m : markers)
+            highest = juce::jmax (highest, (int) m[ids::number]);
+        for (int i = 0; i < markers.getNumChildren(); ++i)
+        {
+            auto m = markers.getChild (i);
+            const double start = m[ids::start];
+            if (! (std::isfinite (start) && start >= 0.0 && start <= 1.0e15))
+            {
+                note ("markers", "removed marker \"" + m[ids::name].toString() + "\" with an invalid position");
+                markers.removeChild (i--, nullptr);
+                continue;
+            }
+            const int number = m[ids::number];
+            if (number <= 0 || ! numbers.insert (number).second)
+            {
+                set (m, ids::number, ++highest, "marker \"" + m[ids::name].toString() + "\"", "invalid or duplicate number");
+                numbers.insert (highest);
+            }
+        }
     }
 
     //==========================================================================
@@ -451,6 +484,28 @@ juce::String findSessionProblem (const Session& session)
         return "master volume " + s[ids::masterVolumeDb].toString();
     if (s.hasProperty (ids::tempo) && ! finiteIn (s[ids::tempo], 20.0, 999.0))
         return "tempo " + s[ids::tempo].toString();
+    if (s.hasProperty (ids::clickLevelDb) && ! finiteIn (s[ids::clickLevelDb], -60.0, 0.0))
+        return "click level " + s[ids::clickLevelDb].toString();
+    if (s.hasProperty (ids::countInBars) && ! finiteIn (s[ids::countInBars], 0.0, 8.0))
+        return "count-in " + s[ids::countInBars].toString();
+    for (const auto* p : { &ids::loopStart, &ids::loopEnd })
+        if (s.hasProperty (*p) && ! finiteIn (s[*p], 0.0, 1.0e15))
+            return p->toString() + " " + s[*p].toString();
+    if ((bool) s.getProperty (ids::loopEnabled, false)
+        && (juce::int64) s.getProperty (ids::loopEnd, 0) <= (juce::int64) s.getProperty (ids::loopStart, 0))
+        return "loop playback with an empty range";
+    {
+        std::set<int> markerNumbers;
+        for (const auto& m : s.getChildWithName (ids::MARKERS))
+        {
+            if (! m.hasType (ids::MARKER))
+                return "non-marker element <" + m.getType().toString() + "> in the marker list";
+            if (! finiteIn (m[ids::start], 0.0, 1.0e15))
+                return "marker \"" + m[ids::name].toString() + "\" position " + m[ids::start].toString();
+            if ((int) m[ids::number] <= 0 || ! markerNumbers.insert ((int) m[ids::number]).second)
+                return "marker \"" + m[ids::name].toString() + "\" has invalid or duplicate number";
+        }
+    }
 
     std::set<int> seenIds;
     int maxId = 0;

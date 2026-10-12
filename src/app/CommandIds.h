@@ -44,6 +44,12 @@ enum : juce::CommandID
     playStop = 0x14000,
     record,
     returnToZero,
+    loopPlayback,
+    clickToggle,
+    countInOff,
+    countIn1Bar,
+    countIn2Bars,
+    addMarker,
 
     // Setup
     playbackEngine = 0x15000,

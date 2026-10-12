@@ -157,9 +157,29 @@ const std::vector<ToolInfo>& toolTable()
           "plug-ins and clip count. Call this first to learn track numbers and names.",
           schema ({}) },
         { "transport", "Transport",
-          "Play, stop, record (on armed tracks), return to zero, or move the playback cursor.",
+          "Play, stop, record (on armed tracks), return to zero, or move the playback cursor (to a time or a marker).",
           schema ({ { "action", "string", "What to do", true, { "play", "stop", "record", "locate", "return_to_zero" } },
-                    { "seconds", "number", "Cursor position in seconds (for locate)" } }) },
+                    { "seconds", "number", "Cursor position in seconds (for locate)" },
+                    { "marker", "integer", "Marker number to go to (for locate, instead of seconds)" } }) },
+        { "set_loop", "Loop playback",
+          "Turn loop playback on or off and set the range. While playing, the range repeats seamlessly (not while recording).",
+          schema ({ { "enabled", "boolean", "Loop playback on/off", true },
+                    { "start_seconds", "number", "Loop start in seconds (default: the current range)" },
+                    { "end_seconds", "number", "Loop end in seconds" } }) },
+        { "set_click", "Click and count-in",
+          "The metronome click (accented on beat 1 of each bar, at the session tempo) and the count-in before recording.",
+          schema ({ { "enabled", "boolean", "Click on/off while playing and recording" },
+                    { "level_db", "number", "Click level, -60 to 0 dB (default -6)" },
+                    { "count_in_bars", "integer", "Bars of click before recording starts, 0-8 (0 = none)" } }) },
+        { "add_marker", "Add a marker",
+          "Add a named marker (memory location) at a time, to jump back to later. Returns its number.",
+          schema ({ { "name", "string", "Marker name, e.g. \"Chorus\"" },
+                    { "seconds", "number", "Position in seconds (default: the playback cursor)" } }) },
+        { "list_markers", "List markers",
+          "Every marker with its number, name and position, in time order.", schema ({}) },
+        { "delete_marker", "Delete a marker",
+          "Remove a marker by number (undoable).",
+          schema ({ { "marker", "integer", "Marker number", true } }) },
         { "set_track", "Change a track",
           "Set any of a track's mixer settings. Level changes glide smoothly (no clicks). Only the given fields change.",
           schema ({ { "track", "track", trackHelp, true },
@@ -440,6 +460,11 @@ RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var
 
     if (name == "get_status")         return getStatus();
     if (name == "transport")          return transport (args);
+    if (name == "set_loop")           return setLoop (args);
+    if (name == "set_click")          return setClick (args);
+    if (name == "add_marker")         return addMarker (args);
+    if (name == "list_markers")       return listMarkers();
+    if (name == "delete_marker")      return deleteMarker (args);
     if (name == "set_track")          return setTrack (args);
     if (name == "create_track")       return createTrack (args);
     if (name == "delete_track")       return deleteTrack (args);
@@ -641,6 +666,7 @@ RemoteTools::Result RemoteTools::getStatus()
         return { true, status, {} };
     }
 
+    set (status, "loop_and_click", describeTransportSettings());
     const auto& s = session->getState();
     set (status, "session", makeObject ({ { "name", session->getName() },
                                           { "sample_rate", session->getSampleRate() },
@@ -671,9 +697,19 @@ RemoteTools::Result RemoteTools::transport (const juce::var& args)
     else if (action == "return_to_zero") app.returnToZero();
     else if (action == "locate")
     {
-        if (! args.hasProperty ("seconds"))
-            return { false, {}, "locate needs \"seconds\"." };
-        app.locate (secondsToSamples (args["seconds"]));
+        if (args.hasProperty ("marker"))
+        {
+            if (! app.locateToMarker ((int) args["marker"]))
+                return { false, {}, "There is no marker " + args["marker"].toString() + ". Call list_markers." };
+        }
+        else if (args.hasProperty ("seconds"))
+        {
+            app.locate (secondsToSamples (args["seconds"]));
+        }
+        else
+        {
+            return { false, {}, "locate needs \"seconds\" or \"marker\"." };
+        }
     }
     else
         return { false, {}, "Unknown action \"" + action + "\" (use play, stop, record, locate or return_to_zero)." };
@@ -681,6 +717,78 @@ RemoteTools::Result RemoteTools::transport (const juce::var& args)
     if (r.failed())
         return { false, {}, r.getErrorMessage() };
     return { true, makeObject ({ { "done", action } }), {} };
+}
+
+juce::var RemoteTools::describeTransportSettings() const
+{
+    const auto& s = app.getSession()->getState();
+    return makeObject ({ { "loop_enabled", (bool) s.getProperty (ids::loopEnabled, false) },
+                         { "loop_start_seconds", samplesToSeconds (s.getProperty (ids::loopStart, 0)) },
+                         { "loop_end_seconds", samplesToSeconds (s.getProperty (ids::loopEnd, 0)) },
+                         { "click_enabled", (bool) s.getProperty (ids::clickEnabled, false) },
+                         { "click_level_db", (double) s.getProperty (ids::clickLevelDb, -6.0) },
+                         { "count_in_bars", (int) s.getProperty (ids::countInBars, 0) } });
+}
+
+RemoteTools::Result RemoteTools::setLoop (const juce::var& args)
+{
+    const auto& s = app.getSession()->getState();
+    const auto start = args.hasProperty ("start_seconds") ? secondsToSamples (args["start_seconds"]) : (juce::int64) s.getProperty (ids::loopStart, 0);
+    const auto end = args.hasProperty ("end_seconds") ? secondsToSamples (args["end_seconds"]) : (juce::int64) s.getProperty (ids::loopEnd, 0);
+    const bool enabled = args["enabled"];
+    if (enabled && end <= start)
+        return { false, {}, "The loop range is empty: give start_seconds and end_seconds with end after start." };
+    app.setLoop (enabled, start, end);
+    return { true, describeTransportSettings(), {} };
+}
+
+RemoteTools::Result RemoteTools::setClick (const juce::var& args)
+{
+    const auto& s = app.getSession()->getState();
+    if (args.hasProperty ("count_in_bars"))
+    {
+        const int bars = args["count_in_bars"];
+        if (bars < 0 || bars > 8)
+            return { false, {}, "count_in_bars must be 0-8." };
+        app.setCountInBars (bars);
+    }
+    const bool enabled = args.hasProperty ("enabled") ? (bool) args["enabled"] : (bool) s.getProperty (ids::clickEnabled, false);
+    const double level = args.hasProperty ("level_db") ? (double) args["level_db"] : (double) s.getProperty (ids::clickLevelDb, -6.0);
+    if (level < -60.0 || level > 0.0)
+        return { false, {}, "level_db must be between -60 and 0." };
+    app.setClick (enabled, level);
+    return { true, describeTransportSettings(), {} };
+}
+
+juce::var RemoteTools::describeMarker (const juce::ValueTree& m) const
+{
+    return makeObject ({ { "marker", (int) m[ids::number] }, { "name", m[ids::name].toString() },
+                         { "seconds", samplesToSeconds ((juce::int64) m[ids::start]) } });
+}
+
+RemoteTools::Result RemoteTools::addMarker (const juce::var& args)
+{
+    const auto position = args.hasProperty ("seconds") ? secondsToSamples (args["seconds"])
+                                                       : app.getEngine().getTransport().getPosition();
+    const auto m = app.getSession()->addMarker (args["name"].toString(), position, beginEdit ("Add Marker"));
+    return { true, describeMarker (m), {} };
+}
+
+RemoteTools::Result RemoteTools::listMarkers()
+{
+    juce::Array<juce::var> list;
+    for (const auto& m : app.getSession()->getMarkers())
+        list.add (describeMarker (m));
+    return { true, makeObject ({ { "markers", list } }), {} };
+}
+
+RemoteTools::Result RemoteTools::deleteMarker (const juce::var& args)
+{
+    const auto m = app.getSession()->getMarkerByNumber ((int) args["marker"]);
+    if (! m.isValid())
+        return { false, {}, "There is no marker " + args["marker"].toString() + ". Call list_markers." };
+    app.getSession()->removeMarker (m, beginEdit ("Delete Marker"));
+    return { true, makeObject ({ { "deleted", (int) args["marker"] } }), {} };
 }
 
 RemoteTools::Result RemoteTools::setTrack (const juce::var& args)

@@ -8,6 +8,7 @@ add_executable(meridian_core_tests
     dsp/EffectsTests.cpp
     dsp/FaderTaperTests.cpp
     dsp/LinearRampTests.cpp
+    dsp/MetronomeTests.cpp
     dsp/MixKernelsTests.cpp
     dsp/PanLawTests.cpp
     dsp/SaturationCurveTests.cpp

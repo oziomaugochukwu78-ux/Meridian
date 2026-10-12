@@ -52,6 +52,15 @@ public:
         Returns false if any frame was not yet loaded; those frames are silent. */
     bool read (juce::int64 sourcePosition, float* const* dest, int numDestChannels, int numFrames) noexcept;
 
+    /** Loop playback: keeps one cell's worth of frames from sourcePosition
+        loaded in a third buffer, apart from the two that follow the playhead,
+        so a jump back to the loop start is served at once. read() uses it
+        whenever the streaming buffers do not have the frames yet. */
+    void pin (juce::int64 sourcePosition) noexcept;
+
+    /** True once the pinned frames at sourcePosition are loaded (tests). */
+    bool isPinnedReady (juce::int64 sourcePosition) const noexcept;
+
     /** Offline renders only (never the audio thread): makes sure the cells
         covering [sourcePosition, sourcePosition + numFrames) are loaded,
         reading from disk on the calling thread. Only for streams that are NOT
@@ -86,6 +95,7 @@ private:
     };
 
     int findReadyHalf (juce::int64 cell) const noexcept;
+    static void fill (juce::AudioFormatReader&, Half&, juce::int64 startFrame, juce::int64 fileLength, int numChannels, int frames);
 
     std::unique_ptr<juce::AudioFormatReader> reader; // disk thread only after construction
     const int numChannels;
@@ -93,6 +103,7 @@ private:
     const double fileSampleRate;
     const int halfSize;
     Half halves[2];
+    Half pinned; // same states; the word holds the first frame (not a cell index)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ClipStream)
 };

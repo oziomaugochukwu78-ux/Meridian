@@ -21,6 +21,8 @@ add_library(meridian_core STATIC
     dsp/Limiter.h
     dsp/LinearRamp.h
     dsp/MeterScale.h
+    dsp/Metronome.cpp
+    dsp/Metronome.h
     dsp/MixKernels.cpp
     dsp/MixKernels.h
     dsp/PanLaw.h

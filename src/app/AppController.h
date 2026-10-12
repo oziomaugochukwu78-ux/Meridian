@@ -74,6 +74,17 @@ public:
     /** Pushes the session's master fader and console settings into the engine. */
     void applyMasterSettings();
 
+    // Loop, click, count-in, markers (session settings; the engine follows them) ----------
+    /** Loop playback over [start, end) in samples. Not an edit: not in the undo history. */
+    void setLoop (bool enabled, juce::int64 start, juce::int64 end);
+    void setClick (bool enabled, double levelDb);
+    void setCountInBars (int bars);
+    /** Samples of count-in before recording at the current tempo (0 if none). */
+    juce::int64 getCountInSamples() const;
+    juce::ValueTree addMarker (const juce::String& name, juce::int64 position);
+    bool locateToMarker (int number);
+    static constexpr int beatsPerBar = 4; ///< one meter (4/4) until the meter map exists
+
     // Transport ----------------------------------------------------------------------------
     // (Distinct names from the RemoteActions overrides below, which wrap these.)
     juce::Result transportPlay();
@@ -143,6 +154,7 @@ private:
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
     void installSession (std::unique_ptr<Session>);
     void syncDeviceToSession();
+    void applyTransportSettings();
     void reportProblem (const juce::String& title, const juce::String& message);
     juce::String nextTrackName (const juce::String& baseName) const;
     juce::String describePosition() const;

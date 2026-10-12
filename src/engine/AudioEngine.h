@@ -5,6 +5,8 @@
 #include "SpscQueue.h"
 #include "Transport.h"
 
+#include <dsp/Metronome.h>
+
 #include <juce_audio_devices/juce_audio_devices.h>
 
 #include <atomic>
@@ -67,6 +69,13 @@ public:
 
     std::atomic<double> masterVolumeDb { 0.0 };
 
+    /** The click (metronome), mixed into the output after the master fader
+        while the transport rolls and during a count-in. Never in bounces. */
+    std::atomic<bool> clickEnabled { false };
+    std::atomic<double> clickBpm { 120.0 };
+    std::atomic<int> clickBeatsPerBar { 4 };
+    std::atomic<double> clickLevelDb { -6.0 };
+
     /** UI: peaks of the master output since the last call. */
     std::pair<float, float> collectMasterPeaks() noexcept;
 
@@ -121,13 +130,16 @@ private:
         juce::int64 position;
         Transport::State state;
         bool anySolo;
+        bool looping;                 ///< loop playback is on: keep the loop start cued
+        juce::int64 loopStart, loopEnd;
     };
 
     void timerCallback() override;
     void adoptPendingGraph() noexcept;
     void renderBlock (const float* const* inputs, int numInputs, float* const* outputs, int numOutputs, int numSamples) noexcept;
     void processChunk (const float* const* inputs, int numInputs, float* const* outputs, int numOutputs,
-                       int offset, int numSamples) noexcept;
+                       int offset, int numSamples, Transport::State state, bool countingIn) noexcept;
+    void renderClick (int numSamples, juce::int64 gridPosition) noexcept;
     void renderTrack (TrackRender&, const BlockContext&) noexcept;
     void renderSegments (TrackRender&, const BlockContext&) noexcept;
     void renderInstrument (TrackRender&, const BlockContext&) noexcept;
@@ -152,7 +164,9 @@ private:
     // Audio-thread scratch, sized in audioDeviceAboutToStart.
     std::vector<double> busSum[2], busComp[2], masterOut[2];
     std::vector<double> faderGains, muteGains, totalGains, sendGains, panLeft, panRight, coefLeft, coefRight, busScratch;
-    std::vector<float> silence;
+    std::vector<float> silence, clickScratch;
+    dsp::Metronome metronome;
+    dsp::Metronome::Params appliedClick;
     std::vector<float> delayedMain[2], delayedSend[2];   // plug-in delay compensation output
     dsp::LinearRamp masterFader;
 

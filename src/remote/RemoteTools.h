@@ -51,6 +51,13 @@ private:
     Result getStatus();
     Result transport (const juce::var&);
     Result setTrack (const juce::var&);
+    Result setLoop (const juce::var&);
+    Result setClick (const juce::var&);
+    Result addMarker (const juce::var&);
+    Result listMarkers();
+    Result deleteMarker (const juce::var&);
+    juce::var describeTransportSettings() const;
+    juce::var describeMarker (const juce::ValueTree&) const;
     Result createTrack (const juce::var&);
     Result deleteTrack (const juce::var&);
     Result setOutput (const juce::var&);

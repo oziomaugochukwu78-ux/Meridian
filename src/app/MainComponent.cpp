@@ -315,7 +315,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& c)
                   undo, redo, separateClip, deleteSelection, elasticAudio, zoomIn, zoomOut,
                   slipMode, gridMode, trimTool, selectorTool, grabberTool, smartTool, pencilTool,
                   newTracks, deleteTrack,
-                  playStop, record, returnToZero,
+                  playStop, record, returnToZero, loopPlayback, clickToggle, countInOff, countIn1Bar, countIn2Bars, addMarker,
                   playbackEngine, pluginManager, toggleRemoteControl, remoteControlInfo,
                   toggleWindow, showEditWindow, showMixWindow });
 }
@@ -404,6 +404,31 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                                info.setActive (hasSession); break;
         case returnToZero:     info.setInfo ("Return to Zero", "Move the cursor to the session start", "Transport", 0);
                                info.addDefaultKeypress (K::homeKey, 0); info.addDefaultKeypress (K::returnKey, 0); break;
+        case loopPlayback:
+        {
+            const auto s = hasSession ? app.getSession()->getState() : juce::ValueTree();
+            info.setInfo ("Loop Playback", "Repeat the selection (or the last loop range) while playing", "Transport", 0);
+            info.addDefaultKeypress ('l', cmd | shift);
+            info.setActive (hasSession);
+            info.setTicked (hasSession && (bool) s.getProperty (ids::loopEnabled, false));
+            break;
+        }
+        case clickToggle:      info.setInfo ("Click", "Metronome while playing and recording", "Transport", 0);
+                               info.addDefaultKeypress ('k', cmd | shift); info.setActive (hasSession);
+                               info.setTicked (hasSession && (bool) app.getSession()->getState().getProperty (ids::clickEnabled, false)); break;
+        case countInOff:
+        case countIn1Bar:
+        case countIn2Bars:
+        {
+            const int bars = id == countInOff ? 0 : id == countIn1Bar ? 1 : 2;
+            info.setInfo (bars == 0 ? juce::String ("Count-In: Off") : "Count-In: " + juce::String (bars) + (bars == 1 ? " Bar" : " Bars"),
+                          "Click before recording starts", "Transport", 0);
+            info.setActive (hasSession);
+            info.setTicked (hasSession && (int) app.getSession()->getState().getProperty (ids::countInBars, 0) == bars);
+            break;
+        }
+        case addMarker:        info.setInfo ("Add Marker", "Add a marker at the playhead", "Transport", 0);
+                               info.addDefaultKeypress ('m', cmd); info.setActive (hasSession); break;
 
         case playbackEngine:   info.setInfo ("Playback Engine...", "Audio device, buffer size and engine options", "Setup", 0); break;
         case pluginManager:    info.setInfo ("Plug-in Manager...", "Scan for and manage plug-ins", "Setup", 0); break;
@@ -468,6 +493,35 @@ bool MainComponent::perform (const InvocationInfo& info)
                 showMessage (juce::MessageBoxIconType::WarningIcon, "Record", result.getErrorMessage());
             break;
         case returnToZero:    app.returnToZero(); break;
+        case loopPlayback:
+            if (auto* session = app.getSession())
+            {
+                const auto s = session->getState();
+                const bool on = ! (bool) s.getProperty (ids::loopEnabled, false);
+                // Loop the selection if there is one, else the last loop range, else the next bar.
+                juce::int64 start = s.getProperty (ids::loopStart, 0), end = s.getProperty (ids::loopEnd, 0);
+                if (edit.hasTimeRange())
+                {
+                    start = edit.selectionStart;
+                    end = edit.selectionEnd;
+                }
+                else if (end <= start)
+                {
+                    start = app.getEngine().getTransport().getPosition();
+                    end = start + (juce::int64) std::llround (AppController::beatsPerBar * 60.0 * session->getSampleRate() / session->getTempo());
+                }
+                app.setLoop (on, start, end);
+            }
+            break;
+        case clickToggle:
+            if (auto* session = app.getSession())
+                app.setClick (! (bool) session->getState().getProperty (ids::clickEnabled, false),
+                              session->getState().getProperty (ids::clickLevelDb, -6.0));
+            break;
+        case countInOff:      app.setCountInBars (0); break;
+        case countIn1Bar:     app.setCountInBars (1); break;
+        case countIn2Bars:    app.setCountInBars (2); break;
+        case addMarker:       app.addMarker ({}, app.getEngine().getTransport().getPosition()); break;
 
         case playbackEngine:  PlaybackEngineComponent::show (app); break;
         case pluginManager:   app.getPluginHost().showPluginManager(); break;
@@ -534,7 +588,25 @@ juce::PopupMenu MainComponent::getMenuForIndex (int index, const juce::String&)
             break;
         }
         case 2: add (newTracks); add (deleteTrack); break;
-        case 3: add (playStop); add (record); add (returnToZero); break;
+        case 3:
+        {
+            add (playStop); add (record); add (returnToZero);
+            menu.addSeparator();
+            add (loopPlayback); add (clickToggle);
+            menu.addSeparator();
+            add (countInOff); add (countIn1Bar); add (countIn2Bars);
+            menu.addSeparator();
+            add (addMarker);
+            juce::PopupMenu markers;
+            if (auto* session = app.getSession())
+                for (const auto& m : session->getMarkers())
+                {
+                    const int number = m[ids::number];
+                    markers.addItem (juce::String (number) + ". " + m[ids::name].toString(), [this, number] { app.locateToMarker (number); });
+                }
+            menu.addSubMenu ("Go to Marker", markers, markers.getNumItems() > 0);
+            break;
+        }
         case 4:
             add (playbackEngine); add (pluginManager);
             menu.addSeparator();

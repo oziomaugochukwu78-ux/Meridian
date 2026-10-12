@@ -98,6 +98,13 @@ public:
 
     /** Session tempo in BPM (one tempo for the whole session for now). */
     double getTempo() const;
+
+    /** Markers (memory locations), sorted by position. */
+    juce::Array<juce::ValueTree> getMarkers() const;
+    juce::ValueTree getMarkerByNumber (int number) const;
+    /** Numbered with the lowest free number (1, 2, 3...). Undoable. */
+    juce::ValueTree addMarker (const juce::String& name, juce::int64 position, juce::UndoManager*);
+    void removeMarker (const juce::ValueTree& marker, juce::UndoManager*);
     void removeTrack (const juce::ValueTree& track, juce::UndoManager*);
 
     juce::ValueTree addClip (juce::ValueTree track, const juce::File& audioFile, juce::int64 timelineStart,

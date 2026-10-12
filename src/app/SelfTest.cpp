@@ -7,6 +7,7 @@
 #include "model/Routing.h"
 #include "model/SessionRepair.h"
 #include "media/TimeStretchEngine.h"
+#include "engine/ClipStream.h"
 #include "model/SessionBackups.h"
 #include "plugins/BuiltinEffects.h"
 #include "ui/dialogs/DashboardComponent.h"
@@ -71,6 +72,7 @@ void SelfTest::start()
         testGoldenRenders();
         testInstruments();
         testBuiltinEffects();
+        testLoopClickMarkers();
         testStress();
         testRobustness(); // before the remote tests: their BOUNCE runs in the background
         testMcpTools();
@@ -1337,6 +1339,200 @@ void SelfTest::testBuiltinEffects()
 }
 
 //==============================================================================
+// Loop playback, click, count-in and markers.
+
+namespace
+{
+/** Renders `total` samples from a bare engine (no graph, no device) in blocks of
+    `block`, returning the left output. */
+std::vector<float> renderEngine (AudioEngine& engine, int total, int block)
+{
+    std::vector<float> left ((size_t) total), right ((size_t) total);
+    for (int done = 0; done < total; done += block)
+    {
+        const int n = std::min (block, total - done);
+        float* outs[2] = { left.data() + done, right.data() + done };
+        engine.renderOffline (outs, 2, n);
+    }
+    return left;
+}
+
+/** Sample indices where a click starts. A click begins at zero phase and is
+    never exactly zero after that, so a zero followed by sound marks an onset
+    (also when a new click cuts off a ringing one). */
+std::vector<int> clickOnsets (const std::vector<float>& x)
+{
+    std::vector<int> onsets;
+    for (int i = 0; i + 1 < (int) x.size(); ++i)
+        if (juce::exactlyEqual (x[(size_t) i], 0.0f) && ! juce::exactlyEqual (x[(size_t) i + 1], 0.0f))
+            onsets.push_back (i);
+    return onsets;
+}
+
+juce::String listOf (const std::vector<int>& v, size_t max = 8)
+{
+    juce::StringArray s;
+    for (size_t i = 0; i < v.size() && i < max; ++i)
+        s.add (juce::String (v[i]));
+    return s.joinIntoString (", ") + (v.size() > max ? ", ..." : "");
+}
+} // namespace
+
+void SelfTest::testLoopClickMarkers()
+{
+    beginGroup ("Loop playback, click, count-in, markers");
+
+    // A bare engine: its output is only the click, so every timing is visible to the sample.
+    {
+        AudioEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.getMasterBus().consoleEnabled.store (false);
+        engine.clickEnabled.store (true);
+        engine.clickBpm.store (120.0); // 24000 samples per beat
+        engine.clickLevelDb.store (-6.0);
+        auto& transport = engine.getTransport();
+
+        transport.play();
+        auto x = renderEngine (engine, 120000, 480);
+        const auto onsets = clickOnsets (x);
+        expect ("click: one click on every beat, starting exactly on the beat sample (0, 24000, 48000...)",
+                onsets == std::vector<int> { 0, 24000, 48000, 72000, 96000 }, listOf (onsets));
+        float accent = 0.0f, other = 0.0f;
+        for (int i = 0; i < 1920; ++i)
+        {
+            accent = std::max (accent, std::abs (x[(size_t) i]));
+            other = std::max (other, std::abs (x[(size_t) i + 24000]));
+        }
+        expectNear ("click: the accent (beat 1) peaks at the set level", db (accent), -6.0, 0.001, "dB");
+        expectNear ("click: other beats 4 dB lower", db (other), -10.0, 0.001, "dB");
+        transport.stop();
+
+        // Loop [12000, 30000): 18000 samples, wrapping inside blocks of 512.
+        transport.locate (12000);
+        transport.setLoop (true, 12000, 30000);
+        transport.play();
+        x = renderEngine (engine, 18000 * 5, 512);
+        const auto looped = clickOnsets (x);
+        expect ("loop: the click at beat 24000 repeats every 18000 samples, exactly (wraps are sample-accurate)",
+                looped == std::vector<int> { 12000, 30000, 48000, 66000, 84000 }, listOf (looped));
+        expect ("loop: the playhead is back at the loop start after whole passes", transport.getPosition() == 12000,
+                juce::String (transport.getPosition()));
+        transport.stop();
+
+        // A loop shorter than a block: several wraps inside every block.
+        transport.locate (24000);
+        transport.setLoop (true, 24000, 24100);
+        transport.play();
+        x = renderEngine (engine, 5000, 512);
+        const auto tight = clickOnsets (x);
+        expect ("loop: a 100-sample loop wraps 50 times in 5000 samples, each on its sample",
+                tight.size() == 50 && tight.front() == 0 && tight.back() == 4900 && transport.getPosition() == 24000,
+                juce::String ((int) tight.size()) + " onsets, playhead " + juce::String (transport.getPosition()));
+        transport.stop();
+
+        // Never while recording.
+        transport.locate (12000);
+        transport.setLoop (true, 12000, 30000);
+        transport.play (Transport::State::recording);
+        renderEngine (engine, 48000, 512);
+        expect ("loop: recording runs straight through the loop end", transport.getPosition() == 12000 + 48000,
+                juce::String (transport.getPosition()));
+        transport.stop();
+        transport.setLoop (false, 0, 0);
+
+        // Count-in: 2 bars at 120 BPM = 192000 samples of click; the playhead waits, then plays from bar 2.
+        engine.clickEnabled.store (false); // the count-in clicks even with the click off
+        transport.locate (96000);
+        transport.play (Transport::State::playing, 192000);
+        x = renderEngine (engine, 192000, 500);
+        const auto counted = clickOnsets (x);
+        expect ("count-in: 8 clicks on its own beat grid, the playhead held at the start",
+                counted.size() == 8 && counted.front() == 0 && counted.back() == 168000 && transport.getPosition() == 96000,
+                listOf (counted) + "; playhead " + juce::String (transport.getPosition()));
+        x = renderEngine (engine, 24000, 500);
+        expect ("count-in: then playback starts exactly at the start (and the click stays off)",
+                transport.getPosition() == 96000 + 24000 && clickOnsets (x).empty(), juce::String (transport.getPosition()));
+        transport.stop();
+    }
+
+    // Seamless loop audio: the pinned loop-start buffer is served at once after a jump.
+    {
+        const auto file = media.getChildFile ("tone1k_mono.wav");
+        auto makeStream = [this, &file]
+        {
+            return std::make_unique<ClipStream> (std::unique_ptr<juce::AudioFormatReader> (app.getFormatManager().createReaderFor (file)), 4096);
+        };
+        auto serviceAll = [] (ClipStream& s) { for (int i = 0; i < 10 && s.service(); ++i) {} };
+        float buffer[512] {};
+        float* dest[1] = { buffer };
+
+        auto pinned = makeStream();
+        pinned->cue (60000); // playing near the loop end
+        pinned->pin (1000);  // the loop starts at source frame 1000
+        serviceAll (*pinned);
+        const bool served = pinned->isPinnedReady (1000) && pinned->read (1000, dest, 1, 512);
+        float direct[512] {};
+        float* directDest[1] = { direct };
+        std::unique_ptr<juce::AudioFormatReader> reader (app.getFormatManager().createReaderFor (file));
+        reader->read (directDest, 1, 1000, 512);
+        expect ("loop audio: after the jump to the loop start, the pinned buffer serves it at once, bit-exact",
+                served && std::equal (buffer, buffer + 512, direct), {});
+
+        auto unpinned = makeStream();
+        unpinned->cue (60000);
+        serviceAll (*unpinned);
+        expect ("loop audio: without the pin the same jump would miss (proves the test can fail)",
+                ! unpinned->read (1000, dest, 1, 512), {});
+    }
+
+    // The application and the AI tools.
+    auto& tools = app.getRemoteTools();
+    auto call = [&tools] (const juce::String& tool, const juce::String& arguments) { return tools.call (tool, juce::JSON::parse (arguments)); };
+    auto* session = app.getSession();
+    auto& transport = app.getEngine().getTransport();
+
+    auto r = call ("set_loop", R"({"enabled":true,"start_seconds":1.0,"end_seconds":3.0})");
+    expect ("set_loop: the engine loops exactly the given range", r.ok && transport.isLoopEnabled()
+            && transport.getLoopStart() == 48000 && transport.getLoopEnd() == 144000, r.error);
+    r = call ("set_loop", R"({"enabled":true,"start_seconds":3.0,"end_seconds":1.0})");
+    expect ("set_loop: an empty range is refused", ! r.ok, r.error);
+    call ("set_loop", R"({"enabled":false})");
+    expect ("set_loop: off", ! transport.isLoopEnabled(), {});
+
+    r = call ("set_click", R"({"enabled":true,"level_db":-12,"count_in_bars":2})");
+    expect ("set_click: click, level and count-in reach the engine",
+            r.ok && app.getEngine().clickEnabled.load() && juce::exactlyEqual (app.getEngine().clickLevelDb.load(), -12.0)
+                && app.getCountInSamples() == (juce::int64) std::llround (8 * 60.0 * app.getEngine().getSampleRate() / session->getTempo()),
+            r.error + " count-in " + juce::String (app.getCountInSamples()));
+    call ("set_click", R"({"enabled":false,"count_in_bars":0})");
+
+    r = call ("add_marker", R"({"name":"Chorus","seconds":1.5})");
+    const auto second = call ("add_marker", R"({"name":"Verse","seconds":0.5})");
+    const auto listed = call ("list_markers", "{}");
+    expect ("markers: added, numbered, and listed in time order",
+            r.ok && second.ok && juce::JSON::toString (listed.data, true).contains (R"("name": "Verse")")
+                && juce::JSON::toString (listed.data, true).indexOf ("Verse") < juce::JSON::toString (listed.data, true).indexOf ("Chorus"),
+            juce::JSON::toString (listed.data, true));
+    const int chorus = r.data["marker"];
+    call ("transport", R"({"action":"locate","marker":)" + juce::String (chorus) + "}");
+    for (int waited = 0; transport.getPosition() != 72000 && waited < 2000; waited += 10)
+        juce::Thread::sleep (10); // with a device running, the audio thread applies the move at its next block
+    expect ("markers: locate to a marker", transport.getPosition() == 72000, juce::String (transport.getPosition()));
+    r = call ("delete_marker", R"({"marker":)" + juce::String (chorus) + "}");
+    expect ("markers: delete, then undo brings it back",
+            r.ok && ! session->getMarkerByNumber (chorus).isValid()
+                && (session->getUndoManager().undo(), session->getMarkerByNumber (chorus).isValid()), r.error);
+
+    const auto saved = app.saveSession();
+    juce::String error;
+    const auto reloaded = Session::load (session->getSessionFile(), error);
+    expect ("markers are saved in the session and pass the validator",
+            saved.wasOk() && reloaded != nullptr && reloaded->getMarkers().size() == 2 && findSessionProblem (*reloaded).isEmpty(), error);
+    for (const auto& m : session->getMarkers())
+        session->removeMarker (m, nullptr);
+}
+
+//==============================================================================
 // Stress: a large session must still sum exactly and render faster than real time.
 
 void SelfTest::testStress()
@@ -1953,8 +2149,8 @@ void SelfTest::testMcpTools()
     if (toolArray != nullptr)
         for (const auto& tool : *toolArray)
             allDescribed = allDescribed && tool["inputSchema"].isObject() && tool["description"].toString().length() > 20;
-    expect ("tools/list describes all 32 tools, each with a description and a JSON schema",
-            allDescribed && toolArray->size() == 32, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
+    expect ("tools/list describes all 37 tools, each with a description and a JSON schema",
+            allDescribed && toolArray->size() == 37, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
 
     auto r = toolCall ("get_status", "{}");
     expect ("get_status returns the session and tracks", ! failed (r) && callText (r).contains ("\"Vocal\""), callText (r).substring (0, 160));

@@ -41,7 +41,11 @@
               NOTES
                 NOTE  pitch velocity start length       (ticks)
 
-    SESSION also holds tempo (BPM, default 120).
+    SESSION also holds tempo (BPM, default 120), loop playback (loopEnabled,
+    loopStart, loopEnd in samples), the click (clickEnabled, clickLevelDb),
+    countInBars (0 = none; counts in before recording), and markers:
+      MARKERS
+        MARKER  number name start      (start in samples)
 
     All times are in samples at the session sample rate. Child order of CLIPS is
     z-order: later clips cover earlier ones where they overlap.
@@ -66,6 +70,8 @@ MERIDIAN_ID (POINT)
 MERIDIAN_ID (NOTES)
 MERIDIAN_ID (NOTE)
 MERIDIAN_ID (SYNTH)
+MERIDIAN_ID (MARKERS)
+MERIDIAN_ID (MARKER)
 
 // SESSION
 MERIDIAN_ID (name)
@@ -80,6 +86,13 @@ MERIDIAN_ID (consoleDrive)
 MERIDIAN_ID (consoleCharacter)
 MERIDIAN_ID (consoleCurve)
 MERIDIAN_ID (tempo)
+MERIDIAN_ID (loopEnabled)
+MERIDIAN_ID (loopStart)
+MERIDIAN_ID (loopEnd)
+MERIDIAN_ID (clickEnabled)
+MERIDIAN_ID (clickLevelDb)
+MERIDIAN_ID (countInBars)
+MERIDIAN_ID (number)       // MARKER: 1, 2, 3... (unique in the session)
 
 // TRACK
 MERIDIAN_ID (id)

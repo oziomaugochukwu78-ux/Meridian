@@ -212,6 +212,7 @@ void AppController::installSession (std::unique_ptr<Session> newSession)
     syncDeviceToSession();
     bridge->attachSession (session.get());
     applyMasterSettings();
+    applyTransportSettings();
 
     if (session != nullptr && rememberRecentSessions)
     {
@@ -229,6 +230,85 @@ void AppController::valueTreePropertyChanged (juce::ValueTree& tree, const juce:
         && (property == ids::masterVolumeDb || property == ids::consoleEnabled || property == ids::consoleDrive
             || property == ids::consoleCharacter || property == ids::consoleCurve))
         applyMasterSettings();
+
+    if (tree.hasType (ids::SESSION)
+        && (property == ids::loopEnabled || property == ids::loopStart || property == ids::loopEnd || property == ids::tempo
+            || property == ids::clickEnabled || property == ids::clickLevelDb))
+        applyTransportSettings();
+}
+
+void AppController::applyTransportSettings()
+{
+    if (session == nullptr)
+    {
+        engine.getTransport().setLoop (false, 0, 0);
+        engine.clickEnabled.store (false);
+        return;
+    }
+    const auto& s = session->getState();
+    engine.getTransport().setLoop (s.getProperty (ids::loopEnabled, false), (juce::int64) s.getProperty (ids::loopStart, 0),
+                                   (juce::int64) s.getProperty (ids::loopEnd, 0));
+    engine.clickEnabled.store (s.getProperty (ids::clickEnabled, false));
+    engine.clickLevelDb.store (s.getProperty (ids::clickLevelDb, -6.0));
+    engine.clickBpm.store (session->getTempo());
+    engine.clickBeatsPerBar.store (beatsPerBar);
+}
+
+void AppController::setLoop (bool enabled, juce::int64 start, juce::int64 end)
+{
+    if (session == nullptr)
+        return;
+    auto s = session->getState();
+    start = std::max<juce::int64> (0, start);
+    s.setProperty (ids::loopStart, start, nullptr);
+    s.setProperty (ids::loopEnd, std::max (start, end), nullptr);
+    s.setProperty (ids::loopEnabled, enabled && end > start, nullptr);
+}
+
+void AppController::setClick (bool enabled, double levelDb)
+{
+    if (session == nullptr)
+        return;
+    auto s = session->getState();
+    s.setProperty (ids::clickEnabled, enabled, nullptr);
+    s.setProperty (ids::clickLevelDb, std::isfinite (levelDb) ? juce::jlimit (-60.0, 0.0, levelDb) : -6.0, nullptr);
+}
+
+void AppController::setCountInBars (int bars)
+{
+    if (session != nullptr)
+        session->getState().setProperty (ids::countInBars, juce::jlimit (0, 8, bars), nullptr);
+}
+
+juce::int64 AppController::getCountInSamples() const
+{
+    if (session == nullptr)
+        return 0;
+    const int bars = juce::jlimit (0, 8, (int) session->getState().getProperty (ids::countInBars, 0));
+    // The same grid as the click (dsp::Metronome::beatStart), so the count-in ends on a beat.
+    const double rate = engine.getSampleRate() > 0.0 ? engine.getSampleRate() : session->getSampleRate();
+    const double samplesPerBeat = 60.0 * rate / juce::jlimit (20.0, 400.0, session->getTempo());
+    return (juce::int64) std::llround ((double) (bars * beatsPerBar) * samplesPerBeat);
+}
+
+juce::ValueTree AppController::addMarker (const juce::String& name, juce::int64 position)
+{
+    if (session == nullptr)
+        return {};
+    auto& um = session->getUndoManager();
+    um.beginNewTransaction ("Add Marker");
+    return session->addMarker (name, position, &um);
+}
+
+bool AppController::locateToMarker (int number)
+{
+    if (session == nullptr)
+        return false;
+    const auto m = session->getMarkerByNumber (number);
+    if (! m.isValid())
+        return false;
+    locate ((juce::int64) m[ids::start]);
+    return true;
 }
 
 void AppController::applyMasterSettings()
@@ -386,7 +466,7 @@ juce::Result AppController::transportRecord()
     int hardwareLatency = 0;
     if (auto* device = deviceManager.getCurrentAudioDevice())
         hardwareLatency = device->getInputLatencyInSamples() + device->getOutputLatencyInSamples();
-    return bridge->startRecording (hardwareLatency);
+    return bridge->startRecording (hardwareLatency, getCountInSamples());
 }
 
 void AppController::returnToZero()

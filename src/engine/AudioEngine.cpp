@@ -106,8 +106,12 @@ void AudioEngine::prepare (double sr, int blockSize)
     for (auto* v : { &faderGains, &muteGains, &totalGains, &sendGains, &panLeft, &panRight, &coefLeft, &coefRight, &busScratch })
         v->assign ((size_t) blockSize, 0.0);
     silence.assign ((size_t) blockSize, 0.0f);
+    clickScratch.assign ((size_t) blockSize, 0.0f);
     for (auto* v : { &delayedMain[0], &delayedMain[1], &delayedSend[0], &delayedSend[1] })
         v->assign ((size_t) blockSize, 0.0f);
+
+    metronome.prepare (sr);
+    appliedClick = metronome.getParams();
 
     masterBus.prepare (sr, blockSize);
     masterFader.reset (decibelsToGain (masterVolumeDb.load()));
@@ -178,21 +182,62 @@ void AudioEngine::renderBlock (const float* const* inputs, int numInputs,
     }
 
     // Devices may deliver blocks larger than they announced; render in chunks
-    // that fit the preallocated scratch.
+    // that fit the preallocated scratch. Chunks also end exactly where a
+    // count-in ends and where a loop wraps, so both are sample-accurate.
     for (int done = 0; done < numSamples;)
     {
-        const int chunk = juce::jmin (chunkLimit, numSamples - done);
-        processChunk (inputs, numInputs, outputs, numOutputs, done, chunk);
+        transport.applyPendingLocate();
+        const auto state = transport.getState();
+        const auto countIn = state != Transport::State::stopped ? transport.getCountInRemaining() : 0;
+        const bool looping = state == Transport::State::playing && countIn == 0 && transport.isLoopEnabled();
+        const auto loopEnd = transport.getLoopEnd();
+        const auto position = transport.getPosition();
+
+        int chunk = juce::jmin (chunkLimit, numSamples - done);
+        if (countIn > 0)
+            chunk = (int) std::min<juce::int64> (chunk, countIn);
+        else if (looping && position < loopEnd)
+            chunk = (int) std::min<juce::int64> (chunk, loopEnd - position);
+
+        processChunk (inputs, numInputs, outputs, numOutputs, done, chunk, state, countIn > 0);
+
+        if (countIn > 0)
+            transport.consumeCountIn (chunk);
+        else if (looping && position < loopEnd && position + chunk == loopEnd)
+            transport.wrapTo (transport.getLoopStart());
         done += chunk;
     }
 }
 
-void AudioEngine::processChunk (const float* const* inputs, int numInputs, float* const* outputs, int numOutputs,
-                                int offset, int numSamples) noexcept
+void AudioEngine::renderClick (int numSamples, juce::int64 gridPosition) noexcept
 {
-    transport.applyPendingLocate();
+    dsp::Metronome::Params p;
+    p.bpm = clickBpm.load (std::memory_order_relaxed);
+    p.beatsPerBar = clickBeatsPerBar.load (std::memory_order_relaxed);
+    p.levelDb = clickLevelDb.load (std::memory_order_relaxed);
+    if (! juce::exactlyEqual (p.bpm, appliedClick.bpm) || p.beatsPerBar != appliedClick.beatsPerBar
+        || ! juce::exactlyEqual (p.levelDb, appliedClick.levelDb))
+    {
+        metronome.setParams (p); // no allocation
+        appliedClick = p;
+    }
 
-    BlockContext ctx { inputs, numInputs, offset, numSamples, transport.getPosition(), transport.getState(), false };
+    juce::FloatVectorOperations::clear (clickScratch.data(), numSamples);
+    metronome.render (clickScratch.data(), numSamples, gridPosition);
+    for (auto& channel : masterOut)
+        for (int i = 0; i < numSamples; ++i)
+            channel[(size_t) i] += clickScratch[(size_t) i];
+}
+
+void AudioEngine::processChunk (const float* const* inputs, int numInputs, float* const* outputs, int numOutputs,
+                                int offset, int numSamples, Transport::State transportState, bool countingIn) noexcept
+{
+    // During a count-in the tracks behave as if stopped (no recording, no
+    // playback, input monitoring still on) and only the click sounds.
+    BlockContext ctx { inputs, numInputs, offset, numSamples, transport.getPosition(),
+                       countingIn ? Transport::State::stopped : transportState, false,
+                       transportState == Transport::State::playing && ! countingIn && transport.isLoopEnabled(),
+                       transport.getLoopStart(), transport.getLoopEnd() };
     const bool rolling = ctx.state != Transport::State::stopped;
 
     dsp::CompensatedChannel bus[2] = { { busSum[0].data(), busComp[0].data() },
@@ -233,6 +278,11 @@ void AudioEngine::processChunk (const float* const* inputs, int numInputs, float
         dsp::multiplyInPlace (masterOut[0].data(), masterFader.getCurrent(), numSamples);
         dsp::multiplyInPlace (masterOut[1].data(), masterFader.getCurrent(), numSamples);
     }
+
+    // The click: after the master fader, so it is never in a bounce's mix level
+    // and the fader does not change it. Count-in clicks run on their own grid.
+    if (countingIn || (rolling && clickEnabled.load (std::memory_order_relaxed)))
+        renderClick (numSamples, countingIn ? transport.getCountInLength() - transport.getCountInRemaining() : ctx.position);
 
     storeMax (masterPeakLeft, (float) dsp::peakMagnitude (masterOut[0].data(), numSamples));
     storeMax (masterPeakRight, (float) dsp::peakMagnitude (masterOut[1].data(), numSamples));
@@ -327,6 +377,16 @@ void AudioEngine::renderSegments (TrackRender& t, const BlockContext& ctx) noexc
     for (auto& seg : t.segments)
     {
         const auto segEnd = seg.start + seg.length;
+
+        // Loop playback: keep the audio just after the loop start loaded, so the
+        // wrap back to it never waits for the disk.
+        if (ctx.looping && ! offline)
+        {
+            const auto loopFrom = juce::jmax (ctx.loopStart, seg.start);
+            if (loopFrom < segEnd && loopFrom < ctx.loopEnd)
+                seg.stream->pin (seg.sourceOffset + (loopFrom - seg.start));
+        }
+
         if (segEnd <= pos)
             continue;
 

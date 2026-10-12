@@ -33,6 +33,7 @@ EditView::EditView (AppController& a) : app (a)
     addChildComponent (emptyHint);
 
     ruler.onLocate = [this] (juce::int64 sample) { app.locate (sample); };
+    ruler.undoManager = [this] { return app.getUndoManager(); };
 
     state.addChangeListener (this);
     app.addChangeListener (this);
@@ -61,6 +62,7 @@ void EditView::bindSession()
     if (tracksNode.isValid())
         tracksNode.addListener (this);
 
+    ruler.setSessionState (session != nullptr ? session->getState() : juce::ValueTree());
     state.sampleRate = session != nullptr ? session->getSampleRate() : 48000.0;
     state.tempo = session != nullptr ? session->getTempo() : timeformat::tempoBpm;
     state.clearSelection();
@@ -222,7 +224,7 @@ void EditView::resized()
 {
     auto area = getLocalBounds();
     toolbar.setBounds (area.removeFromTop (toolbarHeight));
-    ruler.setBounds (area.removeFromTop (TimelineRuler::rowHeight * 2));
+    ruler.setBounds (area.removeFromTop (TimelineRuler::rowHeight * TimelineRuler::numRows));
 
     auto bottom = area.removeFromBottom (scrollBarHeight);
     horizontalScroll.setBounds (bottom.withTrimmedLeft (trackHeaderWidth).withTrimmedRight (scrollBarHeight));

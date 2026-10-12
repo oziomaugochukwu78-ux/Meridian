@@ -1,5 +1,6 @@
 #include "TimelineRuler.h"
 
+#include "model/Session.h"
 #include "ui/Theme.h"
 
 namespace meridian
@@ -13,6 +14,76 @@ TimelineRuler::TimelineRuler (EditState& s) : state (s)
 TimelineRuler::~TimelineRuler()
 {
     state.removeChangeListener (this);
+    session.removeListener (this);
+}
+
+void TimelineRuler::setSessionState (juce::ValueTree s)
+{
+    session.removeListener (this);
+    session = std::move (s);
+    session.addListener (this); // the whole session: markers and loop settings live in it
+    repaint();
+}
+
+juce::ValueTree TimelineRuler::markerAt (int x) const
+{
+    for (const auto& m : session.getChildWithName (ids::MARKERS))
+    {
+        const auto mx = trackHeaderWidth + (int) state.sampleToX ((juce::int64) m[ids::start]);
+        const auto labelWidth = 14 + juce::GlyphArrangement::getStringWidthInt (theme::font (11.0f), m[ids::name].toString());
+        if (x >= mx - 4 && x <= mx + labelWidth)
+            return m;
+    }
+    return {};
+}
+
+void TimelineRuler::paintMarkers (juce::Graphics& g, juce::Rectangle<int> row)
+{
+    g.setFont (theme::font (11.0f));
+    for (const auto& m : session.getChildWithName (ids::MARKERS))
+    {
+        const auto x = (float) (row.getX() + state.sampleToX ((juce::int64) m[ids::start]));
+        juce::Path flag;
+        flag.addTriangle (x - 4.0f, (float) row.getY() + 4.0f, x + 4.0f, (float) row.getY() + 4.0f, x, (float) row.getBottom() - 4.0f);
+        g.setColour (theme::marker);
+        g.fillPath (flag);
+        g.drawVerticalLine ((int) x, (float) row.getBottom() - 4.0f, (float) row.getBottom());
+        g.setColour (theme::text);
+        g.drawText (m[ids::name].toString(), juce::Rectangle<float> (x + 7.0f, (float) row.getY(), 200.0f, (float) row.getHeight()),
+                    juce::Justification::centredLeft);
+    }
+}
+
+void TimelineRuler::showMarkerMenu (juce::ValueTree marker)
+{
+    juce::PopupMenu menu;
+    menu.addItem ("Rename Marker...", [this, marker]
+    {
+        auto* window = new juce::AlertWindow ("Rename Marker", {}, juce::MessageBoxIconType::NoIcon);
+        window->addTextEditor ("name", marker[ids::name].toString());
+        window->addButton ("Rename", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        window->enterModalState (true, juce::ModalCallbackFunction::create ([this, marker, window] (int result) mutable
+        {
+            const auto name = window->getTextEditorContents ("name").trim();
+            if (result == 1 && name.isNotEmpty())
+            {
+                auto* um = undoManager ? undoManager() : nullptr;
+                if (um != nullptr)
+                    um->beginNewTransaction ("Rename Marker");
+                marker.setProperty (ids::name, name, um);
+            }
+        }), true);
+    });
+    menu.addItem ("Delete Marker", [this, marker]
+    {
+        auto* um = undoManager ? undoManager() : nullptr;
+        if (um != nullptr)
+            um->beginNewTransaction ("Delete Marker");
+        auto parent = marker.getParent();
+        parent.removeChild (marker, um);
+    });
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this));
 }
 
 void TimelineRuler::setPlayheadPosition (juce::int64 sample)
@@ -35,6 +106,7 @@ void TimelineRuler::paint (juce::Graphics& g)
 
     g.setColour (theme::textDim);
     g.setFont (theme::font (11.0f, true));
+    g.drawText ("Markers", labels.removeFromTop (rowHeight).reduced (10, 0), juce::Justification::centredRight);
     g.drawText ("Bars|Beats", labels.removeFromTop (rowHeight).reduced (10, 0), juce::Justification::centredRight);
     g.drawText ("Min:Secs", labels.removeFromTop (rowHeight).reduced (10, 0), juce::Justification::centredRight);
 
@@ -49,11 +121,24 @@ void TimelineRuler::paint (juce::Graphics& g)
         g.fillRect (juce::Rectangle<float> (x1, 0.0f, x2 - x1, (float) getHeight()));
     }
 
+    // Loop range: a strip under the marker row, bright when loop playback is on.
+    if (const juce::int64 loopEnd = session.getProperty (ids::loopEnd, 0), loopStart = session.getProperty (ids::loopStart, 0);
+        loopEnd > loopStart)
+    {
+        const auto x1 = (float) (trackHeaderWidth + state.sampleToX (loopStart));
+        const auto x2 = (float) (trackHeaderWidth + state.sampleToX (loopEnd));
+        const bool on = session.getProperty (ids::loopEnabled, false);
+        g.setColour (theme::loop.withAlpha (on ? 0.9f : 0.3f));
+        g.fillRect (juce::Rectangle<float> (x1, (float) rowHeight - 4.0f, x2 - x1, 4.0f));
+    }
+
+    paintMarkers (g, area.removeFromTop (rowHeight));
     paintBarsBeats (g, area.removeFromTop (rowHeight));
     paintMinSecs (g, area.removeFromTop (rowHeight));
 
     g.setColour (theme::divider);
     g.drawHorizontalLine (rowHeight, (float) trackHeaderWidth, (float) getWidth());
+    g.drawHorizontalLine (rowHeight * 2, (float) trackHeaderWidth, (float) getWidth());
     g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
     g.drawVerticalLine (trackHeaderWidth - 1, 0.0f, (float) getHeight());
 
@@ -143,7 +228,21 @@ void TimelineRuler::locateFromMouse (const juce::MouseEvent& e)
     onLocate (state.snap (std::max<juce::int64> (0, state.xToSample (e.x - trackHeaderWidth))));
 }
 
-void TimelineRuler::mouseDown (const juce::MouseEvent& e) { locateFromMouse (e); }
+void TimelineRuler::mouseDown (const juce::MouseEvent& e)
+{
+    if (e.y < rowHeight)
+    {
+        if (const auto m = markerAt (e.x); m.isValid())
+        {
+            if (e.mods.isPopupMenu())
+                showMarkerMenu (m);
+            else if (onLocate)
+                onLocate ((juce::int64) m[ids::start]);
+            return;
+        }
+    }
+    locateFromMouse (e);
+}
 void TimelineRuler::mouseDrag (const juce::MouseEvent& e) { locateFromMouse (e); }
 
 } // namespace meridian

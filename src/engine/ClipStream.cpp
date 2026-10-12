@@ -12,6 +12,42 @@ ClipStream::ClipStream (std::unique_ptr<juce::AudioFormatReader> r, int framesPe
 {
     for (auto& h : halves)
         h.data.setSize (numChannels, halfSize);
+    pinned.data.setSize (numChannels, halfSize);
+}
+
+void ClipStream::pin (juce::int64 sourcePosition) noexcept
+{
+    if (length <= 0)
+        return;
+    const auto start = juce::jlimit<juce::int64> (0, length - 1, sourcePosition);
+    auto w = pinned.word.load (std::memory_order_acquire);
+    const auto state = stateOf (w);
+    if (state != HalfState::idle && cellOf (w) == start)
+        return; // already loaded or on its way
+    if (state == HalfState::filling)
+        return; // the disk thread owns it; asked again next block
+
+    const auto request = pack (HalfState::empty, start);
+    if (state == HalfState::ready)
+        pinned.word.store (request, std::memory_order_release); // only this thread moves it out of Ready
+    else
+        pinned.word.compare_exchange_strong (w, request, std::memory_order_acq_rel);
+}
+
+bool ClipStream::isPinnedReady (juce::int64 sourcePosition) const noexcept
+{
+    const auto w = pinned.word.load (std::memory_order_acquire);
+    return stateOf (w) == HalfState::ready && cellOf (w) == juce::jlimit<juce::int64> (0, juce::jmax<juce::int64> (0, length - 1), sourcePosition);
+}
+
+void ClipStream::fill (juce::AudioFormatReader& source, Half& h, juce::int64 startFrame, juce::int64 fileLength,
+                       int channels, int size)
+{
+    const int frames = (int) juce::jlimit<juce::int64> (0, size, fileLength - startFrame);
+    if (frames > 0)
+        source.read (h.data.getArrayOfWritePointers(), channels, startFrame, frames);
+    if (frames < size)
+        h.data.clear (frames, size - frames);
 }
 
 int ClipStream::findReadyHalf (juce::int64 cell) const noexcept
@@ -81,7 +117,7 @@ bool ClipStream::read (juce::int64 sourcePosition, float* const* dest, int numDe
     {
         const juce::int64 frame = sourcePosition + done;
         int count = numFrames - done;
-        int half = -1;
+        const juce::AudioBuffer<float>* source = nullptr;
         int offsetInCell = 0;
 
         if (frame >= 0 && frame < length)
@@ -89,23 +125,40 @@ bool ClipStream::read (juce::int64 sourcePosition, float* const* dest, int numDe
             const juce::int64 cell = frame / halfSize;
             offsetInCell = (int) (frame - cell * halfSize);
             count = (int) std::min<juce::int64> ({ count, halfSize - offsetInCell, length - frame });
-            half = findReadyHalf (cell);
-            if (half < 0)
-                complete = false;
+            if (const int half = findReadyHalf (cell); half >= 0)
+            {
+                source = &halves[half].data;
+            }
+            else
+            {
+                // Not streamed yet (just after a loop wrap): the pinned buffer may have it.
+                const auto pw = pinned.word.load (std::memory_order_acquire);
+                const auto pinStart = cellOf (pw);
+                if (stateOf (pw) == HalfState::ready && frame >= pinStart && frame < pinStart + halfSize)
+                {
+                    source = &pinned.data;
+                    offsetInCell = (int) (frame - pinStart);
+                    count = (int) std::min<juce::int64> (count, pinStart + halfSize - frame);
+                }
+                else
+                {
+                    complete = false;
+                }
+            }
         }
         else if (frame < 0)
         {
             count = (int) std::min<juce::int64> (count, -frame);
         }
 
-        if (half < 0)
+        if (source == nullptr)
         {
             for (int ch = 0; ch < numDestChannels; ++ch)
                 juce::FloatVectorOperations::clear (dest[ch] + done, count);
         }
         else
         {
-            const auto& data = halves[half].data;
+            const auto& data = *source;
             const float* left = data.getReadPointer (0, offsetInCell);
             const float* right = numChannels > 1 ? data.getReadPointer (1, offsetInCell) : left;
 
@@ -167,16 +220,22 @@ bool ClipStream::service()
         if (! h.word.compare_exchange_strong (w, pack (HalfState::filling, cell), std::memory_order_acq_rel))
             continue;
 
-        const juce::int64 start = cell * halfSize;
-        const int frames = (int) juce::jlimit<juce::int64> (0, halfSize, length - start);
-
-        if (frames > 0)
-            reader->read (h.data.getArrayOfWritePointers(), numChannels, start, frames);
-        if (frames < halfSize)
-            h.data.clear (frames, halfSize - frames);
-
+        fill (*reader, h, cell * halfSize, length, numChannels, halfSize);
         h.word.store (pack (HalfState::ready, cell), std::memory_order_release);
         didWork = true;
+    }
+
+    // The pinned loop-start buffer: its word holds a start frame, not a cell.
+    auto pw = pinned.word.load (std::memory_order_acquire);
+    if (stateOf (pw) == HalfState::empty)
+    {
+        const auto start = cellOf (pw);
+        if (pinned.word.compare_exchange_strong (pw, pack (HalfState::filling, start), std::memory_order_acq_rel))
+        {
+            fill (*reader, pinned, start, length, numChannels, halfSize);
+            pinned.word.store (pack (HalfState::ready, start), std::memory_order_release);
+            didWork = true;
+        }
     }
 
     return didWork;

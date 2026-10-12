@@ -33,6 +33,8 @@ inline const juce::Colour bypass      { 0xff3d6aa6 };
 inline const juce::Colour playhead    { 0xffe8e8e8 };
 inline const juce::Colour selection   { 0x553a7bd5 };
 inline const juce::Colour selectionEdge { 0xff5b9cf0 };
+inline const juce::Colour marker      { 0xffe0b84a };
+inline const juce::Colour loop        { 0xff4fbf6a };
 inline const juce::Colour clipBody    { 0xff2b3a4f };
 inline const juce::Colour waveform    { 0xffc9d3e0 };
 

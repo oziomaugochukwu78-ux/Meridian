@@ -55,11 +55,11 @@ What a home producer, songwriter or podcaster needs.
 **Editing and workflow**
 - clip gain line and handles
 - track reorder and duplicate
-- markers, loop playback, and a punch-in/punch-out window
+- done: markers, loop playback; still to do: a punch-in/punch-out window
 - playlists with comping
 - bars|beats grid and ruler
 - tempo and meter map
-- a click track with a count-in
+- done: click with a count-in
 
 **MIDI and instruments**
 - VST3 instrument hosting and MIDI input recording

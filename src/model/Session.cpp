@@ -301,6 +301,51 @@ double Session::getTempo() const
     return std::isfinite (bpm) ? juce::jlimit (20.0, 999.0, bpm) : 120.0;
 }
 
+juce::Array<juce::ValueTree> Session::getMarkers() const
+{
+    juce::Array<juce::ValueTree> result;
+    for (const auto& m : state.getChildWithName (ids::MARKERS))
+        if (m.hasType (ids::MARKER))
+            result.add (m);
+    std::stable_sort (result.begin(), result.end(), [] (const juce::ValueTree& a, const juce::ValueTree& b)
+    {
+        return (juce::int64) a[ids::start] < (juce::int64) b[ids::start];
+    });
+    return result;
+}
+
+juce::ValueTree Session::getMarkerByNumber (int number) const
+{
+    return state.getChildWithName (ids::MARKERS).getChildWithProperty (ids::number, number);
+}
+
+juce::ValueTree Session::addMarker (const juce::String& name, juce::int64 position, juce::UndoManager* um)
+{
+    auto markers = state.getChildWithName (ids::MARKERS);
+    if (! markers.isValid())
+    {
+        markers = juce::ValueTree (ids::MARKERS);
+        state.appendChild (markers, um);
+    }
+
+    int number = 1;
+    while (markers.getChildWithProperty (ids::number, number).isValid())
+        ++number;
+
+    juce::ValueTree m (ids::MARKER);
+    m.setProperty (ids::number, number, nullptr);
+    m.setProperty (ids::name, name.trim().isNotEmpty() ? name.trim() : "Marker " + juce::String (number), nullptr);
+    m.setProperty (ids::start, std::max<juce::int64> (0, position), nullptr);
+    markers.appendChild (m, um);
+    return m;
+}
+
+void Session::removeMarker (const juce::ValueTree& marker, juce::UndoManager* um)
+{
+    auto markers = state.getChildWithName (ids::MARKERS);
+    markers.removeChild (marker, um);
+}
+
 void Session::removeTrack (const juce::ValueTree& t, juce::UndoManager* um)
 {
     getTracksNode().removeChild (t, um);

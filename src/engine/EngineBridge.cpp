@@ -835,7 +835,7 @@ void EngineBridge::setDiskCacheFrames (int frames)
 //==============================================================================
 // Recording
 
-juce::Result EngineBridge::startRecording (int hardwareLatency)
+juce::Result EngineBridge::startRecording (int hardwareLatency, juce::int64 countInSamples)
 {
     if (session == nullptr)
         return juce::Result::fail ("No session is open.");
@@ -898,7 +898,7 @@ juce::Result EngineBridge::startRecording (int hardwareLatency)
 
     activeTakes = std::move (takes);
     rebuildNow();
-    engine.getTransport().play (Transport::State::recording);
+    engine.getTransport().play (Transport::State::recording, countInSamples);
     return juce::Result::ok();
 }
 
