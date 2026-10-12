@@ -10,12 +10,15 @@ add_executable(meridian_core_tests
     dsp/PanLawTests.cpp
     dsp/SaturationCurveTests.cpp
     dsp/SignalAnalysisTests.cpp
+    midi/NoteSequenceTests.cpp
+    midi/TempoMapTests.cpp
     remote/CommandDispatcherTests.cpp
     remote/CommandParserTests.cpp
     remote/FuzzTests.cpp
     remote/HandshakeTests.cpp
     remote/HashingTests.cpp
     remote/WebSocketReaderTests.cpp
+    synth/PolySynthTests.cpp
 )
 
 target_link_libraries(meridian_core_tests PRIVATE Meridian::core Catch2::Catch2WithMain)

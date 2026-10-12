@@ -9,6 +9,7 @@ add_library(meridian_core STATIC
     dsp/DcBlocker.h
     dsp/DelayLine.h
     dsp/FaderTaper.cpp
+    dsp/FloatCompare.h
     dsp/FaderTaper.h
     dsp/LinearRamp.h
     dsp/MeterScale.h
@@ -21,13 +22,20 @@ add_library(meridian_core STATIC
     dsp/SignalAnalysis.h
     dsp/SimdConfig.h
 
+    midi/NoteSequence.cpp
+    midi/NoteSequence.h
+    midi/TempoMap.cpp
+    midi/TempoMap.h
+
+    synth/PolySynth.cpp
+    synth/PolySynth.h
+
     remote/Base64.cpp
     remote/Base64.h
     remote/CommandDispatcher.cpp
     remote/CommandDispatcher.h
     remote/CommandParser.cpp
     remote/CommandParser.h
-    dsp/FloatCompare.h
     remote/JsonLimits.cpp
     remote/JsonLimits.h
     remote/JsonWriter.h
