@@ -60,6 +60,7 @@ void AudioEngine::deleteAllGraphs()
 void AudioEngine::publishGraph (std::unique_ptr<RenderGraph> graph)
 {
     JUCE_ASSERT_MESSAGE_THREAD
+    graphLatency.store (graph != nullptr ? graph->compensatedLatency : 0);
     // If the audio thread never picked up the previous pending graph, it is
     // ours again and can be deleted right here.
     delete pendingGraph.exchange (graph.release(), std::memory_order_acq_rel);
@@ -104,6 +105,8 @@ void AudioEngine::prepare (double sr, int blockSize)
     for (auto* v : { &faderGains, &muteGains, &totalGains, &sendGains, &panLeft, &panRight, &coefLeft, &coefRight, &busScratch })
         v->assign ((size_t) blockSize, 0.0);
     silence.assign ((size_t) blockSize, 0.0f);
+    for (auto* v : { &delayedMain[0], &delayedMain[1], &delayedSend[0], &delayedSend[1] })
+        v->assign ((size_t) blockSize, 0.0f);
 
     masterBus.prepare (sr, blockSize);
     masterFader.reset (decibelsToGain (masterVolumeDb.load()));
@@ -418,8 +421,29 @@ void AudioEngine::mixTrackIntoBus (TrackRender& t, const BlockContext& ctx) noex
         s.faderRamp.setTarget (faderTarget, rampLength (faderRampSeconds, sr));
     }
 
-    const float* left = t.buffer.getReadPointer (0);
-    const float* right = t.numChannels > 1 ? t.buffer.getReadPointer (1) : left;
+    // The signal after the inserts; sends tap it before the output's compensation delay.
+    const float* sourceLeft = t.buffer.getReadPointer (0);
+    const float* sourceRight = t.numChannels > 1 ? t.buffer.getReadPointer (1) : sourceLeft;
+
+    // Plug-in delay compensation: hold this path back so it lines up with the
+    // slowest path into the same bus. Runs every block, even when muted, so the
+    // delay line always holds current audio.
+    auto compensate = [&] (const PathDelay& delay, std::vector<float>* scratch, const float*& l, const float*& r)
+    {
+        l = sourceLeft;
+        r = sourceRight;
+        if (delay.line == nullptr || delay.samples <= 0)
+            return;
+        const float* in[2] = { sourceLeft, sourceRight };
+        float* out[2] = { scratch[0].data(), scratch[1].data() };
+        delay.line->process (in, out, t.numChannels, n, delay.samples);
+        l = out[0];
+        r = t.numChannels > 1 ? out[1] : out[0];
+    };
+
+    const float* left = nullptr;
+    const float* right = nullptr;
+    compensate (t.outputCompensation, delayedMain, left, right);
 
     // Destination: the master bus, or the input of the aux this track is routed to.
     dsp::CompensatedChannel bus[2] = { { busSum[0].data(), busComp[0].data() },
@@ -517,9 +541,13 @@ void AudioEngine::mixTrackIntoBus (TrackRender& t, const BlockContext& ctx) noex
         dsp::multiplyInPlace (coefLeft.data(), panLeft.data(), n);
         dsp::multiplyInPlace (coefRight.data(), panRight.data(), n);
 
+        const float* sendLeft = nullptr;
+        const float* sendRight = nullptr;
+        compensate (send.compensation, delayedSend, sendLeft, sendRight);
+
         auto& target = activeGraph->buses[(size_t) send.targetBus];
-        dsp::accumulateScaled (left, coefLeft.data(), { target.sum[0].data(), target.comp[0].data() }, n);
-        dsp::accumulateScaled (right, coefRight.data(), { target.sum[1].data(), target.comp[1].data() }, n);
+        dsp::accumulateScaled (sendLeft, coefLeft.data(), { target.sum[0].data(), target.comp[0].data() }, n);
+        dsp::accumulateScaled (sendRight, coefRight.data(), { target.sum[1].data(), target.comp[1].data() }, n);
     }
 }
 

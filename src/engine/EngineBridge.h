@@ -31,7 +31,8 @@ namespace meridian
 class EngineBridge final : public AudioEngine::Listener,
                            private juce::ValueTree::Listener,
                            private juce::AsyncUpdater,
-                           private juce::Timer
+                           private juce::Timer,
+                           private juce::AudioProcessorListener
 {
 public:
     EngineBridge (AudioEngine&, DiskStreamer&, juce::AudioFormatManager&, PluginHost&);
@@ -55,9 +56,16 @@ public:
     void storePluginStates();
 
     // Recording --------------------------------------------------------------------
-    juce::Result startRecording();
+    /** hardwareLatency: the device's input + output latency in samples, used
+        (with the engine's own latency) to place takes where they were played. */
+    juce::Result startRecording (int hardwareLatency);
     void stopRecording();
     bool isRecording() const noexcept { return ! activeTakes.empty(); }
+    juce::int64 getLastRecordingCompensation() const noexcept { return lastRecordingCompensation; }
+
+    // Plug-in delay compensation --------------------------------------------------------
+    void setDelayCompensationEnabled (bool enabled);
+    bool isDelayCompensationEnabled() const noexcept { return delayCompensationEnabled; }
 
     // Disk cache: frames per stream half (read-ahead window).
     void setDiskCacheFrames (int frames);
@@ -93,6 +101,17 @@ private:
 
     void handleAsyncUpdate() override;
     void timerCallback() override;
+
+    // AudioProcessorListener (any thread): a plug-in changed its latency.
+    void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override {}
+    void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails& details) override
+    {
+        if (details.latencyChanged)
+            triggerAsyncUpdate();
+    }
+
+    void assignDelayCompensation (RenderGraph&, bool sharedDelayLines);
+    PathDelay delayFor (int trackId, int path, int samples, bool shared);
 
     void rebuildGraph();
     std::unique_ptr<RenderGraph> buildGraph (double sampleRate, int maxBlockSize, bool sharedStreams,
@@ -133,6 +152,12 @@ private:
     std::pair<int, int> preparedKey { -1, -1 };
     int diskCacheFrames = 32768;
     bool liveSuspended = false;
+    bool delayCompensationEnabled = true;
+    juce::int64 lastRecordingCompensation = 0;
+
+    /** Compensation delay lines by (track id, path), where path is -1 for the
+        track's output and the slot number for a send. Kept across rebuilds. */
+    std::map<std::pair<int, int>, std::shared_ptr<dsp::DelayLine>> delayLines;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EngineBridge)
 };

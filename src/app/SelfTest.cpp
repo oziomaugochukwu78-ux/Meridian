@@ -553,6 +553,7 @@ void SelfTest::testPluginHosting()
         return;
 
     const auto description = *found[0];
+    testPlugin = std::make_unique<juce::PluginDescription> (description);
     const auto tone = media.getChildFile ("tone1k_mono.wav");
     const auto end = clipStart + (juce::int64) (2.0 * sampleRate) + 4800;
     const double dry = toneDb + panCentreDb;
@@ -770,9 +771,16 @@ void SelfTest::timerCallback()
                 const auto& last = app.getLastBounce();
                 expect ("remote BOUNCE finished and wrote a file", last.ok && last.file.existsAsFile(),
                         last.ok ? last.file.getFullPathName() : last.error);
-                startLivePlayback();
                 ticks = 0;
-                phase = 2;
+                if (setUpDelayCompensationTest())
+                {
+                    phase = 7;
+                }
+                else
+                {
+                    startLivePlayback();
+                    phase = 2;
+                }
             }
             else if (ticks > 600)
             {
@@ -828,6 +836,16 @@ void SelfTest::timerCallback()
             }
             break;
 
+        case 7: // plug-in latency reaches the host asynchronously in VST3; give it a moment
+            if (ticks >= 5)
+            {
+                checkDelayCompensation();
+                startLivePlayback();
+                ticks = 0;
+                phase = 2;
+            }
+            break;
+
         case 4: // let waveforms load, then screenshots
             if (ticks >= 20)
             {
@@ -840,6 +858,97 @@ void SelfTest::timerCallback()
         default:
             break;
     }
+}
+
+//==============================================================================
+// Plug-in delay compensation (timed: VST3 reports latency changes asynchronously)
+
+bool SelfTest::setUpDelayCompensationTest()
+{
+    beginGroup ("Plug-in delay compensation");
+    if (testPlugin == nullptr)
+    {
+        expect ("test plug-in available for latency tests", false, "not found");
+        return false;
+    }
+
+    auto* session = app.getSession();
+    const auto tone = media.getChildFile ("tone1k_mono.wav");
+    clearTracks();
+
+    // A latent plug-in: 0 dB gain, 1000 samples of latency (about 21 ms).
+    auto addLatentPlugin = [this] (juce::ValueTree t)
+    {
+        juce::String error;
+        app.getBridge().insertPlugin (t, 0, *testPlugin, error);
+        if (auto slot = app.getBridge().getInsert (track::id (t), 0); slot != nullptr && slot->plugin != nullptr)
+        {
+            slot->plugin->getParameters()[0]->setValueNotifyingHost (0.5f);              // gain 0 dB
+            slot->plugin->getParameters()[1]->setValueNotifyingHost (1000.0f / 8192.0f); // latency 1000
+        }
+    };
+
+    pdcLatentTrack = addToneTrack ("Latent", 1, tone, clipStart);
+    addLatentPlugin (pdcLatentTrack);
+    pdcDryTrack = addToneTrack ("Dry", 1, tone, clipStart);
+
+    auto sendSource = addToneTrack ("Send Source", 1, tone, clipStart);
+    auto bus = session->addTrack ("Latent Bus", 2, nullptr, Session::TrackKind::aux);
+    addLatentPlugin (bus);
+    routing::setSend (*session, sendSource, 0, track::id (bus), nullptr);
+    sendSource.setProperty (ids::mute, true, nullptr); // the bus scenario runs second
+    return true;
+}
+
+void SelfTest::checkDelayCompensation()
+{
+    beginGroup ("Plug-in delay compensation");
+    auto* session = app.getSession();
+    const auto end = clipStart + (juce::int64) (2.0 * sampleRate) + 4800;
+    const double dry = toneDb + panCentreDb;
+
+    const auto slot = app.getBridge().getInsert (track::id (pdcLatentTrack), 0);
+    expect ("plug-in reports its latency to the host (1000 samples)",
+            slot != nullptr && slot->plugin != nullptr && slot->plugin->getLatencySamples() == 1000,
+            slot != nullptr && slot->plugin != nullptr ? juce::String (slot->plugin->getLatencySamples()) : juce::String ("no plug-in"));
+    expect ("live engine picked up the new latency (1000 samples)", app.getEngine().getPluginLatencySamples() == 1000,
+            juce::String (app.getEngine().getPluginLatencySamples()) + " samples");
+
+    auto r = bounce ("pdc_on", 0, end);
+    expectNear ("latent and dry copies of a tone sum perfectly (+6.02 dB)", db (r.left.peak), dry + 6.0206, 0.02, "dB");
+
+    pdcDryTrack.setProperty (ids::mute, true, nullptr);
+    r = bounce ("pdc_alignment", 0, end);
+    {
+        const auto audio = readAudio (r.file);
+        int onset = -1;
+        for (int i = 0; i < audio.getNumSamples() && onset < 0; ++i)
+            if (std::abs (audio.getSample (0, i)) > 1.0e-4f)
+                onset = i;
+        expect ("latent track is still placed exactly on the timeline", onset >= (int) clipStart && onset <= (int) clipStart + 1,
+                "first sound at sample " + juce::String (onset) + ", clip starts at " + juce::String (clipStart));
+    }
+    pdcDryTrack.setProperty (ids::mute, false, nullptr);
+
+    app.getBridge().setDelayCompensationEnabled (false);
+    r = bounce ("pdc_off", 0, end);
+    expectNear ("with compensation OFF the paths are 1000 samples apart and partly cancel (proves the test can fail)",
+                db (r.left.peak), dry + db (std::sqrt (3.0)), 0.1, "dB");
+    app.getBridge().setDelayCompensationEnabled (true);
+
+    // Latency on a bus: the dry path into the master must wait for the bus.
+    pdcLatentTrack.setProperty (ids::mute, true, nullptr);
+    pdcDryTrack.setProperty (ids::mute, true, nullptr);
+    auto sendSource = session->getTracksNode().getChildWithProperty (ids::name, "Send Source");
+    auto bus = session->getTracksNode().getChildWithProperty (ids::name, "Latent Bus");
+    sendSource.setProperty (ids::mute, false, nullptr);
+    r = bounce ("pdc_bus", 0, end);
+    expectNear ("a send through a latent bus stays aligned with the direct sound", db (r.left.peak), dry + 6.0206, 0.02, "dB");
+
+    app.getBridge().setPluginBypassed (bus, 0, true);
+    r = bounce ("pdc_bus_bypassed", 0, end);
+    expectNear ("bypassing the latent plug-in re-aligns automatically", db (r.left.peak), dry + 6.0206, 0.02, "dB");
+    clearTracks();
 }
 
 void SelfTest::buildShowcaseSession()
@@ -955,8 +1064,11 @@ void SelfTest::finishRecordingTest()
     auto c = clipsNode.getChild (0);
     const auto file = app.getSession()->resolveStoredPath (c[ids::file].toString());
     expectNear ("take length matches the recording time", (double) clip::length (c) / sampleRate, 1.2, 0.3, "s");
-    expect ("take starts where recording started", clip::start (c) == recordStartPosition,
-            "clip at " + juce::String (clip::start (c)) + ", recording started at " + juce::String (recordStartPosition));
+    const auto compensation = app.getBridge().getLastRecordingCompensation();
+    expect ("take is moved earlier by the round-trip latency (device in + out + engine)",
+            clip::start (c) - clip::offset (c) == recordStartPosition - compensation,
+            "clip at " + juce::String (clip::start (c)) + " (offset " + juce::String (clip::offset (c)) + "), recording started at "
+                + juce::String (recordStartPosition) + ", compensation " + juce::String (compensation) + " samples");
     expect ("take is stored in the session's Audio Files folder", file.isAChildOf (app.getSession()->getAudioFolder()),
             file.getFileName());
 

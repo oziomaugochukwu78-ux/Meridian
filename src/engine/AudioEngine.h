@@ -76,6 +76,11 @@ public:
     /** True while a published graph has not yet been picked up by the audio thread. */
     bool hasPendingGraph() const noexcept { return pendingGraph.load() != nullptr; }
 
+    /** Total delay from timeline to output, in samples: compensated plug-in
+        latency of the newest graph plus the master console's oversampling. */
+    int getTotalLatencySamples() const noexcept { return graphLatency.load() + masterBus.getLatencySamples(); }
+    int getPluginLatencySamples() const noexcept { return graphLatency.load(); }
+
     //==============================================================================
     // Offline rendering (bounce). An engine used this way is never attached to a
     // device; one thread calls prepare() and then renderOffline() repeatedly.
@@ -131,12 +136,14 @@ private:
     std::atomic<double> sampleRate { 48000.0 };
     std::atomic<int> maxBlockSize { 0 };
     std::atomic<bool> deviceRunning { false };
+    std::atomic<int> graphLatency { 0 };
     bool offline = false;
 
     // Audio-thread scratch, sized in audioDeviceAboutToStart.
     std::vector<double> busSum[2], busComp[2], masterOut[2];
     std::vector<double> faderGains, muteGains, totalGains, sendGains, panLeft, panRight, coefLeft, coefRight, busScratch;
     std::vector<float> silence;
+    std::vector<float> delayedMain[2], delayedSend[2];   // plug-in delay compensation output
     dsp::LinearRamp masterFader;
 
     std::atomic<float> masterPeakLeft { 0.0f }, masterPeakRight { 0.0f };

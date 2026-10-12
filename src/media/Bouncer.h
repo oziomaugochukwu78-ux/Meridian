@@ -34,10 +34,10 @@ struct BounceResult
 /** Renders [start, end) through `offlineEngine`, which must already be
     prepared, in offline mode, and hold the session's graph.
 
-    The master bus has a fixed latency (the console's oversampling filters);
-    the render runs that much longer and drops the head, so the file is
-    sample-aligned with the timeline. Blocking; `progress` may return false
-    to cancel. */
+    The output is late by the compensated plug-in latency plus the console's
+    oversampling filters; the render runs that much longer and drops the
+    head, so the file is sample-aligned with the timeline. Blocking;
+    `progress` may return false to cancel. */
 BounceResult renderBounce (AudioEngine& offlineEngine, const BounceRequest&, const std::function<bool (double)>& progress);
 
 } // namespace meridian

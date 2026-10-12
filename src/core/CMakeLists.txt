@@ -7,6 +7,7 @@ add_library(meridian_core STATIC
     dsp/AutomationCurve.cpp
     dsp/AutomationCurve.h
     dsp/DcBlocker.h
+    dsp/DelayLine.h
     dsp/FaderTaper.cpp
     dsp/FaderTaper.h
     dsp/LinearRamp.h

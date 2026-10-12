@@ -59,6 +59,8 @@ private:
     void testRemoteCommands();
 
     // Phase 2
+    bool setUpDelayCompensationTest();
+    void checkDelayCompensation();
     void buildShowcaseSession();
     void startLivePlayback();
     void finishLivePlayback();
@@ -97,6 +99,8 @@ private:
     juce::ValueTree recordTrack;
     juce::int64 recordStartPosition = 0;
     juce::File recordingToDelete;
+    std::unique_ptr<juce::PluginDescription> testPlugin; // found by testPluginHosting()
+    juce::ValueTree pdcLatentTrack, pdcDryTrack;
     juce::int64 livePositionAtStart = 0;
     double sampleRate = 48000.0;
 };

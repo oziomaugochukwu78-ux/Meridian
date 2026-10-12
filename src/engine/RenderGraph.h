@@ -4,6 +4,7 @@
 #include "TrackRealtimeState.h"
 
 #include <dsp/AutomationCurve.h>
+#include <dsp/DelayLine.h>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -21,6 +22,13 @@ struct InsertSlot
     std::unique_ptr<juce::AudioPluginInstance> plugin;
     juce::PluginDescription description;
     std::atomic<bool> bypassed { false };
+    juce::AudioProcessorListener* latencyListener = nullptr; // told when the plug-in's latency changes
+
+    ~InsertSlot()
+    {
+        if (plugin != nullptr && latencyListener != nullptr)
+            plugin->removeListener (latencyListener);
+    }
 };
 
 /** A take being recorded on one track. The ThreadedWriter's FIFO makes
@@ -37,6 +45,11 @@ struct RecordTake
     std::atomic<juce::int64> startSample { -1 };   ///< timeline position of the first recorded sample
     std::atomic<juce::int64> samplesWritten { 0 };
     std::atomic<bool> overflowed { false };        ///< the disk could not keep up; samples were lost
+
+    /** Round-trip delay (device input + output + engine latency) between the
+        performer hearing a timeline position and their sound reaching us.
+        The finished take is moved earlier by this much. */
+    juce::int64 latencyCompensation = 0;
 };
 
 /** The audible part of one clip. Overlapping clips are resolved when the graph
@@ -57,10 +70,21 @@ struct ClipSegment
     std::shared_ptr<ClipStream> stream;
 };
 
+/** A plug-in delay compensation delay for one signal path. The DelayLine
+    object outlives graph rebuilds (it is kept by EngineBridge), so editing
+    during playback never empties it; `samples` is this graph's amount. */
+struct PathDelay
+{
+    std::shared_ptr<dsp::DelayLine> line;
+    int samples = 0;
+};
+
 struct SendRender
 {
     std::shared_ptr<SendRealtimeState> state;
     int targetBus = -1;                            ///< index into RenderGraph::buses
+    int slot = 0;                                  ///< A..E as 0..4
+    PathDelay compensation;
 };
 
 /** The input of an aux track: a stereo compensated (double-double) sum,
@@ -80,6 +104,7 @@ struct TrackRender
     bool isAux = false;
     int ownBus = -1;                               ///< aux tracks: the BusInput they read
     int outputBus = -1;                            ///< -1 = master, else a BusInput index
+    PathDelay outputCompensation;                  ///< aligns this track's output with the slowest path into the same bus
     std::vector<SendRender> sends;
     /** Aux tracks: every track that feeds this bus (directly or through other
         buses). If one of them is soloed, the aux stays audible ("implicit solo"). */
@@ -108,6 +133,10 @@ struct RenderGraph
     std::vector<BusInput> buses;
     int maxBlockSize = 0;
     double sampleRate = 0.0;
+
+    /** Plug-in latency of the slowest path to the master bus, after
+        compensation: everything reaches the master this much late. */
+    int compensatedLatency = 0;
 };
 
 } // namespace meridian

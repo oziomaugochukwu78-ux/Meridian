@@ -24,7 +24,7 @@ BounceResult renderBounce (AudioEngine& engine, const BounceRequest& request, co
         return result;
 
     const int blockSize = juce::jmax (1, engine.getMaxBlockSize());
-    const int latency = engine.getMasterBus().getLatencySamples();
+    const int latency = engine.getTotalLatencySamples(); // compensated plug-in latency + console
 
     auto& transport = engine.getTransport();
     transport.locate (request.start);

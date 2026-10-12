@@ -51,6 +51,16 @@ EngineBridge::EngineBridge (AudioEngine& e, DiskStreamer& d, juce::AudioFormatMa
 EngineBridge::~EngineBridge()
 {
     engine.setListener (nullptr);
+    {
+        // Instances may outlive this object inside retired graphs: stop them calling us.
+        const juce::ScopedLock sl (pluginLock);
+        for (auto& [key, slot] : insertSlots)
+            if (slot->plugin != nullptr)
+            {
+                slot->plugin->removeListener (this);
+                slot->latencyListener = nullptr;
+            }
+    }
     attachSession (nullptr);
     stopTimer();
     for (auto& take : takesToFinalise)
@@ -151,6 +161,8 @@ void EngineBridge::removeTrackResources (int trackId)
     trackStates.erase (trackId);
     for (auto it = sendStates.begin(); it != sendStates.end();)
         it = it->first.first == trackId ? sendStates.erase (it) : std::next (it);
+    for (auto it = delayLines.begin(); it != delayLines.end();)
+        it = it->first.first == trackId ? delayLines.erase (it) : std::next (it);
 
     const juce::ScopedLock sl (pluginLock);
     for (auto it = insertSlots.begin(); it != insertSlots.end();)
@@ -216,6 +228,8 @@ void EngineBridge::instantiateInsert (const juce::ValueTree& node)
         if (stateData.fromBase64Encoding (node[ids::state].toString()) && stateData.getSize() > 0)
             instance->setStateInformation (stateData.getData(), (int) stateData.getSize());
         slot->plugin = std::move (instance);
+        slot->plugin->addListener (this); // latency changes re-run delay compensation
+        slot->latencyListener = this;
     }
 
     insertSlots[{ trackId, slotIndex }] = std::move (slot);
@@ -355,8 +369,11 @@ void EngineBridge::valueTreePropertyChanged (juce::ValueTree& tree, const juce::
     if (tree.hasType (ids::INSERT))
     {
         if (property == ids::bypass)
+        {
             if (auto slot = getInsert (trackIdOfInsert (tree), tree[ids::slot]))
                 slot->bypassed.store ((bool) tree[ids::bypass]);
+            triggerAsyncUpdate(); // a bypassed plug-in adds no latency: recompensate
+        }
         return;
     }
 
@@ -594,7 +611,7 @@ std::unique_ptr<RenderGraph> EngineBridge::buildGraph (double sampleRate, int ma
 
             for (const auto& s : track::sends (t))
                 if (const int bus = busFor (t, send::target (s)); bus >= 0)
-                    render.sends.push_back ({ ensureSendState (s), bus });
+                    render.sends.push_back ({ ensureSendState (s), bus, send::slot (s), {} });
 
             if (render.isAux)
                 for (const auto& other : order)
@@ -628,7 +645,77 @@ std::unique_ptr<RenderGraph> EngineBridge::buildGraph (double sampleRate, int ma
         }
     }
 
+    assignDelayCompensation (*graph, sharedStreams);
     return graph;
+}
+
+PathDelay EngineBridge::delayFor (int trackId, int path, int samples, bool shared)
+{
+    if (samples <= 0)
+        return {};
+
+    // Offline renders get their own lines so they never share history with live playback.
+    if (! shared)
+        return { std::make_shared<dsp::DelayLine> (samples), samples };
+
+    auto& line = delayLines[{ trackId, path }];
+    if (line == nullptr || line->getMaximumDelay() < samples)
+        line = std::make_shared<dsp::DelayLine> (juce::jmax (samples * 2, 4096)); // headroom: latency changes rarely reallocate
+    return { line, samples };
+}
+
+void EngineBridge::assignDelayCompensation (RenderGraph& graph, bool sharedDelayLines)
+{
+    graph.compensatedLatency = 0;
+    if (! delayCompensationEnabled)
+        return;
+
+    // Latency arriving at each summing point. The graph is in render order, so
+    // every contribution to a bus is seen before the bus itself.
+    std::vector<int> busInputLatency (graph.buses.size(), 0);
+    struct Path { TrackRender* track; SendRender* send; int destination; int arrival; };
+    std::vector<Path> paths;
+
+    for (auto& t : graph.tracks)
+    {
+        int pluginLatency = 0;
+        for (const auto& slot : t.inserts)
+            if (! slot->bypassed.load())
+                pluginLatency += juce::jmax (0, slot->plugin->getLatencySamples());
+
+        const int arrival = (t.isAux ? busInputLatency[(size_t) t.ownBus] : 0) + pluginLatency;
+
+        paths.push_back ({ &t, nullptr, t.outputBus, arrival });
+        if (t.outputBus >= 0)
+            busInputLatency[(size_t) t.outputBus] = juce::jmax (busInputLatency[(size_t) t.outputBus], arrival);
+
+        for (auto& s : t.sends)
+        {
+            paths.push_back ({ &t, &s, s.targetBus, arrival });
+            busInputLatency[(size_t) s.targetBus] = juce::jmax (busInputLatency[(size_t) s.targetBus], arrival);
+        }
+    }
+
+    for (const auto& p : paths)
+        if (p.destination < 0)
+            graph.compensatedLatency = juce::jmax (graph.compensatedLatency, p.arrival);
+
+    // Delay every path up to the slowest arrival at its destination.
+    for (const auto& p : paths)
+    {
+        const int target = p.destination < 0 ? graph.compensatedLatency : busInputLatency[(size_t) p.destination];
+        const int trackId = p.track->state->trackId;
+        if (p.send == nullptr)
+            p.track->outputCompensation = delayFor (trackId, -1, target - p.arrival, sharedDelayLines);
+        else
+            p.send->compensation = delayFor (trackId, p.send->slot, target - p.arrival, sharedDelayLines);
+    }
+}
+
+void EngineBridge::setDelayCompensationEnabled (bool enabled)
+{
+    delayCompensationEnabled = enabled;
+    rebuildNow();
 }
 
 void EngineBridge::rebuildGraph()
@@ -687,7 +774,7 @@ void EngineBridge::setDiskCacheFrames (int frames)
 //==============================================================================
 // Recording
 
-juce::Result EngineBridge::startRecording()
+juce::Result EngineBridge::startRecording (int hardwareLatency)
 {
     if (session == nullptr)
         return juce::Result::fail ("No session is open.");
@@ -716,6 +803,8 @@ juce::Result EngineBridge::startRecording()
         take->trackId = track::id (t);
         take->numChannels = track::channels (t);
         take->inputChannel = track::inputChannel (t);
+        take->latencyCompensation = juce::jmax (0, hardwareLatency) + engine.getTotalLatencySamples();
+        lastRecordingCompensation = take->latencyCompensation;
         take->file = session->createUniqueAudioFile (track::name (t));
 
         std::unique_ptr<juce::FileOutputStream> fileStream = take->file.createOutputStream();
@@ -816,9 +905,24 @@ void EngineBridge::finaliseTake (RecordTake& take)
         return;
     }
 
+    // Place the take where the performer played it: the sound they heard was
+    // late by the round-trip latency, so everything they recorded is too.
+    auto clipStart = start - take.latencyCompensation;
+    juce::int64 offset = 0;
+    if (clipStart < 0)
+    {
+        offset = -clipStart; // recorded before the session start: trim the head
+        clipStart = 0;
+    }
+    if (length - offset <= 0)
+    {
+        take.file.deleteFile();
+        return;
+    }
+
     auto& um = session->getUndoManager();
     um.beginNewTransaction ("Record");
-    session->addClip (t, take.file, start, 0, length, length, take.file.getFileNameWithoutExtension(), &um);
+    session->addClip (t, take.file, clipStart, offset, length - offset, length, take.file.getFileNameWithoutExtension(), &um);
 
     if (take.overflowed.load() && onProblem)
         onProblem ("The disk could not keep up while recording \"" + track::name (t)

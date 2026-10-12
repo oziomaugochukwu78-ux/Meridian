@@ -39,11 +39,18 @@ PlaybackEngineComponent::PlaybackEngineComponent (AppController& a) : app (a)
     dynamicPlugins.setEnabled (false);
     dynamicPlugins.setTooltip ("Planned: skip processing for plug-ins on silent tracks.");
 
-    for (const auto* item : { "None", "Short", "Long", "Maximum" })
-        delayCompensation.addItem (item, delayCompensation.getNumItems() + 1);
-    delayCompensation.setSelectedId (1, juce::dontSendNotification);
-    delayCompensation.setEnabled (false);
-    delayCompensation.setTooltip ("Plug-in delay compensation is planned. Currently no compensation is applied.");
+    delayCompensation.addItem ("On (automatic)", 1);
+    delayCompensation.addItem ("Off", 2);
+    delayCompensation.setSelectedId (app.getBridge().isDelayCompensationEnabled() ? 1 : 2, juce::dontSendNotification);
+    delayCompensation.setTooltip ("Delays faster signal paths so that tracks, sends and buses with latent plug-ins "
+                                  "stay sample-aligned. Turn off only to troubleshoot.");
+    delayCompensation.onChange = [this]
+    {
+        const bool on = delayCompensation.getSelectedId() == 1;
+        app.getBridge().setDelayCompensationEnabled (on);
+        app.getSettings().setValue ("delayCompensation", on);
+        refresh();
+    };
 
     cacheSize.addItem ("Normal (0.7 s per stream)", 1);
     cacheSize.addItem ("Large (2.7 s per stream)", 2);
@@ -160,6 +167,9 @@ void PlaybackEngineComponent::refresh()
          << "Input latency:   " << inLatency << " samples (" << ms (inLatency) << ")\n"
          << "Output latency:  " << outLatency << " samples (" << ms (outLatency) << ")\n"
          << "Master console:  +" << consoleLatency << " samples (" << ms (consoleLatency) << ")\n"
+         << "Plug-in delay:   +" << app.getEngine().getPluginLatencySamples() << " samples ("
+         << ms (app.getEngine().getPluginLatencySamples()) << ")"
+         << (app.getBridge().isDelayCompensationEnabled() ? ", compensated" : ", NOT compensated") << "\n"
          << "CPU:             " << juce::roundToInt (app.getDeviceManager().getCpuUsage() * 100.0) << " %";
     info.setText (text, juce::dontSendNotification);
 

@@ -41,6 +41,7 @@ AppController::AppController()
     bridge = std::make_unique<EngineBridge> (engine, diskStreamer, formatManager, *pluginHost);
     bridge->onProblem = [this] (const juce::String& message) { reportProblem ("Problem", message); };
     bridge->setDiskCacheFrames (getSettings().getIntValue (diskCacheKey, 32768));
+    bridge->setDelayCompensationEnabled (getSettings().getBoolValue ("delayCompensation", true));
 
     recentSessions.setMaxNumberOfItems (12);
     recentSessions.restoreFromString (getSettings().getValue (recentSessionsKey));
@@ -260,7 +261,10 @@ void AppController::togglePlay()
 
 juce::Result AppController::transportRecord()
 {
-    return bridge->startRecording();
+    int hardwareLatency = 0;
+    if (auto* device = deviceManager.getCurrentAudioDevice())
+        hardwareLatency = device->getInputLatencyInSamples() + device->getOutputLatencyInSamples();
+    return bridge->startRecording (hardwareLatency);
 }
 
 void AppController::returnToZero()
@@ -679,7 +683,9 @@ std::string AppController::statusJson()
         .addNumber ("positionSeconds", (double) transport.getPosition() / juce::jmax (1.0, engine.getSampleRate()), 3)
         .addNumber ("sampleRate", engine.getSampleRate(), 0)
         .addString ("window", activeWindowQuery && activeWindowQuery() == WindowKind::mix ? "mix" : "edit")
-        .addBool ("audioDeviceRunning", engine.isDeviceRunning());
+        .addBool ("audioDeviceRunning", engine.isDeviceRunning())
+        .addInt ("pluginLatencySamples", engine.getPluginLatencySamples())
+        .addBool ("delayCompensation", bridge->isDelayCompensationEnabled());
 
     remote::JsonObject bounceInfo;
     bounceInfo.addBool ("running", isBouncing());
