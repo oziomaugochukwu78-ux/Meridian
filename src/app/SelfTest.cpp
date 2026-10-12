@@ -7,6 +7,7 @@
 #include "model/Routing.h"
 #include "model/SessionRepair.h"
 #include "media/TimeStretchEngine.h"
+#include "model/SessionBackups.h"
 #include "plugins/BuiltinEffects.h"
 #include "ui/dialogs/DashboardComponent.h"
 #include "ui/dialogs/NewTracksComponent.h"
@@ -1486,6 +1487,7 @@ void SelfTest::testRobustness()
 
     testDamagedSessions (original);
     testRemoteFuzz();
+    testSessionSafety();
 
     beginGroup ("Robustness (damaged files, hostile input)");
     const auto reopened = app.openSession (original);
@@ -1652,6 +1654,128 @@ void SelfTest::testDamagedSessions (const juce::File& originalSession)
     }
 
     app.showProblem = previousHandler;
+}
+
+void SelfTest::testSessionSafety()
+{
+    beginGroup ("Session safety (Save As, backups, crash recovery)");
+    const auto previousHandler = app.onRecoveryAvailable;
+    juce::File offered;
+    app.onRecoveryAvailable = [&offered] (const juce::File& backup) { offered = backup; };
+    const auto restore = [this, previousHandler] { app.onRecoveryAvailable = previousHandler; };
+
+    Session::Settings settings;
+    settings.name = "SafetySession";
+    settings.sampleRate = sampleRate;
+    const auto created = app.createSession (output, settings, nullptr);
+    expect ("create a scratch session", created.wasOk(), created.getErrorMessage());
+    if (created.failed())
+        return restore();
+
+    const auto file = app.getSession()->getSessionFile();
+    const auto inside = app.getSession()->getAudioFolder().getChildFile ("tone.wav");
+    media.getChildFile ("tone1k_mono.wav").copyFileTo (inside);
+    addToneTrack ("Tone", 1, inside, clipStart);
+    const auto end = clipStart + (juce::int64) (2.0 * sampleRate) + 4800;
+    const double reference = db (bounce ("safety_reference", 0, end).left.peak);
+    app.saveSession();
+    expect ("an open session is marked as open (for crash detection)", backups::wasLeftOpen (file), backups::markerFor (file).getFullPathName());
+
+    auto hasTrack = [this] (const juce::String& name)
+    {
+        for (const auto& t : app.getSession()->getTracksNode())
+            if (track::name (t) == name)
+                return true;
+        return false;
+    };
+
+    // Save As in the same folder: a new file, and work continues there.
+    const auto copyFile = file.getSiblingFile ("SafetySession copy.meridian");
+    auto result = app.saveSessionAs (copyFile);
+    expect ("Save As writes the new file and continues there; the original stays",
+            result.wasOk() && copyFile.existsAsFile() && app.getSession()->getSessionFile() == copyFile && file.existsAsFile(),
+            result.getErrorMessage());
+    expect ("Save As moves the open marker to the new file", ! backups::wasLeftOpen (file) && backups::wasLeftOpen (copyFile), {});
+
+    // Save As into another folder: clips inside the old folder must still be found.
+    const auto moved = output.getChildFile ("Moved Session").getChildFile ("Moved.meridian");
+    result = app.saveSessionAs (moved);
+    const auto clipNode = track::clips (app.getSession()->getTrack (0)).getChild (0);
+    const auto stored = clipNode[ids::file].toString();
+    expect ("Save As into another folder re-stores clip paths so they still resolve",
+            result.wasOk() && app.getSession()->resolveStoredPath (stored) == inside, stored);
+    expectNear ("the session saved elsewhere plays identically", db (bounce ("safety_moved", 0, end).left.peak), reference, 0.001, "dB");
+    result = app.openSession (moved);
+    expectNear ("and after re-opening it from disk", result.wasOk() ? db (bounce ("safety_moved_reopened", 0, end).left.peak) : 0.0,
+                reference, 0.001, "dB");
+
+    // Backups: snapshots of unsaved work, the newest five kept.
+    app.openSession (file);
+    int written = 0;
+    for (int i = 0; i < 7; ++i)
+    {
+        app.getSession()->addTrack ("Edit " + juce::String (i), 1, &app.getSession()->getUndoManager());
+        written += app.backupIfChanged() ? 1 : 0;
+    }
+    const auto all = backups::list (file);
+    expect ("a backup is written for each change, and only the newest 5 are kept", written == 7 && all.size() == 5,
+            juce::String (written) + " written, " + juce::String (all.size()) + " kept");
+    expect ("no backup when nothing changed", ! app.backupIfChanged(), {});
+    bool newestHasLastEdit = false, allValid = all.size() == 5;
+    for (int i = 0; i < all.size(); ++i)
+    {
+        juce::String error;
+        auto snapshot = Session::load (all[i], error);
+        allValid = allValid && snapshot != nullptr && findSessionProblem (*snapshot).isEmpty();
+        if (i == 0 && snapshot != nullptr)
+            for (const auto& t : snapshot->getTracksNode())
+                newestHasLastEdit = newestHasLastEdit || track::name (t) == "Edit 6";
+    }
+    expect ("every backup is a valid session; the newest holds the latest unsaved edit", allValid && newestHasLastEdit, {});
+    expect ("backups never touch the session file (it still has none of the edits)",
+            [&] { juce::String e; auto s = Session::load (file, e); return s != nullptr && s->getNumTracks() == 1; }(), {});
+
+    // A clean close removes the marker: newer backups are then not offered.
+    app.openSession (copyFile);
+    offered = juce::File();
+    app.openSession (file);
+    expect ("after a clean close, nothing is offered for recovery", ! offered.exists() && ! app.getRecoveryBackup().exists(), {});
+
+    // Crash injection: a real second Meridian process opens the session, makes an
+    // edit it never saves, writes a backup, and is killed (no clean shutdown).
+    app.openSession (copyFile); // so the child is the only one with it open
+    const auto ready = output.getChildFile ("crash-child.ready");
+    juce::ChildProcess child;
+    const bool started = child.start (juce::StringArray { juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFullPathName(),
+                                                          "--crash-test-child", file.getFullPathName(), ready.getFullPathName() });
+    int waited = 0;
+    for (; started && ! ready.existsAsFile() && waited < 60000; waited += 50)
+        juce::Thread::sleep (50);
+    const bool wasReady = ready.existsAsFile();
+    child.kill();
+    child.waitForProcessToFinish (10000);
+    expect ("a second Meridian process made an unsaved edit and a backup, then was killed", started && wasReady,
+            ! started ? juce::String ("could not start the child process")
+                      : wasReady ? "ready after about " + juce::String (waited) + " ms, then killed"
+                                 : juce::String ("the child never became ready"));
+    expect ("the killed process left the session marked open", backups::wasLeftOpen (file), {});
+
+    offered = juce::File();
+    result = app.openSession (file);
+    expect ("re-opening after the crash offers the backup with the unsaved work",
+            result.wasOk() && offered.existsAsFile() && app.getRecoveryBackup() == offered, offered.getFileName());
+    expect ("opening without recovering gives the last saved version", ! hasTrack ("Unsaved Edit"), {});
+    if (offered.existsAsFile())
+    {
+        result = app.recoverFromBackup (offered);
+        expect ("recovering restores the unsaved edit, under the original session file, as unsaved",
+                result.wasOk() && hasTrack ("Unsaved Edit") && app.getSession()->getSessionFile() == file
+                    && app.getSession()->hasUnsavedChanges(),
+                result.getErrorMessage());
+        expect ("the recovered session plays", std::abs (db (bounce ("safety_recovered", 0, end).left.peak) - reference) < 0.001, {});
+        app.saveSession();
+    }
+    restore();
 }
 
 void SelfTest::testRemoteFuzz()

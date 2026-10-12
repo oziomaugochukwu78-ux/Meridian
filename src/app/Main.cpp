@@ -3,7 +3,10 @@
 #include "SelfTest.h"
 #include "SoakTest.h"
 
+#include "model/SessionBackups.h"
 #include "ui/MeridianLookAndFeel.h"
+
+#include <cstdlib>
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -19,15 +22,28 @@ class MeridianApplication final : public juce::JUCEApplication
 public:
     const juce::String getApplicationName() override    { return JUCE_APPLICATION_NAME_STRING; }
     const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
-    bool moreThanOneInstanceAllowed() override          { return false; }
+    bool moreThanOneInstanceAllowed() override
+    {
+        // The crash-recovery test runs a second copy next to the self test.
+        return getCommandLineParameters().contains ("--crash-test-child");
+    }
 
     void initialise (const juce::String& commandLine) override
     {
         juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
+        const auto args = juce::StringArray::fromTokens (commandLine, true);
+
+        // Meridian --crash-test-child <session> <ready file>: used only by the self
+        // test. Opens the session, makes an edit it never saves, writes a backup,
+        // signals, then waits to be killed (a hard kill: no clean shutdown).
+        if (const int index = args.indexOf ("--crash-test-child"); index >= 0)
+        {
+            runCrashTestChild (juce::File (args[index + 1].unquoted()), juce::File (args[index + 2].unquoted()));
+            return;
+        }
 
         // Meridian --self-test <folder>: run the end-to-end self test and exit
         // with 0 (all passed) or 1.
-        const auto args = juce::StringArray::fromTokens (commandLine, true);
         const int selfTestIndex = args.indexOf ("--self-test");
         if (selfTestIndex >= 0)
         {
@@ -136,6 +152,25 @@ public:
     }
 
 private:
+    static void runCrashTestChild (const juce::File& sessionFile, const juce::File& readyFile)
+    {
+        juce::String error;
+        auto session = Session::load (sessionFile, error);
+        if (session == nullptr)
+            std::_Exit (2);
+        backups::markOpen (sessionFile);
+        session->addTrack ("Unsaved Edit", 1, nullptr);
+        if (backups::write (*session).failed())
+            std::_Exit (3);
+        readyFile.replaceWithText ("ready");
+
+        // Wait for the kill. If the parent never sends it, leave anyway after a
+        // minute, still without a clean shutdown, so no stray process remains.
+        for (int i = 0; i < 600; ++i)
+            juce::Thread::sleep (100);
+        std::_Exit (4);
+    }
+
     MeridianLookAndFeel lookAndFeel;
     std::unique_ptr<AssertionLog> assertionLog; // self test only
     std::unique_ptr<AppController> controller;

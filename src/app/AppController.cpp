@@ -2,6 +2,7 @@
 
 #include "media/AudioImporter.h"
 #include "media/TimeStretchEngine.h"
+#include "model/SessionBackups.h"
 #include "ui/TimeFormat.h"
 
 #include <remote/JsonWriter.h>
@@ -19,6 +20,8 @@ constexpr const char* remotePortKey = "remoteControlPort";
 constexpr const char* remoteTokenKey = "remoteControlToken";
 constexpr const char* remoteOriginsKey = "remoteControlAllowedOrigins";
 constexpr const char* diskCacheKey = "diskCacheFrames";
+constexpr const char* backupMinutesKey = "autoBackupMinutes"; // 0 turns automatic backups off
+constexpr const char* backupKeepKey = "autoBackupKeep";
 constexpr double faderFloorDb = -144.0;
 
 juce::String trackLabel (int number, const juce::ValueTree& t)
@@ -63,12 +66,17 @@ AppController::AppController()
             DBG ("Remote control: " << result.getErrorMessage());
         }
     }
+
+    backupTimer.startTimer (30 * 1000); // checks twice a minute; writes only on the set interval
 }
 
 AppController::~AppController()
 {
     shuttingDown.store (true);
     *lifetime = false;
+    backupTimer.stopTimer();
+    if (session != nullptr)
+        backups::markClosed (session->getSessionFile()); // a clean exit: nothing to recover next time
 
     remoteServer.stop();
     jobs.removeAllJobs (true, 10000);
@@ -145,8 +153,17 @@ juce::Result AppController::openSession (const juce::File& file)
     if (loaded == nullptr)
         return juce::Result::fail (error);
 
+    // Before installSession marks the session open again: was it left open?
+    // (Re-opening the session this process has open is not a crash: the marker is ours.)
+    const bool openHere = session != nullptr && session->getSessionFile() == file;
+    const auto recovery = openHere ? juce::File() : backups::findRecovery (file);
+
     const auto repairs = loaded->getLoadRepairs();
     installSession (std::move (loaded));
+
+    recoveryBackup = recovery;
+    if (recovery.existsAsFile() && onRecoveryAvailable)
+        onRecoveryAvailable (recovery);
 
     if (! repairs.isEmpty())
     {
@@ -172,13 +189,24 @@ void AppController::installSession (std::unique_ptr<Session> newSession)
     // discarded on arrival because the generation no longer matches.
     bridge->attachSession (nullptr);
     if (session != nullptr)
+    {
         session->getState().removeListener (this);
+        backups::markClosed (session->getSessionFile());
+    }
 
     session = std::move (newSession);
     ++sessionGeneration;
+    recoveryBackup = juce::File();
+    lastBackupTime = juce::Time::getCurrentTime();
+    backupProblemReported = false;
 
     if (session != nullptr)
+    {
         session->getState().addListener (this);
+        backups::markOpen (session->getSessionFile());
+        // A freshly loaded session has nothing to back up; a recovered one does.
+        changeCountAtLastBackup = session->hasUnsavedChanges() ? ~juce::uint64 (0) : session->getChangeCount();
+    }
 
     engine.getTransport().locate (0);
     syncDeviceToSession();
@@ -246,6 +274,72 @@ juce::Result AppController::saveSession()
     bridge->storePluginStates();
     juce::String error;
     return session->save (error) ? juce::Result::ok() : juce::Result::fail (error);
+}
+
+juce::Result AppController::saveSessionAs (const juce::File& newFile)
+{
+    if (session == nullptr)
+        return juce::Result::fail ("No session is open.");
+
+    const auto oldFile = session->getSessionFile();
+    bridge->storePluginStates();
+    juce::String error;
+    if (! session->saveAs (newFile, error))
+        return juce::Result::fail (error);
+
+    backups::markClosed (oldFile);
+    backups::markOpen (session->getSessionFile());
+    if (rememberRecentSessions)
+    {
+        recentSessions.addFile (session->getSessionFile());
+        getSettings().setValue (recentSessionsKey, recentSessions.toString());
+    }
+    sendChangeMessage(); // the title and anything showing the file name
+    return juce::Result::ok();
+}
+
+juce::Result AppController::recoverFromBackup (const juce::File& backup)
+{
+    if (session == nullptr)
+        return juce::Result::fail ("No session is open.");
+
+    juce::String error;
+    auto recovered = Session::loadBackup (backup, session->getSessionFile(), error);
+    if (recovered == nullptr)
+        return juce::Result::fail (error);
+    installSession (std::move (recovered));
+    return juce::Result::ok();
+}
+
+bool AppController::backupIfChanged()
+{
+    if (session == nullptr)
+        return false;
+
+    bridge->storePluginStates(); // so plug-in settings changed since are captured too
+    if (session->getChangeCount() == changeCountAtLastBackup)
+        return false;
+
+    const int keep = juce::jlimit (1, 100, getSettings().getIntValue (backupKeepKey, backups::defaultKeep));
+    if (const auto result = backups::write (*session, keep); result.failed())
+    {
+        if (! backupProblemReported) // once per session, not every interval
+            reportProblem ("Backup", "Could not write a session backup: " + result.getErrorMessage());
+        backupProblemReported = true;
+        return false;
+    }
+    changeCountAtLastBackup = session->getChangeCount();
+    lastBackupTime = juce::Time::getCurrentTime();
+    return true;
+}
+
+void AppController::autoBackup()
+{
+    const int minutes = getSettings().getIntValue (backupMinutesKey, 5);
+    if (session == nullptr || minutes <= 0 || isBouncing())
+        return;
+    if (juce::Time::getCurrentTime() - lastBackupTime >= juce::RelativeTime::minutes (minutes))
+        backupIfChanged();
 }
 
 //==============================================================================

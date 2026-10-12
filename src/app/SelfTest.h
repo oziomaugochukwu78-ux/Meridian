@@ -104,6 +104,7 @@ private:
     void testRobustness();
     void testDamagedSessions (const juce::File& originalSession);
     void testRemoteFuzz();
+    void testSessionSafety();
 
     // Phase 2
     bool setUpDelayCompensationTest();

@@ -46,7 +46,7 @@ To finish before the feature work below:
 | Comparison with another DAW: the same session rendered in Ardour (open source) and null-tested against Meridian | Residual below -90 dBFS for gain, pan law and summing scenarios (pan laws are matched explicitly) |
 | Plug-in compatibility suite: load, process, save and restore state for a list of popular free VST3 plug-ins, each in a crash-protected child process | No crashes; restored state renders identically |
 | Crash reporter: minidump plus the last session actions, saved locally; sending them anywhere needs the user's consent | Reports appear for deliberately injected crashes |
-| Session safety: Save As, periodic backups in `Session File Backups/` (newest 5 kept), recovery prompt after a crash | Crash-injection test recovers the last backup |
+| ~~Session safety: Save As, periodic backups in `Session File Backups/` (newest 5 kept), recovery prompt after a crash~~ Done | Crash-injection test recovers the last backup: passes (a real second process is killed mid-session) |
 
 ## Milestone 2: Artist-level
 

@@ -13,7 +13,7 @@ This is an early foundation, not a finished DAW. Everything listed as working co
 
 | Area | Working now | Planned |
 |---|---|---|
-| Sessions | Dashboard (create from template or blank, recent, open), save/load (atomic), full undo/redo, automatic repair of damaged session files on open | Save As, auto-backups, session import |
+| Sessions | Dashboard (create from template or blank, recent, open), save/load (atomic), Save As (to any folder; clip paths re-stored so audio is still found), full undo/redo, automatic repair of damaged session files on open; automatic backups of unsaved work every 5 minutes into `Session File Backups/` (newest 5 kept); crash recovery: if Meridian did not close normally, the newer backup is offered when the session is next opened | Session import |
 | Edit window | Tracks, clips with waveforms, Smart Tool (select/move/trim/fade zones), Slip and Grid modes, separate, delete, zoom, page-scroll, drag-and-drop import, volume automation drawing (Pencil tool) | Shuffle and Spot modes, Zoomer tool, playlists, more automation parameters |
 | Mix window | Channel strips: 10 inserts, 5 sends (level, pan, pre/post, mute), output routing to master or any bus, I/O, automation mode, pan, R/S/M, console-taper fader, segmented meters; Aux Input (bus) tracks, bus-to-bus chains with loop protection, implicit solo; master strip with console controls | VCAs, mono buses, surround |
 | Audio engine | Lock-free render graph, double-buffered disk streaming, record to disk with round-trip latency compensation, input monitoring, sample-accurate volume automation, ramped gain/mute/pan, automatic plug-in delay compensation across tracks, sends and buses, offline bounce to WAV/AIFF (File > Bounce Mix) | Multi-core track rendering, dither options, manual recording offset |
@@ -206,6 +206,7 @@ $ws.SendAsync([ArraySegment[byte]]$msg, 'Text', $true, [Threading.CancellationTo
 | Ctrl+[ / Ctrl+] | zoom out / in (also Ctrl+wheel) |
 | F2 / F4 | Slip / Grid mode |
 | F6 / F7 / F8 / F9 / F10 | Trim / Selector / Grabber / Smart Tool / Pencil (draw volume automation) |
+| Ctrl+S / Ctrl+Shift+S | save / save as |
 | Ctrl+Shift+N | new tracks |
 | Ctrl+Shift+I | import audio |
 | Ctrl+Alt+B | bounce mix to a file |
@@ -250,6 +251,7 @@ It drives the real application and checks the results numerically. Each scenario
 - import with sample-rate conversion, including anti-aliasing
 - Elastic Audio length and pitch
 - VST3 hosting, using a bundled test plug-in (`tests/plugin`): effect, bypass, parameter, state recall and undo
+- session safety: Save As in the same and another folder (the moved session must play identically); backups rotate to the newest 5 and never touch the session file; and **crash injection**: a second Meridian process opens the session, makes an edit it never saves, writes a backup and is killed; re-opening must offer that backup, and recovering it must restore the edit
 - built-in effects through the real plug-in path: an EQ band set by an AI tool to +6 dB must measure +6.00 dB, and must still measure it after save and re-open; reverb on a bus, fed by a send and excited with noise (ISO 3382 interrupted-noise method), must decay in the set RT60 with decorrelated left/right tails; the compressor must follow its static curve; the limiter must hold its ceiling, and its look-ahead latency must be compensated so a limited track still sums coherently with an unlimited copy
 - AI commands, live playback with disk streaming, and the Edit and Mix windows driven by simulated mouse input
 - **stress:** 128 tracks and 8 buses must still sum to the exact expected level, and must render faster than real time (checked in Release builds)

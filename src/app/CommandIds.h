@@ -16,6 +16,7 @@ enum : juce::CommandID
     saveSession,
     importAudio,
     bounceMix,
+    saveSessionAs,
 
     // Edit
     undo = 0x12000,

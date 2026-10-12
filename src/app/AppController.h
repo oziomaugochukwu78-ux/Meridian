@@ -51,8 +51,23 @@ public:
     juce::UndoManager* getUndoManager() const noexcept { return session != nullptr ? &session->getUndoManager() : nullptr; }
 
     juce::Result createSession (const juce::File& parentFolder, const Session::Settings&, const SessionTemplate*);
+    /** Opens the last saved version. If the previous run did not close this
+        session and a backup holds newer, unsaved work, getRecoveryBackup()
+        returns it afterwards (and onRecoveryAvailable is called), so the user
+        can choose recoverFromBackup(). */
     juce::Result openSession (const juce::File& sessionFile);
     juce::Result saveSession();
+
+    /** Saves under a new name or folder and continues working there. */
+    juce::Result saveSessionAs (const juce::File& newSessionFile);
+
+    // Session safety -----------------------------------------------------------------------
+    juce::File getRecoveryBackup() const { return recoveryBackup; }
+    /** Replaces the open session with the backup's contents, under the session's own file. */
+    juce::Result recoverFromBackup (const juce::File& backup);
+    /** Writes a backup now if anything changed since the last one (true if one was written). */
+    bool backupIfChanged();
+    std::function<void (const juce::File& backup)> onRecoveryAvailable; ///< wired by the main window
     juce::File getDefaultSessionsFolder() const;
     void setRememberRecentSessions (bool shouldRemember) noexcept { rememberRecentSessions = shouldRemember; }
 
@@ -131,6 +146,7 @@ private:
     void reportProblem (const juce::String& title, const juce::String& message);
     juce::String nextTrackName (const juce::String& baseName) const;
     juce::String describePosition() const;
+    void autoBackup();
     std::unique_ptr<AudioEngine> createOfflineEngine (juce::String& error);
 
     // Declaration order is destruction order in reverse: the engine must die
@@ -165,6 +181,11 @@ private:
     BounceResult lastBounce;
     int sessionGeneration = 0; // invalidates background results meant for a replaced session
     bool rememberRecentSessions = true;
+    juce::File recoveryBackup;
+    juce::uint64 changeCountAtLastBackup = 0;
+    juce::Time lastBackupTime;
+    bool backupProblemReported = false;
+    juce::TimedCallback backupTimer { [this] { autoBackup(); } };
     std::shared_ptr<bool> lifetime = std::make_shared<bool> (true);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AppController)

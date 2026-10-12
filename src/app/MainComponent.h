@@ -59,6 +59,8 @@ private:
     void showImportDialog();
     void showBounceDialog();
     void openSessionFromDisk();
+    void showSaveAsDialog();
+    void offerRecovery (const juce::File& backup);
     void showRemoteControlInfo();
 
     AppController& app;

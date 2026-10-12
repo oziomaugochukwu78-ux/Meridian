@@ -43,6 +43,7 @@ MainComponent::MainComponent (AppController& a)
         return activeWindow;
     };
     app.activeWindowQuery = [this] { return activeWindow; };
+    app.onRecoveryAvailable = [this] (const juce::File& backup) { offerRecovery (backup); };
 
     commandManager.registerAllCommandsForTarget (this);
     commandManager.setFirstCommandTarget (this);
@@ -63,6 +64,7 @@ MainComponent::~MainComponent()
     app.showProblem = nullptr;
     app.toggleWindowHandler = nullptr;
     app.activeWindowQuery = nullptr;
+    app.onRecoveryAvailable = nullptr;
     PluginWindow::closeAll();
 }
 
@@ -223,6 +225,47 @@ void MainComponent::showBounceDialog()
                           });
 }
 
+void MainComponent::showSaveAsDialog()
+{
+    auto* session = app.getSession();
+    if (session == nullptr)
+        return;
+    const auto suggested = session->getFolder().getNonexistentChildFile (session->getName() + " copy", Session::fileExtension, false);
+    chooser = std::make_unique<juce::FileChooser> ("Save Session As", suggested, juce::String ("*") + Session::fileExtension);
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                              | juce::FileBrowserComponent::warnAboutOverwriting,
+                          [this] (const juce::FileChooser& fc)
+                          {
+                              const auto file = fc.getResult();
+                              if (file == juce::File())
+                                  return;
+                              if (const auto result = app.saveSessionAs (file); result.failed())
+                                  showMessage (juce::MessageBoxIconType::WarningIcon, "Save As Failed", result.getErrorMessage());
+                          });
+}
+
+void MainComponent::offerRecovery (const juce::File& backup)
+{
+    auto* session = app.getSession();
+    if (session == nullptr)
+        return;
+    const auto timeOf = [] (const juce::File& f) { return f.getLastModificationTime().formatted ("%H:%M on %d %b"); };
+    auto options = juce::MessageBoxOptions::makeOptionsOkCancel (
+        juce::MessageBoxIconType::WarningIcon, "Recover Unsaved Work?",
+        "Meridian did not close normally the last time \"" + session->getName() + "\" was open.\n\n"
+        "An automatic backup from " + timeOf (backup) + " has changes made after your last save ("
+            + timeOf (session->getSessionFile()) + ").\n\n"
+        "Open the backup? You can still choose not to save it; the last saved version stays on disk until you save.",
+        "Open Backup", "Keep Last Save");
+    juce::AlertWindow::showAsync (options, [this, backup] (int result)
+    {
+        if (result != 1)
+            return;
+        if (const auto recovered = app.recoverFromBackup (backup); recovered.failed())
+            showMessage (juce::MessageBoxIconType::WarningIcon, "Recovery Failed", recovered.getErrorMessage());
+    });
+}
+
 void MainComponent::openSessionFromDisk()
 {
     chooser = std::make_unique<juce::FileChooser> ("Open Session", app.getDefaultSessionsFolder(),
@@ -268,7 +311,7 @@ void MainComponent::showRemoteControlInfo()
 void MainComponent::getAllCommands (juce::Array<juce::CommandID>& c)
 {
     using namespace commands;
-    c.addArray ({ dashboard, openSession, saveSession, importAudio, bounceMix,
+    c.addArray ({ dashboard, openSession, saveSession, saveSessionAs, importAudio, bounceMix,
                   undo, redo, separateClip, deleteSelection, elasticAudio, zoomIn, zoomOut,
                   slipMode, gridMode, trimTool, selectorTool, grabberTool, smartTool, pencilTool,
                   newTracks, deleteTrack,
@@ -294,6 +337,8 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                                info.addDefaultKeypress ('o', cmd); break;
         case saveSession:      info.setInfo ("Save", "Save the session", "File", 0);
                                info.addDefaultKeypress ('s', cmd); info.setActive (hasSession); break;
+        case saveSessionAs:    info.setInfo ("Save As...", "Save the session under a new name and keep working on it", "File", 0);
+                               info.addDefaultKeypress ('s', cmd | shift); info.setActive (hasSession); break;
         case importAudio:      info.setInfo ("Import Audio...", "Copy audio files into the session", "File", 0);
                                info.addDefaultKeypress ('i', cmd | shift); info.setActive (hasSession); break;
         case bounceMix:        info.setInfo ("Bounce Mix...", "Mix the session down to an audio file", "File", 0);
@@ -389,6 +434,7 @@ bool MainComponent::perform (const InvocationInfo& info)
             if (const auto result = app.saveSession(); result.failed())
                 showMessage (juce::MessageBoxIconType::WarningIcon, "Save Failed", result.getErrorMessage());
             break;
+        case saveSessionAs:   showSaveAsDialog(); break;
         case importAudio:     showImportDialog(); break;
         case bounceMix:       showBounceDialog(); break;
 
@@ -461,7 +507,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int index, const juce::String&)
         case 0:
             add (dashboard); add (openSession);
             menu.addSeparator();
-            add (saveSession);
+            add (saveSession); add (saveSessionAs);
             menu.addSeparator();
             add (importAudio);
             add (bounceMix);

@@ -46,6 +46,8 @@ target_sources(Meridian PRIVATE
     model/Session.cpp
     model/Session.h
     model/SessionIds.h
+    model/SessionBackups.cpp
+    model/SessionBackups.h
     model/SessionRepair.cpp
     model/SessionRepair.h
     model/SessionTemplates.cpp

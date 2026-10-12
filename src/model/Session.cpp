@@ -82,21 +82,32 @@ std::unique_ptr<Session> Session::createNew (const juce::File& parentFolder, con
     return session;
 }
 
-std::unique_ptr<Session> Session::load (const juce::File& file, juce::String& error)
+namespace
+{
+juce::ValueTree readSessionTree (const juce::File& file, juce::String& error)
 {
     auto xml = juce::parseXML (file);
     if (xml == nullptr || ! xml->hasTagName (ids::SESSION.toString()))
     {
         error = file.getFileName() + " is not a valid session file.";
-        return nullptr;
+        return {};
     }
 
     auto tree = juce::ValueTree::fromXml (*xml);
-    if ((int) tree.getProperty (ids::formatVersion, 0) > formatVersion)
+    if ((int) tree.getProperty (ids::formatVersion, 0) > Session::formatVersion)
     {
         error = file.getFileName() + " was saved by a newer version of this application.";
-        return nullptr;
+        return {};
     }
+    return tree;
+}
+} // namespace
+
+std::unique_ptr<Session> Session::load (const juce::File& file, juce::String& error)
+{
+    auto tree = readSessionTree (file, error);
+    if (! tree.isValid())
+        return nullptr;
 
     std::unique_ptr<Session> session (new Session (file, std::move (tree)));
     session->loadRepairs = repairSession (*session);
@@ -104,7 +115,19 @@ std::unique_ptr<Session> Session::load (const juce::File& file, juce::String& er
     return session;
 }
 
-bool Session::save (juce::String& error)
+std::unique_ptr<Session> Session::loadBackup (const juce::File& backupFile, const juce::File& file, juce::String& error)
+{
+    auto tree = readSessionTree (backupFile, error);
+    if (! tree.isValid())
+        return nullptr;
+
+    std::unique_ptr<Session> session (new Session (file, std::move (tree)));
+    session->loadRepairs = repairSession (*session);
+    session->dirty = true; // the recovered changes are not in the session file yet
+    return session;
+}
+
+bool Session::writeTo (const juce::File& target, juce::String& error) const
 {
     auto xml = state.createXml();
     if (xml == nullptr)
@@ -115,14 +138,57 @@ bool Session::save (juce::String& error)
 
     // Write to a temporary file first and swap it in, so a crash or a full
     // disk mid-save can never leave a truncated session behind.
-    juce::TemporaryFile temp (sessionFile);
+    juce::TemporaryFile temp (target);
     if (! xml->writeTo (temp.getFile()) || ! temp.overwriteTargetFileWithTemporary())
     {
-        error = "Could not write " + sessionFile.getFullPathName() + ".";
+        error = "Could not write " + target.getFullPathName() + ".";
+        return false;
+    }
+    return true;
+}
+
+bool Session::save (juce::String& error)
+{
+    if (! writeTo (sessionFile, error))
+        return false;
+    dirty = false;
+    return true;
+}
+
+bool Session::saveAs (const juce::File& newFile, juce::String& error)
+{
+    const auto target = newFile.withFileExtension (fileExtension);
+    if (! target.getParentDirectory().isDirectory() && ! target.getParentDirectory().createDirectory())
+    {
+        error = "Could not create " + target.getParentDirectory().getFullPathName() + ".";
         return false;
     }
 
-    dirty = false;
+    // Resolve every clip's audio from the old folder before switching.
+    std::vector<std::pair<juce::ValueTree, juce::File>> audio;
+    for (const auto& t : getTracksNode())
+        for (const auto& c : track::clips (t))
+            if (const auto stored = c[ids::file].toString(); stored.isNotEmpty())
+                audio.emplace_back (c, resolveStoredPath (stored));
+
+    const auto oldFile = sessionFile;
+    const auto oldName = state[ids::name];
+    sessionFile = target;
+
+    // Not undoable: these describe where the session lives, not an edit.
+    for (auto& [c, file] : audio)
+        c.setProperty (ids::file, makeStoredPath (file), nullptr);
+    state.setProperty (ids::name, target.getFileNameWithoutExtension(), nullptr);
+
+    if (! save (error))
+    {
+        // Put everything back: the session still lives where it was.
+        sessionFile = oldFile;
+        for (auto& [c, file] : audio)
+            c.setProperty (ids::file, makeStoredPath (file), nullptr);
+        state.setProperty (ids::name, oldName, nullptr);
+        return false;
+    }
     return true;
 }
 

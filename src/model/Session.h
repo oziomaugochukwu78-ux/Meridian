@@ -36,11 +36,29 @@ public:
         (see SessionRepair.h); getLoadRepairs() lists what was fixed. */
     static std::unique_ptr<Session> load (const juce::File& sessionFile, juce::String& error);
 
+    /** Loads the contents of `backupFile` as if it were `sessionFile` (crash
+        recovery): relative clip paths resolve from the session's folder, and
+        Save writes to the session file, not the backup. Marked unsaved. */
+    static std::unique_ptr<Session> loadBackup (const juce::File& backupFile, const juce::File& sessionFile, juce::String& error);
+
     const juce::StringArray& getLoadRepairs() const noexcept { return loadRepairs; }
 
     ~Session() override;
 
     bool save (juce::String& error);
+
+    /** Saves under a new file name (any folder) and continues there. Clip paths
+        are re-stored relative to the new folder, or absolute when the audio is
+        outside it, so every clip still finds its file. The old file is untouched. */
+    bool saveAs (const juce::File& newSessionFile, juce::String& error);
+
+    /** Writes the current state to any file, atomically, without changing the
+        session's own file or its unsaved state (used for backups). */
+    bool writeTo (const juce::File& target, juce::String& error) const;
+
+    /** Counts every change to the document; backups compare it to know whether
+        anything happened since the last one. */
+    juce::uint64 getChangeCount() const noexcept { return changeCount; }
 
     juce::ValueTree& getState() noexcept               { return state; }
     const juce::ValueTree& getState() const noexcept   { return state; }
@@ -101,10 +119,11 @@ public:
 private:
     Session (juce::File file, juce::ValueTree tree);
 
-    void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override { dirty = true; }
-    void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override             { dirty = true; }
-    void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override       { dirty = true; }
-    void valueTreeChildOrderChanged (juce::ValueTree&, int, int) override               { dirty = true; }
+    void changed() noexcept { dirty = true; ++changeCount; }
+    void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override { changed(); }
+    void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override             { changed(); }
+    void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override       { changed(); }
+    void valueTreeChildOrderChanged (juce::ValueTree&, int, int) override               { changed(); }
 
     static juce::ValueTree createEmptyState (const Settings&);
     static void ensureStructure (juce::ValueTree& state);
@@ -114,6 +133,7 @@ private:
     juce::UndoManager undoManager;
     juce::StringArray loadRepairs;
     bool dirty = false;
+    juce::uint64 changeCount = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Session)
 };
