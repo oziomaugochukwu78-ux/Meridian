@@ -23,7 +23,8 @@ const ToolInfo tools[] = {
     { "GRAB",  EditTool::grabber,  true,  "Grabber: move clips, drag onto another track to move between tracks (F8)" },
     { "SMART", EditTool::smart,    true,  "Smart Tool: selector in the upper half of a clip, grabber in the lower half, "
                                           "trim at the edges, fades at the top corners (F6+F7)" },
-    { "PENCIL", EditTool::pencil,  false, "Pencil (planned): draw automation" },
+    { "PENCIL", EditTool::pencil,  true,  "Pencil: draw volume automation. Drag to draw, drag a point to move it, "
+                                          "Alt-click a point to delete it (F10)" },
 };
 } // namespace
 

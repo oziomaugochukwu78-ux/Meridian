@@ -30,6 +30,7 @@ enum : juce::CommandID
     selectorTool,
     grabberTool,
     smartTool,
+    pencilTool,
 
     // Track
     newTracks = 0x3000,

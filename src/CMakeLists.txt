@@ -35,6 +35,8 @@ target_sources(Meridian PRIVATE
     engine/TrackRealtimeState.h
     engine/Transport.h
 
+    model/Automation.cpp
+    model/Automation.h
     model/Routing.cpp
     model/Routing.h
     model/Session.cpp

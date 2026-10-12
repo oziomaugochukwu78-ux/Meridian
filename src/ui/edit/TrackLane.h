@@ -44,6 +44,18 @@ private:
     void layoutClips();
     int playheadX() const;
 
+    // Volume automation (Pencil tool)
+    float dbToY (double db) const;
+    double yToDb (float y) const;
+    void paintAutomation (juce::Graphics&);
+    void pencilDown (const juce::MouseEvent&);
+    void pencilDrag (const juce::MouseEvent&);
+    enum class PencilAction { none, draw, movePoint };
+    PencilAction pencilAction = PencilAction::none;
+    juce::ValueTree draggedPoint;
+    juce::int64 lastDrawnTime = 0;
+    float lastDrawnX = 0.0f;
+
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
     void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;
     void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override;

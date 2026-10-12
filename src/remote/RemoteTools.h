@@ -64,6 +64,7 @@ private:
     Result moveClip (const juce::var&);
     Result setClip (const juce::var&);
     Result importAudio (const juce::var&);
+    Result setVolumeAutomation (const juce::var&);
     Result setMaster (const juce::var&);
     Result bounce (const juce::var&);
     Result undoRedo (const juce::var&, bool undo);

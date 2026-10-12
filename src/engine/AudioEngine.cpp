@@ -413,7 +413,8 @@ void AudioEngine::mixTrackIntoBus (TrackRender& t, const BlockContext& ctx) noex
 
     if (useAutomation)
     {
-        t.volumeAutomation.render (ctx.position, faderGains.data(), n);
+        t.volumeAutomation.render (ctx.position, faderGains.data(), n);              // dB, sample-accurate
+        dsp::decibelsToGain (faderGains.data(), faderGains.data(), n, silenceDb);   // linear-in-dB, as drawn
         s.faderRamp.reset (faderGains[(size_t) (n - 1)]); // leaving Read mode ramps from here
     }
     else

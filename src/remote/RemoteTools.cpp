@@ -1,6 +1,7 @@
 #include "RemoteTools.h"
 
 #include "app/AppController.h"
+#include "model/Automation.h"
 #include "model/Routing.h"
 
 #include <dsp/SignalAnalysis.h>
@@ -87,9 +88,23 @@ juce::var schema (std::initializer_list<Param> params)
     {
         auto property = makeObject ({ { "description", p.description } });
         if (juce::String (p.type) == "track")
+        {
             set (property, "type", juce::Array<juce::var> { "integer", "string" });
+        }
+        else if (juce::String (p.type) == "array")
+        {
+            // The only array parameter: automation breakpoints.
+            set (property, "type", "array");
+            set (property, "items", makeObject ({
+                { "type", "object" },
+                { "properties", makeObject ({ { "seconds", makeObject ({ { "type", "number" } }) },
+                                              { "db", makeObject ({ { "type", "number" } }) } }) },
+                { "required", juce::Array<juce::var> { "seconds", "db" } } }));
+        }
         else
+        {
             set (property, "type", p.type);
+        }
 
         if (! p.choices.empty())
         {
@@ -199,6 +214,13 @@ const std::vector<ToolInfo>& toolTable()
           schema ({ { "file", "string", "Absolute path of a WAV/AIFF/FLAC/MP3/... file", true },
                     { "track", "track", "Track to place it on (default: a new track)" },
                     { "position_seconds", "number", "Where to place it (default 0)" } }) },
+        { "set_volume_automation", "Volume automation",
+          "Draw a track's volume over time: breakpoints of {seconds, db}, joined by straight lines (in dB) and held "
+          "before the first and after the last. Replaces the existing automation unless replace=false. "
+          "An empty points list removes the automation (the fader is used again).",
+          schema ({ { "track", "track", trackHelp, true },
+                    { "points", "array", "Breakpoints, e.g. [{\"seconds\": 0, \"db\": -60}, {\"seconds\": 4, \"db\": 0}]", true },
+                    { "replace", "boolean", "Replace existing points (default true)" } }) },
         { "set_master", "Master bus",
           "Master fader and the analog console emulation (saturation) on the master bus.",
           schema ({ { "volume_db", "number", "Master fader in dB" },
@@ -258,6 +280,7 @@ RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var
     if (name == "move_clip")          return moveClip (args);
     if (name == "set_clip")           return setClip (args);
     if (name == "import_audio")       return importAudio (args);
+    if (name == "set_volume_automation") return setVolumeAutomation (args);
     if (name == "set_master")         return setMaster (args);
     if (name == "bounce")             return bounce (args);
     if (name == "undo")               return undoRedo (args, true);
@@ -807,6 +830,46 @@ RemoteTools::Result RemoteTools::importAudio (const juce::var& args)
     app.importAudioFiles ({ juce::File (path) }, secondsToSamples (args["position_seconds"]), target);
     return { true, makeObject ({ { "importing", juce::File (path).getFileName() },
                                  { "note", "Copying and converting in the background; call list_clips in a moment." } }), {} };
+}
+
+RemoteTools::Result RemoteTools::setVolumeAutomation (const juce::var& args)
+{
+    juce::String error;
+    auto t = findTrack (args["track"], error);
+    if (! t.isValid())
+        return { false, {}, error };
+
+    const auto* points = args["points"].getArray();
+    if (points == nullptr)
+        return { false, {}, "\"points\" must be an array of {\"seconds\": number, \"db\": number}." };
+
+    auto* um = beginEdit ("Volume Automation");
+    const bool replace = ! args.hasProperty ("replace") || (bool) args["replace"];
+    if (points->isEmpty())
+    {
+        automation::clear (t, um);
+        return { true, makeObject ({ { "track", track::name (t) }, { "automation", "removed" } }), {} };
+    }
+
+    auto lane = automation::getOrCreateVolumeLane (t, um);
+    if (replace)
+        while (lane.getNumChildren() > 0)
+            lane.removeChild (0, um);
+
+    for (const auto& p : *points)
+    {
+        if (! p.hasProperty ("seconds") || ! p.hasProperty ("db"))
+            return { false, {}, "Each point needs \"seconds\" and \"db\"." };
+        automation::addPoint (lane, secondsToSamples (p["seconds"]), readDb (p["db"]), um);
+    }
+
+    if (! track::automationRead (t))
+        t.setProperty (ids::automationMode, "read", um); // otherwise the drawing would be ignored
+
+    juce::Array<juce::var> written;
+    for (const auto& p : automation::points (lane))
+        written.add (makeObject ({ { "seconds", samplesToSeconds (p.time) }, { "db", dbOrNull (p.db) } }));
+    return { true, makeObject ({ { "track", track::name (t) }, { "points", written } }), {} };
 }
 
 RemoteTools::Result RemoteTools::setMaster (const juce::var& args)

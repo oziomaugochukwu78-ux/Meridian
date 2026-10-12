@@ -634,7 +634,7 @@ std::unique_ptr<RenderGraph> EngineBridge::buildGraph (double sampleRate, int ma
                     continue;
                 std::vector<dsp::AutomationPoint> points;
                 for (const auto& p : lane)
-                    points.push_back ({ (juce::int64) p[ids::time], decibelsToGain ((double) p[ids::value]) });
+                    points.push_back ({ (juce::int64) p[ids::time], (double) p[ids::value] }); // dB; the engine converts per sample
                 render.volumeAutomation = dsp::AutomationCurve (std::move (points));
             }
 

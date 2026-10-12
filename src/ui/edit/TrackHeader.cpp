@@ -1,5 +1,6 @@
 #include "TrackHeader.h"
 
+#include "model/Automation.h"
 #include "ui/Theme.h"
 
 namespace meridian
@@ -164,7 +165,8 @@ void TrackHeader::showMenu()
 {
     juce::PopupMenu menu;
     menu.addItem (1, "Rename...");
-    menu.addItem (2, track::channels (trackNode) == 1 ? "Make Stereo" : "Make Mono");
+    menu.addItem (2, track::channels (trackNode) == 1 ? "Make Stereo" : "Make Mono", ! track::isAux (trackNode));
+    menu.addItem (4, "Clear Volume Automation", automation::volumeLane (trackNode).isValid());
     menu.addSeparator();
     menu.addItem (3, "Delete Track");
 
@@ -181,6 +183,11 @@ void TrackHeader::showMenu()
                             {
                                 um->beginNewTransaction ("Change Track Format");
                                 self.trackNode.setProperty (ids::channels, track::channels (self.trackNode) == 1 ? 2 : 1, um);
+                            }
+                            else if (result == 4 && um != nullptr)
+                            {
+                                um->beginNewTransaction ("Clear Automation");
+                                automation::clear (self.trackNode, um);
                             }
                             else if (result == 3)
                                 self.app.deleteTrack (self.trackNode); // destroys this header: nothing after this

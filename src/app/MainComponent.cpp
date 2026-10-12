@@ -270,7 +270,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& c)
     using namespace commands;
     c.addArray ({ dashboard, openSession, saveSession, importAudio, bounceMix,
                   undo, redo, separateClip, deleteSelection, elasticAudio, zoomIn, zoomOut,
-                  slipMode, gridMode, trimTool, selectorTool, grabberTool, smartTool,
+                  slipMode, gridMode, trimTool, selectorTool, grabberTool, smartTool, pencilTool,
                   newTracks, deleteTrack,
                   playStop, record, returnToZero,
                   playbackEngine, pluginManager, toggleRemoteControl, remoteControlInfo,
@@ -343,6 +343,8 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                                info.addDefaultKeypress (K::F8Key, 0); info.setTicked (edit.tool == EditTool::grabber); break;
         case smartTool:        info.setInfo ("Smart Tool", "", "Tools", 0);
                                info.addDefaultKeypress (K::F9Key, 0); info.setTicked (edit.tool == EditTool::smart); break;
+        case pencilTool:       info.setInfo ("Pencil (draw automation)", "", "Tools", 0);
+                               info.addDefaultKeypress (K::F10Key, 0); info.setTicked (edit.tool == EditTool::pencil); break;
 
         case newTracks:        info.setInfo ("New Track...", "Create new tracks", "Track", 0);
                                info.addDefaultKeypress ('n', cmd | shift); info.setActive (hasSession); break;
@@ -403,6 +405,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case selectorTool:    edit.setTool (EditTool::selector); break;
         case grabberTool:     edit.setTool (EditTool::grabber); break;
         case smartTool:       edit.setTool (EditTool::smart); break;
+        case pencilTool:      edit.setTool (EditTool::pencil); break;
 
         case newTracks:       NewTracksComponent::show (app); break;
         case deleteTrack:
@@ -478,7 +481,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int index, const juce::String&)
             for (const auto id : { slipMode, gridMode })
                 tools.addCommandItem (&commandManager, id);
             tools.addSeparator();
-            for (const auto id : { trimTool, selectorTool, grabberTool, smartTool })
+            for (const auto id : { trimTool, selectorTool, grabberTool, smartTool, pencilTool })
                 tools.addCommandItem (&commandManager, id);
             menu.addSubMenu ("Modes and Tools", tools);
             break;

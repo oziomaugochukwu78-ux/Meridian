@@ -1,6 +1,9 @@
 #include "TrackLane.h"
 
+#include "model/Automation.h"
 #include "ui/Theme.h"
+
+#include <dsp/FaderTaper.h>
 
 namespace meridian
 {
@@ -34,8 +37,13 @@ void TrackLane::rebuildClips()
 
 void TrackLane::layoutClips()
 {
+    // With the Pencil, clicks go to the lane (automation), not to the clips.
+    const bool clipsClickable = editState.tool != EditTool::pencil;
     for (auto* c : clips)
+    {
         c->updateLayout (getWidth(), getHeight());
+        c->setInterceptsMouseClicks (clipsClickable, clipsClickable);
+    }
     repaint();
 }
 
@@ -67,12 +75,16 @@ void TrackLane::valueTreePropertyChanged (juce::ValueTree& tree, const juce::Ide
         layoutClips();
     else if (tree == trackNode && property == ids::colour)
         rebuildClips();
+    else if (tree.hasType (ids::POINT) || (tree == trackNode && (property == ids::automationMode || property == ids::volumeDb)))
+        repaint(); // automation line
 }
 
 void TrackLane::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree&)
 {
     if (parent.hasType (ids::CLIPS))
         rebuildClips();
+    else if (parent.hasType (ids::LANE) || parent.hasType (ids::AUTOMATION))
+        repaint();
 }
 
 void TrackLane::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int)
@@ -82,6 +94,10 @@ void TrackLane::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree&
         if (editState.selectedClip == child)
             editState.selectClip ({});
         rebuildClips();
+    }
+    else if (parent.hasType (ids::LANE) || parent.hasType (ids::AUTOMATION))
+    {
+        repaint();
     }
 }
 
@@ -145,8 +161,139 @@ void TrackLane::paintOverChildren (juce::Graphics& g)
         g.drawVerticalLine ((int) x2, 0.0f, (float) getHeight());
     }
 
+    paintAutomation (g);
+
     g.setColour (theme::playhead);
     g.drawVerticalLine (playheadX(), 0.0f, (float) getHeight());
+}
+
+//==============================================================================
+// Volume automation: same scale as the mixer fader (0 dB at 75 % of the height)
+
+float TrackLane::dbToY (double db) const
+{
+    const float usable = (float) getHeight() - 8.0f;
+    return 4.0f + usable * (float) (1.0 - dsp::FaderTaper::dbToPosition (db));
+}
+
+double TrackLane::yToDb (float y) const
+{
+    const float usable = juce::jmax (1.0f, (float) getHeight() - 8.0f);
+    return dsp::FaderTaper::positionToDb (juce::jlimit (0.0, 1.0, 1.0 - (double) (y - 4.0f) / usable));
+}
+
+void TrackLane::paintAutomation (juce::Graphics& g)
+{
+    const bool pencil = editState.tool == EditTool::pencil;
+    const auto pts = automation::points (automation::volumeLane (trackNode));
+    if (pts.empty() && ! pencil)
+        return;
+
+    const bool active = track::automationRead (trackNode);
+    const auto colour = (active ? theme::automation : theme::textDim).withAlpha (pts.empty() ? 0.5f : 0.95f);
+
+    if (pts.empty())
+    {
+        // Pencil over an unautomated track: show where the fader is, as a guide.
+        const float y = dbToY (track::volumeDb (trackNode));
+        const float dashes[] = { 4.0f, 4.0f };
+        g.setColour (colour);
+        g.drawDashedLine (juce::Line<float> (0.0f, y, (float) getWidth(), y), dashes, 2, 1.0f);
+        return;
+    }
+
+    juce::Path line;
+    line.startNewSubPath (0.0f, dbToY (automation::valueAt (pts, editState.xToSample (0.0))));
+    for (const auto& p : pts)
+    {
+        const auto x = (float) juce::jlimit (-10.0, getWidth() + 10.0, editState.sampleToX (p.time));
+        line.lineTo (x, dbToY (p.db));
+    }
+    line.lineTo ((float) getWidth(), dbToY (pts.back().db));
+
+    g.setColour (colour);
+    g.strokePath (line, juce::PathStrokeType (1.6f));
+
+    for (const auto& p : pts)
+    {
+        const auto x = (float) editState.sampleToX (p.time);
+        if (x >= -4.0f && x <= getWidth() + 4.0f)
+            g.fillRect (juce::Rectangle<float> (x - 2.5f, dbToY (p.db) - 2.5f, 5.0f, 5.0f));
+    }
+}
+
+void TrackLane::pencilDown (const juce::MouseEvent& e)
+{
+    auto* um = app.getUndoManager();
+    if (um == nullptr)
+        return;
+
+    um->beginNewTransaction ("Draw Automation");
+    auto lane = automation::getOrCreateVolumeLane (trackNode, um);
+    const auto time = juce::jmax<juce::int64> (0, editState.xToSample (e.position.x));
+    const auto tolerance = (juce::int64) (6.0 * editState.samplesPerPixel);
+
+    // Near an existing point: Alt-click deletes it, a drag moves it.
+    juce::ValueTree nearest;
+    juce::int64 nearestDistance = tolerance + 1;
+    for (const auto& p : lane)
+    {
+        const auto distance = std::abs ((juce::int64) p[ids::time] - time);
+        if (distance < nearestDistance && std::abs (dbToY ((double) p[ids::value]) - e.position.y) < 8.0f)
+        {
+            nearestDistance = distance;
+            nearest = p;
+        }
+    }
+
+    if (nearest.isValid())
+    {
+        if (e.mods.isAltDown())
+        {
+            lane.removeChild (nearest, um);
+            pencilAction = PencilAction::none;
+        }
+        else
+        {
+            draggedPoint = nearest;
+            pencilAction = PencilAction::movePoint;
+        }
+        return;
+    }
+
+    automation::addPoint (lane, time, yToDb (e.position.y), um);
+    lastDrawnTime = time;
+    lastDrawnX = e.position.x;
+    pencilAction = PencilAction::draw;
+}
+
+void TrackLane::pencilDrag (const juce::MouseEvent& e)
+{
+    auto* um = app.getUndoManager();
+    if (um == nullptr)
+        return;
+
+    const auto time = juce::jmax<juce::int64> (0, editState.xToSample (e.position.x));
+
+    if (pencilAction == PencilAction::movePoint && draggedPoint.isValid())
+    {
+        draggedPoint.setProperty (ids::time, time, um);
+        draggedPoint.setProperty (ids::value, yToDb (e.position.y), um);
+        return;
+    }
+
+    if (pencilAction != PencilAction::draw || std::abs (e.position.x - lastDrawnX) < 3.0f)
+        return; // thin freehand strokes to a point every few pixels
+
+    // Freehand: what the stroke passes over is replaced.
+    auto lane = automation::volumeLane (trackNode);
+    if (time > lastDrawnTime)
+        automation::removeRange (lane, lastDrawnTime + 1, time, um);
+    else
+        automation::removeRange (lane, time, lastDrawnTime - 1, um);
+    automation::addPoint (lane, time, yToDb (e.position.y), um);
+    lastDrawnTime = time;
+    lastDrawnX = e.position.x;
 }
 
 void TrackLane::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
@@ -159,6 +306,12 @@ void TrackLane::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWhee
 
 void TrackLane::mouseDown (const juce::MouseEvent& e)
 {
+    if (editState.tool == EditTool::pencil)
+    {
+        pencilDown (e);
+        return;
+    }
+
     draggingSelection = false;
     selectionAnchor = editState.snap (juce::jmax<juce::int64> (0, editState.xToSample (e.position.x)));
     editState.setTimeSelection (selectionAnchor, selectionAnchor, { track::id (trackNode) });
@@ -166,6 +319,12 @@ void TrackLane::mouseDown (const juce::MouseEvent& e)
 
 void TrackLane::mouseDrag (const juce::MouseEvent& e)
 {
+    if (editState.tool == EditTool::pencil)
+    {
+        pencilDrag (e);
+        return;
+    }
+
     if (e.getDistanceFromDragStart() < 3 && ! draggingSelection)
         return;
     draggingSelection = true;
@@ -176,6 +335,13 @@ void TrackLane::mouseDrag (const juce::MouseEvent& e)
 
 void TrackLane::mouseUp (const juce::MouseEvent&)
 {
+    if (editState.tool == EditTool::pencil)
+    {
+        pencilAction = PencilAction::none;
+        draggedPoint = {};
+        return;
+    }
+
     // A click without a drag places the playback cursor (the insertion point).
     if (! draggingSelection)
         app.locate (selectionAnchor);

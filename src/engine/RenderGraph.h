@@ -112,7 +112,7 @@ struct TrackRender
     std::vector<ClipSegment> segments;             ///< sorted by start
     std::vector<std::shared_ptr<InsertSlot>> inserts;
     std::shared_ptr<RecordTake> take;
-    dsp::AutomationCurve volumeAutomation;         ///< values are linear gain
+    dsp::AutomationCurve volumeAutomation;         ///< values in dB, interpolated linearly in dB
 
     // Scratch, sized for the graph's maxBlockSize when the graph is built.
     juce::AudioBuffer<float> buffer;

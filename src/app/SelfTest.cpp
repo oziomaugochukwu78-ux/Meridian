@@ -2,6 +2,7 @@
 
 #include "CommandIds.h"
 #include "media/AudioImporter.h"
+#include "model/Automation.h"
 #include "model/Routing.h"
 #include "media/TimeStretchEngine.h"
 #include "ui/dialogs/DashboardComponent.h"
@@ -766,7 +767,7 @@ void SelfTest::testMcpTools()
     const auto list = rpc ("tools/list", juce::var (new juce::DynamicObject()));
     const auto* toolArray = list["result"]["tools"].getArray();
     expect ("tools/list describes every tool with a JSON schema",
-            toolArray != nullptr && toolArray->size() == 24 && (*toolArray)[0]["inputSchema"].isObject(),
+            toolArray != nullptr && toolArray->size() == 25 && (*toolArray)[0]["inputSchema"].isObject(),
             juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
 
     auto r = toolCall ("get_status", "{}");
@@ -825,6 +826,23 @@ void SelfTest::testMcpTools()
     r = toolCall ("show_window", R"({"window":"mix"})");
     expect ("show_window switches to the mixer", ! failed (r) && main.getActiveWindow() == WindowKind::mix, callText (r));
     main.showWindow (WindowKind::edit);
+
+    // Volume automation drawn by the AI, verified in the audio: a straight line
+    // from -40 dB to 0 dB must pass -20 dB halfway (interpolation in dB, as drawn).
+    clearTracks();
+    addToneTrack ("Automated", 1, media.getChildFile ("tone1k_mono.wav"), clipStart);
+    r = toolCall ("set_volume_automation", R"({"track":"Automated","points":[{"seconds":0.5,"db":-40},{"seconds":1.5,"db":0}]})");
+    expect ("set_volume_automation writes the breakpoints", ! failed (r) && callText (r).contains ("-40"), callText (r));
+    {
+        const auto bounced = bounce ("ai_automation", 0, clipStart + (juce::int64) (2.0 * sampleRate));
+        const auto audio = readAudio (bounced.file);
+        const double unity = 0.5 * std::sqrt (0.5) / std::sqrt (2.0); // RMS of the tone at 0 dB (mono, centre)
+        const auto mid = dsp::measureLevels (audio.getReadPointer (0, 48000 - 240), 480); // t = 1.0 s
+        expectNear ("halfway along the line the level is -20 dB (linear in dB, as drawn)",
+                    db (mid.rms / unity), -20.0, 0.5, "dB");
+    }
+    r = toolCall ("set_volume_automation", R"({"track":"Automated","points":[]})");
+    expect ("an empty point list removes the automation", ! failed (r) && callText (r).contains ("removed"), callText (r));
 
     const auto viaWebSocket = juce::String (tools.handleJsonMessage (R"({"tool":"get_status","arguments":{}})"));
     expect ("the same tools work as JSON over the WebSocket", (bool) juce::JSON::parse (viaWebSocket)["ok"], viaWebSocket.substring (0, 80));
@@ -1082,6 +1100,11 @@ void SelfTest::buildShowcaseSession()
     routing::findSend (keys, 0).setProperty (ids::levelDb, -12.0, nullptr);
     bass.setProperty (ids::volumeDb, -4.5, nullptr);
     bass.setProperty (ids::pan, -0.3, nullptr);
+    {
+        auto lane = automation::getOrCreateVolumeLane (bass, nullptr);
+        for (const auto& [seconds, level] : { std::pair { 1.0, -30.0 }, { 2.0, -2.0 }, { 3.2, -2.0 }, { 4.0, -18.0 } })
+            automation::addPoint (lane, (juce::int64) (seconds * sampleRate), level, nullptr);
+    }
     vox.setProperty (ids::solo, false, nullptr);
     vox.setProperty (ids::pan, 0.25, nullptr);
     drums.setProperty (ids::mute, false, nullptr);
@@ -1301,6 +1324,46 @@ void SelfTest::testUserInterface()
             juce::String (track::clips (t).getNumChildren()) + " clips");
     commands.invokeDirectly (commands::undo, false);
     expect ("Undo (Ctrl+Z) restores it", track::clips (t).getNumChildren() == 3, juce::String (track::clips (t).getNumChildren()) + " clips");
+
+    // Pencil: draw a rising volume line over the clips, then edit it.
+    beginGroup ("Pencil (automation drawing, simulated mouse)");
+    commands.invokeDirectly (commands::pencilTool, false);
+    expect ("F10 selects the Pencil", view.tool == EditTool::pencil, {});
+
+    const float laneHeight = (float) lane->getHeight();
+    auto yFor = [&] (double dbValue) { return 4.0f + (laneHeight - 8.0f) * (float) (1.0 - dsp::FaderTaper::dbToPosition (dbValue)); };
+    const juce::Point<float> strokeStart ((float) view.sampleToX (clipStart + 4800), laneHeight * 0.9f);
+
+    lane->mouseDown (mouseEvent (*lane, strokeStart, strokeStart, false));
+    for (int i = 1; i <= 10; ++i)
+        lane->mouseDrag (mouseEvent (*lane, strokeStart + juce::Point<float> (i * 20.0f, -0.07f * laneHeight * (float) i), strokeStart, true));
+    lane->mouseUp (mouseEvent (*lane, strokeStart, strokeStart, true));
+
+    auto drawn = automation::points (automation::volumeLane (t));
+    expect ("a pencil stroke over the clips creates breakpoints", drawn.size() >= 10, juce::String ((int) drawn.size()) + " points");
+    if (drawn.size() >= 2)
+    {
+        expect ("the drawn line rises left to right", drawn.front().db < drawn.back().db,
+                fmt (drawn.front().db, 1) + " dB to " + fmt (drawn.back().db, 1) + " dB");
+
+        const auto first = drawn.front();
+        const juce::Point<float> firstPos ((float) view.sampleToX (first.time), yFor (first.db));
+        drag (*lane, firstPos, { 0.0f, -25.0f });
+        const auto moved = automation::points (automation::volumeLane (t)).front();
+        expect ("dragging a point with the Pencil moves it", moved.db > first.db + 1.0,
+                fmt (first.db, 1) + " dB -> " + fmt (moved.db, 1) + " dB");
+
+        const auto before = automation::points (automation::volumeLane (t));
+        const juce::Point<float> lastPos ((float) view.sampleToX (before.back().time), yFor (before.back().db));
+        lane->mouseDown (mouseEvent (*lane, lastPos, lastPos, false, juce::ModifierKeys::altModifier));
+        lane->mouseUp (mouseEvent (*lane, lastPos, lastPos, false, juce::ModifierKeys::altModifier));
+        expect ("Alt-click deletes a point", automation::points (automation::volumeLane (t)).size() == before.size() - 1,
+                juce::String ((int) automation::points (automation::volumeLane (t)).size()) + " points left");
+
+        um.undo();
+        expect ("undo restores the deleted point", automation::points (automation::volumeLane (t)).size() == before.size(), {});
+    }
+    view.setTool (EditTool::smart);
 
     beginGroup ("Mix window (real controls)");
     main.showWindow (WindowKind::mix);
