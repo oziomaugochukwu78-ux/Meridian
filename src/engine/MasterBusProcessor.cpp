@@ -50,12 +50,12 @@ void MasterBusProcessor::updateCurveIfChanged() noexcept
         curve.setType (type == 1 ? dsp::SaturationCurve::Type::cubic : dsp::SaturationCurve::Type::tanh);
         appliedCurve = type;
     }
-    if (drive != appliedDrive)
+    if (! juce::exactlyEqual (drive, appliedDrive))
     {
         curve.setDriveDecibels (drive);
         appliedDrive = drive;
     }
-    if (asym != appliedCharacter)
+    if (! juce::exactlyEqual (asym, appliedCharacter))
     {
         curve.setAsymmetry (asym);
         appliedCharacter = asym;
