@@ -62,6 +62,7 @@ void SelfTest::start()
         testElasticAudio();
         testPluginHosting();
         testBusesAndSends();
+        testGoldenRenders();
         testMcpTools();
         testRemoteCommands();
     }
@@ -105,6 +106,34 @@ juce::File SelfTest::writeTone (const juce::String& name, double rate, double se
         const auto value = (float) (amplitude * std::sin (juce::MathConstants<double>::twoPi * frequency * i / rate));
         for (int ch = 0; ch < channels; ++ch)
             buffer.setSample (ch, i, value);
+    }
+    writer->writeFromAudioSampleBuffer (buffer, 0, length);
+    return file;
+}
+
+juce::File SelfTest::writeNoise (const juce::String& name, double seconds, double amplitudeDb, juce::uint32 seed)
+{
+    const auto file = media.getChildFile (name + ".wav");
+    juce::String error;
+    auto writer = createSessionWriter (file, sampleRate, 1, 32, false, error);
+    if (writer == nullptr)
+    {
+        expect ("write test noise " + name, false, error);
+        return file;
+    }
+
+    // xorshift32: the same sequence on every platform and compiler, unlike
+    // std:: distributions, so reference renders stay comparable everywhere.
+    const int length = (int) std::llround (seconds * sampleRate);
+    const double amplitude = std::pow (10.0, amplitudeDb / 20.0);
+    juce::AudioBuffer<float> buffer (1, length);
+    auto state = seed != 0 ? seed : 1u;
+    for (int i = 0; i < length; ++i)
+    {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        buffer.setSample (0, i, (float) (amplitude * ((double) state / 2147483648.0 - 1.0)));
     }
     writer->writeFromAudioSampleBuffer (buffer, 0, length);
     return file;
@@ -720,6 +749,149 @@ void SelfTest::testBusesAndSends()
     {
         expect ("reload routed session", false, error);
     }
+    clearTracks();
+}
+
+//==============================================================================
+// Reference renders ("golden files"): fixed mixes that exercise most of the
+// signal path at once (clip gain, fades, pan, automation, pre-fader send,
+// aux bus, master console). Each render is null-tested against the copy in
+// tests/golden. Any change that alters the sound by more than -120 dBFS
+// fails, so nothing can quietly make the audio worse. After a deliberate,
+// reviewed change to the sound, rerun with --update-golden and commit the
+// new references.
+
+void SelfTest::compareWithReference (const juce::String& name, const BounceResult& r)
+{
+    if (! r.ok)
+        return;
+
+    const auto rendered = readAudio (r.file);
+    double peak = 0.0;
+    for (int ch = 0; ch < rendered.getNumChannels(); ++ch)
+        peak = juce::jmax (peak, (double) rendered.getMagnitude (ch, 0, rendered.getNumSamples()));
+    expect (name + ": mix is at a sensible level (not silent, not clipping)", db (peak) > -30.0 && db (peak) < -0.1,
+            "peak " + fmt (db (peak), 2) + " dBFS");
+
+#ifdef MERIDIAN_GOLDEN_DIR
+    const auto reference = juce::File (MERIDIAN_GOLDEN_DIR).getChildFile (name + ".wav");
+#else
+    const juce::File reference;
+    expect (name + ": reference folder configured", false, "MERIDIAN_GOLDEN_DIR is not defined");
+    return;
+#endif
+
+    if (updateGolden)
+    {
+        reference.getParentDirectory().createDirectory();
+        expect (name + ": reference render updated", r.file.copyFileTo (reference), reference.getFullPathName());
+        return;
+    }
+
+    if (! reference.existsAsFile())
+    {
+        expect (name + ": reference render exists", false,
+                reference.getFullPathName() + " is missing; create it with --update-golden");
+        return;
+    }
+
+    const auto expected = readAudio (reference);
+    if (expected.getNumChannels() != rendered.getNumChannels() || expected.getNumSamples() != rendered.getNumSamples())
+    {
+        expect (name + ": matches the reference render (null test)", false,
+                "shape differs: " + juce::String (rendered.getNumChannels()) + " ch x " + juce::String (rendered.getNumSamples())
+                    + " vs reference " + juce::String (expected.getNumChannels()) + " ch x " + juce::String (expected.getNumSamples()));
+        return;
+    }
+
+    double residualPeak = 0.0, residualEnergy = 0.0, referenceEnergy = 0.0;
+    int differing = 0;
+    for (int ch = 0; ch < rendered.getNumChannels(); ++ch)
+    {
+        const float* a = rendered.getReadPointer (ch);
+        const float* b = expected.getReadPointer (ch);
+        for (int i = 0; i < rendered.getNumSamples(); ++i)
+        {
+            const double d = (double) a[i] - (double) b[i];
+            residualPeak = juce::jmax (residualPeak, std::abs (d));
+            residualEnergy += d * d;
+            referenceEnergy += (double) b[i] * (double) b[i];
+            differing += d != 0.0 ? 1 : 0;
+        }
+    }
+
+    const auto nullDepth = residualEnergy > 0.0 ? 10.0 * std::log10 (residualEnergy / referenceEnergy) : -400.0;
+    expect (name + ": matches the reference render (null test, residual below -120 dBFS)", db (residualPeak) < -120.0,
+            "residual peak " + fmt (db (residualPeak), 1) + " dBFS, null depth " + fmt (nullDepth, 1) + " dB, "
+                + juce::String (differing) + " samples differ");
+}
+
+void SelfTest::testGoldenRenders()
+{
+    beginGroup ("Reference renders (golden-file null tests)");
+    auto* session = app.getSession();
+    const auto end = clipStart + (juce::int64) (2.0 * sampleRate) + 4800;
+    clearTracks();
+    setConsole (false);
+
+    // The reference mix. Every value here is part of the reference: changing
+    // one requires --update-golden.
+    const auto low = writeTone ("golden_tone220_stereo", sampleRate, 2.0, 220.0, -12.0, 2);
+    const auto noise = writeNoise ("golden_noise", 2.0, -18.0, 0x4d455249u);
+    const auto mid = media.getChildFile ("tone1k_mono.wav");
+
+    auto pad = addToneTrack ("Pad", 2, low, clipStart);
+    pad.setProperty (ids::volumeDb, -2.0, nullptr);
+    auto padClip = track::clips (pad).getChild (0);
+    padClip.setProperty (ids::gainDb, -1.5, nullptr);
+    padClip.setProperty (ids::fadeIn, 2400, nullptr);
+    padClip.setProperty (ids::fadeOut, 4800, nullptr);
+
+    auto hiss = addToneTrack ("Noise", 1, noise, clipStart);
+    hiss.setProperty (ids::pan, -0.6, nullptr);
+    auto lane = automation::getOrCreateVolumeLane (hiss, nullptr);
+    automation::addPoint (lane, clipStart, -20.0, nullptr);
+    automation::addPoint (lane, clipStart + 48000, -3.0, nullptr);
+    automation::addPoint (lane, clipStart + 96000, -10.0, nullptr);
+
+    auto lead = addToneTrack ("Lead", 1, mid, clipStart);
+    lead.setProperty (ids::pan, 0.5, nullptr);
+    lead.setProperty (ids::volumeDb, -8.0, nullptr);
+
+    auto verb = session->addTrack ("Verb", 2, nullptr, Session::TrackKind::aux);
+    verb.setProperty (ids::volumeDb, -3.0, nullptr);
+    verb.setProperty (ids::pan, 0.2, nullptr);
+    expect ("reference mix: pre-fader send to the aux", routing::setSend (*session, lead, 0, track::id (verb), nullptr), {});
+    auto send = routing::findSend (lead, 0);
+    send.setProperty (ids::levelDb, -4.0, nullptr);
+    send.setProperty (ids::preFader, true, nullptr);
+
+    const auto clean = bounce ("golden_mix_clean", 0, end);
+    compareWithReference ("golden_mix_clean", clean);
+
+    // Sensitivity: a 0.001 dB level change, far below audibility, must already
+    // show up well above the -120 dBFS threshold.
+    if (clean.ok)
+    {
+        auto altered = readAudio (clean.file);
+        const auto original = readAudio (clean.file);
+        altered.applyGain ((float) std::pow (10.0, 0.001 / 20.0));
+        double residual = 0.0;
+        for (int ch = 0; ch < altered.getNumChannels(); ++ch)
+            for (int i = 0; i < altered.getNumSamples(); ++i)
+                residual = juce::jmax (residual, std::abs ((double) altered.getSample (ch, i) - original.getSample (ch, i)));
+        expect ("null test detects a 0.001 dB level change (proves it can fail)", db (residual) > -120.0,
+                "residual peak " + fmt (db (residual), 1) + " dBFS");
+    }
+
+    setConsole (true, 9.0, 0.4);
+    compareWithReference ("golden_mix_console_tanh", bounce ("golden_mix_console_tanh", 0, end));
+
+    setConsole (true, 6.0, 0.0);
+    session->getState().setProperty (ids::consoleCurve, 1, nullptr);
+    compareWithReference ("golden_mix_console_cubic", bounce ("golden_mix_console_cubic", 0, end));
+
+    setConsole (false);
     clearTracks();
 }
 

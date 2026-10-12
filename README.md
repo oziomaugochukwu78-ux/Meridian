@@ -224,6 +224,12 @@ It drives the real application and checks the results numerically. Each scenario
 
 It writes `report.txt`, `report.json`, every bounce, and PNG screenshots of every window and dialog to the output folder, and exits with 0 only if every check passed.
 
+**Reference renders (golden files).** Three fixed mixes are bounced and null-tested against the references in `tests/golden`. Together they exercise clip gain, fades, pan, automation, a pre-fader send, an aux bus, and both console curves. A render that differs from its reference by more than -120 dBFS fails. For scale, a 0.001 dB level change leaves a -84 dBFS residual, and the test checks that it detects one. So no change can alter the sound unnoticed. After a deliberate change to the sound, regenerate the references, listen to or measure the difference, and commit the new files with an explanation:
+
+```bash
+build\app\src\Meridian_artefacts\Debug\Meridian.exe --self-test build\self-test --update-golden
+```
+
 ## Licensing
 
 Meridian's own code is intended for release under the **GNU AGPLv3**, as required for open-source use of JUCE 9. Its components:

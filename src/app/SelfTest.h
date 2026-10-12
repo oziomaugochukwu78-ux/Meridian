@@ -30,6 +30,9 @@ public:
 
     void start();
 
+    /** Rewrite the reference renders instead of comparing against them. */
+    void setUpdateGoldenFiles (bool shouldUpdate) noexcept { updateGolden = shouldUpdate; }
+
 private:
     struct Check
     {
@@ -58,6 +61,7 @@ private:
     void testBusesAndSends();
     void testMcpTools();
     void testRemoteCommands();
+    void testGoldenRenders();
 
     // Phase 2
     bool setUpDelayCompensationTest();
@@ -80,6 +84,8 @@ private:
     // Helpers
     juce::File writeTone (const juce::String& name, double sampleRate, double seconds, double frequency,
                           double amplitudeDb, int channels);
+    juce::File writeNoise (const juce::String& name, double seconds, double amplitudeDb, juce::uint32 seed);
+    void compareWithReference (const juce::String& name, const BounceResult&);
     juce::ValueTree addToneTrack (const juce::String& name, int channels, const juce::File& file, juce::int64 start);
     BounceResult bounce (const juce::String& name, juce::int64 start, juce::int64 end);
     juce::AudioBuffer<float> readAudio (const juce::File&, double* sampleRate = nullptr);
@@ -97,6 +103,7 @@ private:
     int phase = 0;
     int ticks = 0;
     bool includeRecording = false;
+    bool updateGolden = false;
     juce::ValueTree recordTrack;
     juce::int64 recordStartPosition = 0;
     juce::File recordingToDelete;

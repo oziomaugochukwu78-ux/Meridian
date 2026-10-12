@@ -116,7 +116,9 @@ target_compile_definitions(Meridian PRIVATE
     JUCE_PLUGINHOST_LV2=1
     JUCE_PLUGINHOST_AU=$<BOOL:${APPLE}>
     JUCE_ASIO=$<AND:$<BOOL:${WIN32}>,$<BOOL:${MERIDIAN_ENABLE_ASIO}>>
-    MERIDIAN_WITH_RUBBERBAND=$<BOOL:${MERIDIAN_WITH_RUBBERBAND}>)
+    MERIDIAN_WITH_RUBBERBAND=$<BOOL:${MERIDIAN_WITH_RUBBERBAND}>
+    # Reference renders for the self test's null tests (see SelfTest::testGoldenRenders).
+    MERIDIAN_GOLDEN_DIR="${PROJECT_SOURCE_DIR}/tests/golden")
 
 target_link_libraries(Meridian
     PRIVATE
