@@ -23,7 +23,10 @@ namespace meridian
 class SelfTest final : private juce::Timer
 {
 public:
-    SelfTest (AppController&, MainComponent&, juce::File outputFolder, std::function<void (int failures)> onFinished);
+    /** includeRecording: also record ~1 s from the default input (opt-in, since it
+        uses the microphone). The recording is deleted after it is measured. */
+    SelfTest (AppController&, MainComponent&, juce::File outputFolder, bool includeRecording,
+              std::function<void (int failures)> onFinished);
 
     void start();
 
@@ -59,6 +62,8 @@ private:
     void startLivePlayback();
     void finishLivePlayback();
     void checkStopReturned();
+    bool startRecordingTest();
+    void finishRecordingTest();
     void testUserInterface();
     void captureScreens();
     void finish();
@@ -87,6 +92,10 @@ private:
     juce::String group;
     int phase = 0;
     int ticks = 0;
+    bool includeRecording = false;
+    juce::ValueTree recordTrack;
+    juce::int64 recordStartPosition = 0;
+    juce::File recordingToDelete;
     juce::int64 livePositionAtStart = 0;
     double sampleRate = 48000.0;
 };

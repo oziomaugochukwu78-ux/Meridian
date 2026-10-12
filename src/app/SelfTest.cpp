@@ -29,8 +29,8 @@ double db (double gain) { return dsp::gainToDb (gain); }
 juce::String fmt (double v, int decimals = 3) { return juce::String (v, decimals); }
 } // namespace
 
-SelfTest::SelfTest (AppController& a, MainComponent& m, juce::File folder, std::function<void (int)> done)
-    : app (a), main (m), output (std::move (folder)), onFinished (std::move (done))
+SelfTest::SelfTest (AppController& a, MainComponent& m, juce::File folder, bool recording, std::function<void (int)> done)
+    : app (a), main (m), output (std::move (folder)), onFinished (std::move (done)), includeRecording (recording)
 {
 }
 
@@ -675,8 +675,35 @@ void SelfTest::timerCallback()
             if (ticks >= 2)
             {
                 checkStopReturned();
+                ticks = 0;
+                if (includeRecording && startRecordingTest())
+                {
+                    phase = 5;
+                }
+                else
+                {
+                    testUserInterface();
+                    buildShowcaseSession(); // for the screenshots
+                    phase = 4;
+                }
+            }
+            break;
+
+        case 5: // record for 1.2 s
+            if (ticks >= 12)
+            {
+                app.transportStop();
+                ticks = 0;
+                phase = 6;
+            }
+            break;
+
+        case 6: // the take becomes a clip once the audio thread has released it
+            if (track::clips (recordTrack).getNumChildren() > 0 || ticks >= 50)
+            {
+                finishRecordingTest();
                 testUserInterface();
-                buildShowcaseSession(); // for the screenshots
+                buildShowcaseSession();
                 ticks = 0;
                 phase = 4;
             }
@@ -761,6 +788,79 @@ void SelfTest::checkStopReturned()
     beginGroup ("Live playback (audio device)");
     const auto position = app.getEngine().getTransport().getPosition();
     expect ("stop returns to the start point", position == livePositionAtStart, "position " + juce::String (position));
+}
+
+//==============================================================================
+// Recording (opt-in: uses the microphone)
+
+bool SelfTest::startRecordingTest()
+{
+    beginGroup ("Recording (microphone)");
+    auto* device = app.getDeviceManager().getCurrentAudioDevice();
+    if (device == nullptr || ! app.getEngine().isDeviceRunning())
+    {
+        expect ("audio device available for recording", false, "no device running");
+        return false;
+    }
+
+    const int inputs = device->getActiveInputChannels().countNumberOfSetBits();
+    expect ("audio input available", inputs > 0, juce::String (inputs) + " active input(s) on " + device->getName());
+    if (inputs == 0)
+        return false;
+
+    clearTracks();
+    recordTrack = app.getSession()->addTrack ("Rec Test", 1, nullptr);
+    recordTrack.setProperty (ids::inputChannel, 0, nullptr);
+    recordTrack.setProperty (ids::recordArm, true, nullptr);
+    app.getBridge().rebuildNow();
+
+    recordStartPosition = app.getEngine().getTransport().getPosition();
+    const auto started = app.transportRecord();
+    expect ("record starts on the armed track", started.wasOk(), started.getErrorMessage());
+    return started.wasOk();
+}
+
+void SelfTest::finishRecordingTest()
+{
+    beginGroup ("Recording (microphone)");
+    auto clipsNode = track::clips (recordTrack);
+    expect ("the take becomes a clip on the armed track", clipsNode.getNumChildren() == 1,
+            juce::String (clipsNode.getNumChildren()) + " clip(s)");
+    if (clipsNode.getNumChildren() == 0)
+        return;
+
+    auto c = clipsNode.getChild (0);
+    const auto file = app.getSession()->resolveStoredPath (c[ids::file].toString());
+    expectNear ("take length matches the recording time", (double) clip::length (c) / sampleRate, 1.2, 0.3, "s");
+    expect ("take starts where recording started", clip::start (c) == recordStartPosition,
+            "clip at " + juce::String (clip::start (c)) + ", recording started at " + juce::String (recordStartPosition));
+    expect ("take is stored in the session's Audio Files folder", file.isAChildOf (app.getSession()->getAudioFolder()),
+            file.getFileName());
+
+    {
+        std::unique_ptr<juce::AudioFormatReader> reader (app.getFormatManager().createReaderFor (file));
+        expect ("take file is a valid 24-bit, 48 kHz WAV",
+                reader != nullptr && reader->bitsPerSample == 24 && reader->sampleRate == 48000.0,
+                reader != nullptr ? juce::String ((int) reader->bitsPerSample) + "-bit, " + juce::String (reader->sampleRate) + " Hz"
+                                  : juce::String ("unreadable"));
+
+        if (reader != nullptr)
+        {
+            juce::AudioBuffer<float> audio (1, (int) reader->lengthInSamples);
+            reader->read (audio.getArrayOfWritePointers(), 1, 0, audio.getNumSamples());
+            const auto stats = dsp::measureLevels (audio.getReadPointer (0), audio.getNumSamples());
+            expect ("microphone delivered sound (not digital silence)", db (stats.peak) > -120.0,
+                    "peak " + fmt (db (stats.peak), 1) + " dBFS, RMS " + fmt (db (stats.rms), 1)
+                        + " dBFS" + (db (stats.peak) <= -120.0 ? ". If silent: check Windows Settings > Privacy > Microphone" : ""));
+        }
+    }
+
+    // Privacy: the recording is measured, never kept. It is deleted at the end of
+    // the run, once the engine has closed its reader (Windows locks open files).
+    recordTrack.setProperty (ids::recordArm, false, nullptr);
+    clipsNode.removeChild (c, nullptr);
+    recordingToDelete = file;
+    clearTracks();
 }
 
 //==============================================================================
@@ -923,6 +1023,13 @@ void SelfTest::captureScreens()
 
 void SelfTest::finish()
 {
+    if (recordingToDelete != juce::File())
+    {
+        beginGroup ("Recording (microphone)");
+        recordingToDelete.deleteFile();
+        expect ("test recording deleted afterwards", ! recordingToDelete.exists(), recordingToDelete.getFileName());
+    }
+
     int failures = 0;
     juce::String text;
     std::string json = "[";

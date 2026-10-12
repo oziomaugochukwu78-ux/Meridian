@@ -32,7 +32,9 @@ public:
             const auto outputFolder = juce::File::isAbsolutePath (folder)
                                           ? juce::File (folder)
                                           : juce::File::getCurrentWorkingDirectory().getChildFile (folder.isNotEmpty() ? folder : juce::String ("self-test"));
-            selfTest = std::make_unique<SelfTest> (*controller, window->getMainComponent(), outputFolder, [this] (int failures)
+            const bool includeRecording = args.contains ("--test-recording"); // opt-in: uses the microphone
+            selfTest = std::make_unique<SelfTest> (*controller, window->getMainComponent(), outputFolder, includeRecording,
+                                                   [this] (int failures)
             {
                 setApplicationReturnValue (failures == 0 ? 0 : 1);
                 quit();
