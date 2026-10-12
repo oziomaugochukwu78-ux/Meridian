@@ -696,7 +696,7 @@ RemoteTools::Result RemoteTools::getStatus()
         set (bounceInfo, "last_integrated_lufs", std::round (last.integratedLufs * 10.0) / 10.0);
         set (bounceInfo, "last_loudness_range_lu", std::round (last.loudnessRange * 10.0) / 10.0);
         set (bounceInfo, "last_true_peak_dbtp", std::round (last.truePeakDbtp * 10.0) / 10.0);
-        if (last.appliedGainDb != 0.0)
+        if (! juce::exactlyEqual (last.appliedGainDb, 0.0))
             set (bounceInfo, "last_normalization_gain_db", std::round (last.appliedGainDb * 100.0) / 100.0);
         if (last.limitedByCeiling)
             set (bounceInfo, "last_limited_by_true_peak_ceiling", true);
