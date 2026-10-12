@@ -5,7 +5,7 @@
 namespace meridian
 {
 
-/** Meridian's own effects (EQ, Compressor, Limiter, Reverb), hosted through
+/** Meridian's own effects (EQ, Compressor, Limiter, Gate, Delay, Reverb), hosted through
     the normal plug-in path: they appear in the plug-in list, go in insert
     slots, bypass, save their settings in the session, compensate latency and
     open a window exactly like third-party plug-ins. The signal processing

@@ -19,6 +19,8 @@ add_library(meridian_core STATIC
     dsp/FdnReverb.cpp
     dsp/FdnReverb.h
     dsp/FloatCompare.h
+    dsp/Gate.cpp
+    dsp/Gate.h
     dsp/FaderTaper.h
     dsp/Limiter.cpp
     dsp/Limiter.h
@@ -38,6 +40,8 @@ add_library(meridian_core STATIC
     dsp/SignalAnalysis.cpp
     dsp/SignalAnalysis.h
     dsp/SimdConfig.h
+    dsp/StereoDelay.cpp
+    dsp/StereoDelay.h
 
     midi/MidiRecording.cpp
     midi/MidiRecording.h

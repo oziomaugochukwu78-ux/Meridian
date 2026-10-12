@@ -1320,6 +1320,59 @@ void SelfTest::testBuiltinEffects()
                 "correlation " + fmt (correlation, 3));
     }
 
+    // Delay: 100 ms, no feedback, full wet: the tone (0.5..2.5 s) echoes until 2.6 s at the same level.
+    const auto* delayDesc = find ("Meridian Delay");
+    const auto* gateDesc = find ("Meridian Gate");
+    expect ("the delay and gate are in the plug-in list too", delayDesc != nullptr && gateDesc != nullptr, {});
+    if (delayDesc != nullptr && gateDesc != nullptr)
+    {
+        clearTracks();
+        t = addToneTrack ("Echo", 1, tone, clipStart);
+        app.getBridge().insertPlugin (t, 0, *delayDesc, error);
+        call ("set_plugin_parameter", R"({"track":"Echo","slot":"A","parameter":"time","value":100})");
+        call ("set_plugin_parameter", R"({"track":"Echo","slot":"A","parameter":"feedback","value":0})");
+        call ("set_plugin_parameter", R"({"track":"Echo","slot":"A","parameter":"mix","value":1})");
+        r = bounce ("delay_echo", 0, clipStart + (juce::int64) (2.3 * sampleRate));
+        {
+            const auto echoed = readAudio (r.file);
+            const auto from = (int) (clipStart + (juce::int64) (2.02 * sampleRate)), length = (int) (0.06 * sampleRate);
+            const auto echo = echoed.getNumSamples() >= from + length ? dsp::measureLevels (echoed.getReadPointer (0, from), length).peak : 0.0f;
+            expectNear ("delay: the echo continues the tone for exactly the delay time, at the same level",
+                        db (echo), toneDb + panCentreDb, 0.05, "dB");
+        }
+        {
+            // The first bounce ends with echoes still in the delay line; a bounce must start clean.
+            call ("set_plugin_parameter", R"({"track":"Echo","slot":"A","parameter":"feedback","value":0.8})");
+            const auto first = readAudio (bounce ("delay_repeat_1", 0, clipStart + (juce::int64) (1.5 * sampleRate)).file);
+            const auto second = readAudio (bounce ("delay_repeat_2", 0, clipStart + (juce::int64) (1.5 * sampleRate)).file);
+            bool identical = first.getNumSamples() == second.getNumSamples();
+            for (int ch = 0; identical && ch < 2; ++ch)
+                for (int i = 0; identical && i < first.getNumSamples(); ++i)
+                    identical = juce::exactlyEqual (first.getSample (ch, i), second.getSample (ch, i));
+            expect ("the same session bounces to the same file twice (plug-ins start clean: no tail from before)", identical, {});
+        }
+
+        // Gate: open for a -6 dB tone with a -20 dB threshold; closed (-80 dB) with -3 dB.
+        auto levelIn = [this] (const BounceResult& result, double from, double to)
+        {
+            const auto audio = readAudio (result.file);
+            const auto a = (int) (from * sampleRate), b = std::min ((int) (to * sampleRate), audio.getNumSamples());
+            return b > a ? db (dsp::measureLevels (audio.getReadPointer (0, a), b - a).peak) : -999.0;
+        };
+        clearTracks();
+        t = addToneTrack ("Gated", 1, tone, clipStart);
+        app.getBridge().insertPlugin (t, 0, *gateDesc, error);
+        call ("set_plugin_parameter", R"({"track":"Gated","slot":"A","parameter":"threshold","value":-20})");
+        r = bounce ("gate_open", 0, end);
+        const double openLevel = levelIn (r, 1.0, 2.0);
+        call ("set_plugin_parameter", R"({"track":"Gated","slot":"A","parameter":"threshold","value":-3})");
+        r = bounce ("gate_closed", 0, end);
+        const double closedLevel = levelIn (r, 1.0, 2.0);
+        expect ("gate: a tone above the threshold passes untouched; below it, it drops by the 80 dB range",
+                std::abs (openLevel - (toneDb + panCentreDb)) < 0.02 && std::abs (closedLevel - (toneDb + panCentreDb - 80.0)) < 0.1,
+                "open " + fmt (openLevel) + " dB, closed " + fmt (closedLevel) + " dB");
+    }
+
     // Reference render: a pad through EQ, compressor and limiter, into the reverb bus.
     clearTracks();
     auto pad = session->addTrack ("Pad", 2, nullptr, Session::TrackKind::instrument);

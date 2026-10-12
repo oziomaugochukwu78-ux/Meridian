@@ -2,7 +2,9 @@
 
 #include <dsp/Compressor.h>
 #include <dsp/FdnReverb.h>
+#include <dsp/Gate.h>
 #include <dsp/Limiter.h>
+#include <dsp/StereoDelay.h>
 #include <dsp/ParametricEq.h>
 
 namespace meridian
@@ -13,7 +15,9 @@ constexpr const char* eqId = "meridian:eq";
 constexpr const char* reverbId = "meridian:reverb";
 constexpr const char* compressorId = "meridian:compressor";
 constexpr const char* limiterId = "meridian:limiter";
-constexpr const char* allIds[] = { eqId, compressorId, limiterId, reverbId };
+constexpr const char* gateId = "meridian:gate";
+constexpr const char* delayId = "meridian:delay";
+constexpr const char* allIds[] = { eqId, compressorId, limiterId, gateId, delayId, reverbId };
 
 juce::NormalisableRange<float> frequencyRange (float lo, float hi, float centre)
 {
@@ -213,6 +217,7 @@ public:
     }
 
     double getTailLengthSeconds() const override { return 0.0; }
+    void reset() override { eq.reset(); }
 
 private:
     void applyParameters (bool force)
@@ -294,6 +299,7 @@ public:
     }
 
     double getTailLengthSeconds() const override { return (double) decay->get() + (double) predelay->get() / 1000.0; }
+    void reset() override { reverb.reset(); }
 
 private:
     void applyParameters (bool force)
@@ -355,6 +361,7 @@ public:
     }
 
     double getTailLengthSeconds() const override { return 0.0; }
+    void reset() override { compressor.reset(); }
 
 private:
     void applyParameters (bool force)
@@ -417,6 +424,7 @@ public:
     }
 
     double getTailLengthSeconds() const override { return 0.0; }
+    void reset() override { limiter.reset(); }
 
 private:
     void applyParameters (bool force)
@@ -443,11 +451,137 @@ private:
     EffectParameter* truePeak = nullptr;
 };
 
+//==============================================================================
+class MeridianDelay final : public BuiltinEffect
+{
+public:
+    MeridianDelay() : BuiltinEffect ("Meridian Delay", "Delay", delayId)
+    {
+        time = add ("time", "Time", frequencyRange (1.0f, 2000.0f, 375.0f), 375.0f, "ms");
+        feedback = add ("feedback", "Feedback", { 0.0f, 0.95f }, 0.35f, {});
+        mix = add ("mix", "Mix", { 0.0f, 1.0f }, 0.25f, {});
+        highCut = add ("highCut", "High Cut", frequencyRange (500.0f, 20000.0f, 4000.0f), 20000.0f, "Hz");
+        pingPong = add ("pingPong", "Ping-Pong", { 0.0f, 1.0f, 1.0f }, 0.0f, {}, true);
+    }
+
+    void prepareToPlay (double sampleRate, int) override
+    {
+        delay.prepare (sampleRate); // allocates: prepareToPlay runs off the audio thread
+        applied = {};
+        applyParameters (true);
+    }
+
+    void processAudio (juce::AudioBuffer<float>& buffer) override
+    {
+        applyParameters (false);
+        delay.process (buffer.getWritePointer (0), buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr,
+                       buffer.getNumSamples());
+    }
+
+    double getTailLengthSeconds() const override
+    {
+        // Until the repeats are 60 dB down.
+        const double fb = feedback->get(), seconds = time->get() / 1000.0;
+        return fb <= 0.001 ? seconds : std::min (30.0, seconds * (1.0 + std::log (0.001) / std::log (fb)));
+    }
+    void reset() override { delay.reset(); }
+
+private:
+    void applyParameters (bool force)
+    {
+        dsp::StereoDelay::Params p;
+        p.timeMs = value (time);
+        p.feedback = value (feedback);
+        p.mix = value (mix);
+        p.highCutHz = value (highCut);
+        p.pingPong = pingPong->isOn();
+        const bool changed = ! juce::exactlyEqual (p.timeMs, applied.timeMs) || ! juce::exactlyEqual (p.feedback, applied.feedback)
+                          || ! juce::exactlyEqual (p.mix, applied.mix) || ! juce::exactlyEqual (p.highCutHz, applied.highCutHz)
+                          || p.pingPong != applied.pingPong;
+        if (force || changed)
+        {
+            delay.setParams (p);
+            applied = p;
+        }
+    }
+
+    dsp::StereoDelay delay;
+    dsp::StereoDelay::Params applied;
+    EffectParameter* time = nullptr;
+    EffectParameter* feedback = nullptr;
+    EffectParameter* mix = nullptr;
+    EffectParameter* highCut = nullptr;
+    EffectParameter* pingPong = nullptr;
+};
+
+//==============================================================================
+class MeridianGate final : public BuiltinEffect
+{
+public:
+    MeridianGate() : BuiltinEffect ("Meridian Gate", "Dynamics", gateId)
+    {
+        threshold = add ("threshold", "Threshold", { -80.0f, 0.0f }, -40.0f, "dB");
+        range = add ("range", "Range", { -80.0f, 0.0f }, -80.0f, "dB");
+        attack = add ("attack", "Attack", frequencyRange (0.05f, 50.0f, 1.0f), 0.5f, "ms");
+        hold = add ("hold", "Hold", frequencyRange (0.0f, 2000.0f, 100.0f), 50.0f, "ms");
+        release = add ("release", "Release", frequencyRange (5.0f, 3000.0f, 150.0f), 100.0f, "ms");
+        hysteresis = add ("hysteresis", "Hysteresis", { 0.0f, 20.0f }, 4.0f, "dB");
+    }
+
+    void prepareToPlay (double sampleRate, int) override
+    {
+        gate.prepare (sampleRate);
+        applied = {};
+        applyParameters (true);
+    }
+
+    void processAudio (juce::AudioBuffer<float>& buffer) override
+    {
+        applyParameters (false);
+        gate.process (buffer.getWritePointer (0), buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr,
+                      buffer.getNumSamples());
+    }
+
+    double getTailLengthSeconds() const override { return 0.0; }
+    void reset() override { gate.reset(); }
+
+private:
+    void applyParameters (bool force)
+    {
+        dsp::Gate::Params p;
+        p.thresholdDb = value (threshold);
+        p.rangeDb = value (range);
+        p.attackMs = value (attack);
+        p.holdMs = value (hold);
+        p.releaseMs = value (release);
+        p.hysteresisDb = value (hysteresis);
+        const bool changed = ! juce::exactlyEqual (p.thresholdDb, applied.thresholdDb) || ! juce::exactlyEqual (p.rangeDb, applied.rangeDb)
+                          || ! juce::exactlyEqual (p.attackMs, applied.attackMs) || ! juce::exactlyEqual (p.holdMs, applied.holdMs)
+                          || ! juce::exactlyEqual (p.releaseMs, applied.releaseMs) || ! juce::exactlyEqual (p.hysteresisDb, applied.hysteresisDb);
+        if (force || changed)
+        {
+            gate.setParams (p);
+            applied = p;
+        }
+    }
+
+    dsp::Gate gate;
+    dsp::Gate::Params applied;
+    EffectParameter* threshold = nullptr;
+    EffectParameter* range = nullptr;
+    EffectParameter* attack = nullptr;
+    EffectParameter* hold = nullptr;
+    EffectParameter* release = nullptr;
+    EffectParameter* hysteresis = nullptr;
+};
+
 std::unique_ptr<juce::AudioPluginInstance> createEffect (const juce::String& identifier)
 {
     if (identifier == eqId)         return std::make_unique<MeridianEq>();
     if (identifier == compressorId) return std::make_unique<MeridianCompressor>();
     if (identifier == limiterId)    return std::make_unique<MeridianLimiter>();
+    if (identifier == gateId)       return std::make_unique<MeridianGate>();
+    if (identifier == delayId)      return std::make_unique<MeridianDelay>();
     if (identifier == reverbId)     return std::make_unique<MeridianReverb>();
     return nullptr;
 }

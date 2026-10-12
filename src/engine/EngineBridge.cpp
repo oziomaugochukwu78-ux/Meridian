@@ -851,7 +851,18 @@ bool EngineBridge::suspendLive()
     // touching the session's plug-ins.
     for (int i = 0; i < 500 && engine.isDeviceRunning() && engine.hasPendingGraph(); ++i)
         juce::Thread::sleep (2);
-    return ! (engine.isDeviceRunning() && engine.hasPendingGraph());
+    const bool suspended = ! (engine.isDeviceRunning() && engine.hasPendingGraph());
+
+    // A bounce starts from silence: no reverb tail, delay repeats or open gate
+    // left over from earlier playback, so the same session always renders the same.
+    if (suspended)
+    {
+        const juce::ScopedLock sl (pluginLock);
+        for (auto& [key, slot] : insertSlots)
+            if (slot->plugin != nullptr)
+                slot->plugin->reset();
+    }
+    return suspended;
 }
 
 void EngineBridge::resumeLive()
