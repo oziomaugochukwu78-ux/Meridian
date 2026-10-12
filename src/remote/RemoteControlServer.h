@@ -13,7 +13,9 @@
 namespace meridian
 {
 
-/** The AI remote-control port: a WebSocket server on 127.0.0.1.
+/** The AI remote-control port on 127.0.0.1, speaking two protocols:
+      - WebSocket on "/": text commands or JSON tool calls;
+      - MCP (Model Context Protocol, streamable HTTP) at "POST /mcp".
 
     One accept thread plus one thread per client (at most maxClients). Socket
     I/O never touches the message thread; each received text message is
@@ -31,10 +33,15 @@ public:
     /** Runs on the message thread; returns the JSON reply. */
     using MessageHandler = std::function<std::string (const std::string&)>;
 
+    /** MCP (Model Context Protocol) over HTTP: one JSON-RPC body in, one out.
+        Runs on the message thread; sets status (200, or 202 for notifications). */
+    using McpHandler = std::function<std::string (const std::string& body, int& status)>;
+
     static constexpr int defaultPort = 47800;
     static constexpr int maxClients = 8;
+    static constexpr size_t maxHttpBodyBytes = 1 << 20;
 
-    explicit RemoteControlServer (MessageHandler handler);
+    RemoteControlServer (MessageHandler websocketHandler, McpHandler mcpHandler);
     ~RemoteControlServer() override;
 
     bool start (int port, remote::ws::HandshakePolicy policy, juce::String& error);
@@ -51,6 +58,7 @@ private:
     void reapFinishedConnections();
 
     MessageHandler handler;
+    McpHandler mcpHandler;
     remote::ws::HandshakePolicy policy;
     juce::StreamingSocket listener;
     int port = defaultPort;

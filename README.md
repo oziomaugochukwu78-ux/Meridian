@@ -121,7 +121,29 @@ To be precise about the benefit: floating-point buses never clip internally, eve
 
 ## AI remote control
 
-When the app runs, it listens on `ws://127.0.0.1:47800/`. Send one command per text message; every reply is JSON.
+While Meridian runs, port 47800 on 127.0.0.1 offers three interfaces to the same 24 tools:
+
+| Interface | Address | For |
+|---|---|---|
+| **MCP** (Model Context Protocol, streamable HTTP) | `http://127.0.0.1:47800/mcp` | AI apps: Claude Code, Claude Desktop, any MCP client |
+| WebSocket + JSON tools | `ws://127.0.0.1:47800/`, send `{"tool": "...", "arguments": {...}}` | scripts and custom agents |
+| WebSocket + text commands | `ws://127.0.0.1:47800/`, send `PLAY`, `MUTE_TRACK_2`, ... | the simplest clients |
+
+### Connecting an AI app (MCP)
+
+Claude Code:
+
+```bash
+claude mcp add --transport http meridian http://127.0.0.1:47800/mcp
+```
+
+Claude Desktop and other stdio-only clients can use the `mcp-remote` bridge: add a server with command `npx` and arguments `mcp-remote http://127.0.0.1:47800/mcp` in the client's MCP settings.
+
+Tools: `get_status`, `transport`, `set_track`, `create_track`, `delete_track`, `set_output`, `set_send`, `remove_send`, `list_plugins`, `insert_plugin`, `remove_plugin`, `set_plugin_bypass`, `list_clips`, `split_clip`, `delete_clip`, `move_clip`, `set_clip`, `import_audio`, `set_master`, `bounce`, `undo`, `redo`, `save_session` and `show_window`. Each tool has a JSON schema and a description written for the model. Tracks are referenced by number or name. Every AI edit lands in the undo history, labelled "AI: ...".
+
+### Text commands
+
+Send one command per text message; every reply is JSON.
 
 | Command | Effect |
 |---|---|

@@ -56,6 +56,7 @@ private:
     void testElasticAudio();
     void testPluginHosting();
     void testBusesAndSends();
+    void testMcpTools();
     void testRemoteCommands();
 
     // Phase 2

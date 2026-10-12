@@ -46,8 +46,17 @@ private:
         ++owner.numClients;
 
         std::string leftover;
-        if (performHandshake (leftover))
-            serve (leftover);
+        ws::HttpRequest request;
+        if (readRequest (request, leftover))
+        {
+            const auto path = ws::requestPath (request);
+            if (path == "/mcp" && request.method == "POST")
+                serveMcp (request, leftover);
+            else if (path == "/mcp")
+                sendAll (ws::httpResponse (405, "Method Not Allowed", "text/plain", "Use POST for MCP requests.\n", "Allow: POST\r\n"));
+            else if (performHandshake (request))
+                serve (leftover);
+        }
 
         socket->close();
         --owner.numClients;
@@ -79,7 +88,8 @@ private:
         return n > 0 ? n : -1;
     }
 
-    bool performHandshake (std::string& leftover)
+    /** Reads and parses the HTTP request head. Bytes after it go to `leftover`. */
+    bool readRequest (ws::HttpRequest& request, std::string& leftover)
     {
         std::string head;
         const auto deadline = juce::Time::getMillisecondCounter() + (juce::uint32) handshakeTimeoutMs;
@@ -105,18 +115,67 @@ private:
                 return false;
         }
 
-        const auto request = ws::parseHttpRequest (head);
-        if (! request)
+        auto parsed = ws::parseHttpRequest (head);
+        if (! parsed)
         {
-            sendAll ("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            sendAll (ws::httpResponse (400, "Bad Request", "text/plain", "Malformed HTTP request.\n"));
             return false;
         }
+        request = std::move (*parsed);
+        return true;
+    }
 
-        const auto result = ws::evaluateHandshake (*request, owner.policy);
+    bool performHandshake (const ws::HttpRequest& request)
+    {
+        const auto result = ws::evaluateHandshake (request, owner.policy);
         sendAll (result.response);
         if (! result.accepted)
             DBG ("Remote control: refused connection: " << juce::String (result.rejectReason));
         return result.accepted;
+    }
+
+    /** One MCP JSON-RPC exchange over HTTP, then the connection closes. */
+    void serveMcp (const ws::HttpRequest& request, std::string body)
+    {
+        if (const auto access = ws::checkAccess (request, owner.policy); ! access.accepted)
+        {
+            sendAll (access.response);
+            return;
+        }
+
+        const auto lengthHeader = request.header ("content-length");
+        const auto length = (size_t) std::strtoull (lengthHeader.c_str(), nullptr, 10);
+        if (lengthHeader.empty() || length > maxHttpBodyBytes)
+        {
+            sendAll (ws::httpResponse (lengthHeader.empty() ? 411 : 413, lengthHeader.empty() ? "Length Required" : "Payload Too Large",
+                                       "text/plain", "Send a JSON-RPC body with Content-Length (max 1 MB).\n"));
+            return;
+        }
+
+        const auto deadline = juce::Time::getMillisecondCounter() + (juce::uint32) handshakeTimeoutMs;
+        char buffer[4096];
+        while (body.size() < length && ! threadShouldExit())
+        {
+            if (juce::Time::getMillisecondCounter() > deadline)
+                return;
+            const int n = receive (buffer, (int) sizeof (buffer));
+            if (n < 0)
+                return;
+            body.append (buffer, (size_t) n);
+        }
+        body.resize (length);
+
+        auto statusHolder = std::make_shared<int> (200); // outlives this frame if shutdown abandons the call
+        const auto reply = runOnMessageThread ([handler = owner.mcpHandler, body, statusHolder]
+        {
+            return handler (body, *statusHolder);
+        });
+        const int status = *statusHolder;
+
+        if (status == 202)
+            sendAll (ws::httpResponse (202, "Accepted", {}, {}));
+        else
+            sendAll (ws::httpResponse (status, "OK", "application/json", reply));
     }
 
     void serve (const std::string& leftover)
@@ -163,21 +222,31 @@ private:
         sendAll (ws::encodeCloseFrame (ws::closeCode::goingAway, "Server shutting down"));
     }
 
-    /** Runs the handler on the message thread and waits for its reply,
-        without ever blocking shutdown. */
     std::string dispatch (const std::string& text)
+    {
+        return runOnMessageThread ([handler = owner.handler, text] { return handler (text); });
+    }
+
+    /** Runs `work` on the message thread and waits for its result, without
+        ever blocking shutdown. `work` must own everything it touches (capture
+        by value or shared_ptr): on shutdown this may return before it runs. */
+    std::string runOnMessageThread (std::function<std::string()> work)
     {
         struct Pending
         {
             juce::WaitableEvent done;
             std::string reply;
+            std::atomic<bool> abandoned { false };
         };
 
         auto pending = std::make_shared<Pending>();
         const bool posted = juce::MessageManager::callAsync (
-            [pending, alive = owner.alive, handler = owner.handler, text]
+            [pending, alive = owner.alive, work]
             {
-                pending->reply = alive->load() ? handler (text) : errorJson ("The application is shutting down.");
+                if (alive->load() && ! pending->abandoned.load())
+                    pending->reply = work();
+                else
+                    pending->reply = errorJson ("The application is shutting down.");
                 pending->done.signal();
             });
 
@@ -185,8 +254,13 @@ private:
             return errorJson ("The application is shutting down.");
 
         while (! pending->done.wait (50))
+        {
             if (threadShouldExit())
+            {
+                pending->abandoned.store (true); // `work` must not run once we have returned
                 return errorJson ("The application is shutting down.");
+            }
+        }
 
         return pending->reply;
     }
@@ -197,9 +271,10 @@ private:
 };
 
 //==============================================================================
-RemoteControlServer::RemoteControlServer (MessageHandler h)
+RemoteControlServer::RemoteControlServer (MessageHandler h, McpHandler mcp)
     : juce::Thread ("Remote Control Server"),
       handler (std::move (h)),
+      mcpHandler (std::move (mcp)),
       alive (std::make_shared<std::atomic<bool>> (false))
 {
 }

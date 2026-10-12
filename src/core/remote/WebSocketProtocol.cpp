@@ -208,6 +208,38 @@ HandshakeResult evaluateHandshake (const HttpRequest& request, const HandshakePo
     if (key.size() != 24 || key.substr (22) != "==") // base64 of exactly 16 bytes
         return reject (400, "Bad Request", "Missing or malformed Sec-WebSocket-Key");
 
+    if (auto access = checkAccess (request, policy); ! access.accepted)
+        return access;
+
+    HandshakeResult result;
+    result.accepted = true;
+    result.response = "HTTP/1.1 101 Switching Protocols\r\n"
+                      "Upgrade: websocket\r\n"
+                      "Connection: Upgrade\r\n"
+                      "Sec-WebSocket-Accept: " + computeAcceptKey (key) + "\r\n\r\n";
+    return result;
+}
+
+std::string requestPath (const HttpRequest& request)
+{
+    return request.target.substr (0, request.target.find ('?'));
+}
+
+std::string httpResponse (int status, std::string_view statusText, std::string_view contentType, std::string_view body,
+                          std::string_view extraHeaders)
+{
+    std::string r = "HTTP/1.1 " + std::to_string (status) + " " + std::string (statusText) + "\r\n";
+    if (! contentType.empty())
+        r += "Content-Type: " + std::string (contentType) + "\r\n";
+    r += "Content-Length: " + std::to_string (body.size()) + "\r\n";
+    r += extraHeaders;
+    r += "Connection: close\r\n\r\n";
+    r += body;
+    return r;
+}
+
+HandshakeResult checkAccess (const HttpRequest& request, const HandshakePolicy& policy)
+{
     const auto origin = request.header ("origin");
     if (! origin.empty())
     {
@@ -239,10 +271,6 @@ HandshakeResult evaluateHandshake (const HttpRequest& request, const HandshakePo
 
     HandshakeResult result;
     result.accepted = true;
-    result.response = "HTTP/1.1 101 Switching Protocols\r\n"
-                      "Upgrade: websocket\r\n"
-                      "Connection: Upgrade\r\n"
-                      "Sec-WebSocket-Accept: " + computeAcceptKey (key) + "\r\n\r\n";
     return result;
 }
 

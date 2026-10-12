@@ -57,6 +57,8 @@ target_sources(Meridian PRIVATE
 
     remote/RemoteControlServer.cpp
     remote/RemoteControlServer.h
+    remote/RemoteTools.cpp
+    remote/RemoteTools.h
 
     ui/LevelMeter.cpp
     ui/LevelMeter.h

@@ -69,6 +69,29 @@ TEST_CASE ("Token is enforced when configured", "[handshake][security]")
     REQUIRE (evaluate (requestHead ("/", "Authorization: Bearer s3cret token\r\n"), policy).accepted);
 }
 
+TEST_CASE ("Plain HTTP requests (MCP) get the same origin and token rules", "[handshake][security]")
+{
+    const auto post = [] (const std::string& extra)
+    {
+        return *parseHttpRequest ("POST /mcp?token=abc HTTP/1.1\r\nContent-Type: application/json\r\n" + extra + "\r\n");
+    };
+
+    HandshakePolicy open;
+    REQUIRE (checkAccess (post (""), open).accepted);
+    REQUIRE_FALSE (checkAccess (post ("Origin: https://evil.example\r\n"), open).accepted);
+
+    HandshakePolicy locked;
+    locked.requiredToken = "abc";
+    REQUIRE (checkAccess (post (""), locked).accepted);
+    locked.requiredToken = "xyz";
+    REQUIRE (startsWith (checkAccess (post (""), locked).response, "HTTP/1.1 401"));
+
+    REQUIRE (requestPath (post ("")) == "/mcp");
+    const auto response = httpResponse (200, "OK", "application/json", "{}");
+    REQUIRE (response.find ("Content-Length: 2\r\n") != std::string::npos);
+    REQUIRE (response.substr (response.size() - 2) == "{}");
+}
+
 TEST_CASE ("Malformed or non-WebSocket requests are rejected", "[handshake]")
 {
     REQUIRE_FALSE (evaluate ("POST / HTTP/1.1\r\nUpgrade: websocket\r\n\r\n").accepted);

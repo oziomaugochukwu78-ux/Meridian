@@ -61,6 +61,7 @@ void SelfTest::start()
         testElasticAudio();
         testPluginHosting();
         testBusesAndSends();
+        testMcpTools();
         testRemoteCommands();
     }
 
@@ -718,6 +719,118 @@ void SelfTest::testBusesAndSends()
     {
         expect ("reload routed session", false, error);
     }
+    clearTracks();
+}
+
+void SelfTest::testMcpTools()
+{
+    beginGroup ("MCP server and AI tools");
+    auto& tools = app.getRemoteTools();
+    clearTracks();
+    addToneTrack ("Vocal", 1, media.getChildFile ("tone1k_mono.wav"), clipStart);
+
+    int nextId = 1;
+    auto rpc = [&] (const juce::String& method, const juce::var& params) -> juce::var
+    {
+        auto* request = new juce::DynamicObject();
+        request->setProperty ("jsonrpc", "2.0");
+        request->setProperty ("id", nextId++);
+        request->setProperty ("method", method);
+        request->setProperty ("params", params);
+        int status = 0;
+        const auto reply = tools.handleMcpRequest (juce::JSON::toString (juce::var (request), true).toStdString(), status);
+        return juce::JSON::parse (juce::String (reply));
+    };
+    auto toolCall = [&] (const juce::String& name, const juce::String& argumentsJson) -> juce::var
+    {
+        auto* params = new juce::DynamicObject();
+        params->setProperty ("name", name);
+        params->setProperty ("arguments", juce::JSON::parse (argumentsJson));
+        return rpc ("tools/call", juce::var (params));
+    };
+    auto callText = [] (const juce::var& response) { return response["result"]["content"][0]["text"].toString(); };
+    auto failed = [] (const juce::var& response) { return (bool) response["result"]["isError"]; };
+
+    auto* init = new juce::DynamicObject();
+    init->setProperty ("protocolVersion", "2025-06-18");
+    const auto initialised = rpc ("initialize", juce::var (init));
+    expect ("initialize negotiates the protocol and advertises tools",
+            initialised["result"]["protocolVersion"].toString() == "2025-06-18"
+                && initialised["result"]["capabilities"]["tools"].isObject(),
+            juce::JSON::toString (initialised["result"]["serverInfo"], true));
+
+    int notificationStatus = 0;
+    tools.handleMcpRequest (R"({"jsonrpc":"2.0","method":"notifications/initialized"})", notificationStatus);
+    expect ("notifications are accepted without a reply (HTTP 202)", notificationStatus == 202, juce::String (notificationStatus));
+
+    const auto list = rpc ("tools/list", juce::var (new juce::DynamicObject()));
+    const auto* toolArray = list["result"]["tools"].getArray();
+    expect ("tools/list describes every tool with a JSON schema",
+            toolArray != nullptr && toolArray->size() == 24 && (*toolArray)[0]["inputSchema"].isObject(),
+            juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
+
+    auto r = toolCall ("get_status", "{}");
+    expect ("get_status returns the session and tracks", ! failed (r) && callText (r).contains ("\"Vocal\""), callText (r).substring (0, 160));
+
+    r = toolCall ("create_track", R"({"kind":"aux","name":"Verb"})");
+    expect ("create_track makes an aux bus", ! failed (r) && app.getSession()->getNumTracks() == 2, callText (r).substring (0, 160));
+
+    r = toolCall ("set_send", R"({"track":"Vocal","slot":"A","bus":"Verb","level_db":-8,"pre_fader":false})");
+    const auto vocal = app.getSession()->getTrack (0);
+    expect ("set_send routes the vocal into the bus at -8 dB",
+            ! failed (r) && send::levelDb (routing::findSend (vocal, 0)) == -8.0, callText (r).substring (0, 200));
+
+    r = toolCall ("set_track", R"({"track":1,"volume_db":-3.5,"pan":-0.4,"solo":true})");
+    expect ("set_track changes several settings at once",
+            ! failed (r) && track::volumeDb (vocal) == -3.5 && track::pan (vocal) == -0.4 && track::solo (vocal),
+            callText (r).substring (0, 160));
+
+    r = toolCall ("split_clip", R"({"track":"Vocal","seconds":1.0})");
+    r = toolCall ("list_clips", R"({"track":"vocal"})");
+    expect ("split_clip and list_clips (names are case-insensitive)",
+            ! failed (r) && track::clips (vocal).getNumChildren() == 2 && clip::start (track::clips (vocal).getChild (1)) == 48000
+                && juce::JSON::parse (callText (r))["clips"].size() == 2,
+            callText (r).substring (0, 200));
+
+    r = toolCall ("set_clip", R"({"track":"Vocal","clip":2,"fade_out_seconds":0.25,"gain_db":-2})");
+    expect ("set_clip sets fades and clip gain",
+            ! failed (r) && clip::fadeOut (track::clips (vocal).getChild (1)) == 12000 && clip::gainDb (track::clips (vocal).getChild (1)) == -2.0,
+            callText (r));
+
+    if (testPlugin != nullptr)
+    {
+        // As if the user had scanned it; removed again so their plug-in list stays clean.
+        auto& known = app.getPluginHost().getKnownPlugins();
+        known.addType (*testPlugin);
+        r = toolCall ("list_plugins", R"({"filter":"meridian"})");
+        expect ("list_plugins shows scanned plug-ins", ! failed (r) && callText (r).contains ("Meridian Test Gain"), callText (r).substring (0, 160));
+        r = toolCall ("insert_plugin", R"({"track":"Verb","slot":"A","plugin":"test gain"})");
+        expect ("insert_plugin finds a plug-in by partial name", ! failed (r) && callText (r).contains ("Meridian Test Gain"),
+                callText (r).substring (0, 200));
+        known.removeType (*testPlugin);
+    }
+
+    r = toolCall ("set_output", R"({"track":"Verb","destination":"Vocal"})");
+    expect ("routing into an audio track is refused with an explanation", failed (r) && callText (r).contains ("aux"), callText (r));
+
+    r = toolCall ("set_track", R"({"track":9})");
+    expect ("unknown tracks give a useful error", failed (r) && callText (r).contains ("session has 2"), callText (r));
+
+    const int clipsBefore = track::clips (vocal).getNumChildren();
+    toolCall ("delete_clip", R"({"track":"Vocal","clip":2})");
+    r = toolCall ("undo", "{}");
+    expect ("undo reverts the AI's last edit", ! failed (r) && track::clips (vocal).getNumChildren() == clipsBefore
+                && callText (r).contains ("AI: Delete Clip"), callText (r));
+
+    r = toolCall ("show_window", R"({"window":"mix"})");
+    expect ("show_window switches to the mixer", ! failed (r) && main.getActiveWindow() == WindowKind::mix, callText (r));
+    main.showWindow (WindowKind::edit);
+
+    const auto viaWebSocket = juce::String (tools.handleJsonMessage (R"({"tool":"get_status","arguments":{}})"));
+    expect ("the same tools work as JSON over the WebSocket", (bool) juce::JSON::parse (viaWebSocket)["ok"], viaWebSocket.substring (0, 80));
+
+    const auto unknown = rpc ("resources/list", juce::var (new juce::DynamicObject()));
+    expect ("unsupported methods return a JSON-RPC error", (int) unknown["error"]["code"] == -32601, juce::JSON::toString (unknown, true));
     clearTracks();
 }
 

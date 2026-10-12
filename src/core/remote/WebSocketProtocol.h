@@ -79,6 +79,17 @@ struct HandshakeResult
 
 HandshakeResult evaluateHandshake (const HttpRequest& request, const HandshakePolicy& policy);
 
+/** The access rules alone (Origin allow-list and token), for plain HTTP
+    requests such as MCP's POST /mcp. accepted=false carries a 401/403 response. */
+HandshakeResult checkAccess (const HttpRequest& request, const HandshakePolicy& policy);
+
+/** The path part of a request target ("/mcp?x=1" -> "/mcp"). */
+std::string requestPath (const HttpRequest& request);
+
+/** A complete HTTP/1.1 response (Connection: close). */
+std::string httpResponse (int status, std::string_view statusText, std::string_view contentType, std::string_view body,
+                          std::string_view extraHeaders = {});
+
 // ---------------------------------------------------------------------------
 // Framing
 // ---------------------------------------------------------------------------

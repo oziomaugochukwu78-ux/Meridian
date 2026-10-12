@@ -8,6 +8,7 @@
 #include "model/SessionTemplates.h"
 #include "plugins/PluginHost.h"
 #include "remote/RemoteControlServer.h"
+#include "remote/RemoteTools.h"
 
 #include <remote/CommandDispatcher.h>
 
@@ -42,6 +43,7 @@ public:
     AudioEngine& getEngine() noexcept                       { return engine; }
     EngineBridge& getBridge() noexcept                      { return *bridge; }
     RemoteControlServer& getRemoteServer() noexcept         { return remoteServer; }
+    RemoteTools& getRemoteTools() noexcept                  { return remoteTools; }
     juce::RecentlyOpenedFilesList& getRecentSessions() noexcept { return recentSessions; }
 
     // Session lifecycle ----------------------------------------------------------------
@@ -143,7 +145,17 @@ private:
     std::unique_ptr<EngineBridge> bridge;
     std::unique_ptr<AudioEngine> offlineEngine;   // exists only while a background bounce runs
     std::unique_ptr<Session> session;
-    RemoteControlServer remoteServer { [this] (const std::string& message) { return remote::handleRemoteMessage (message, *this); } };
+    RemoteTools remoteTools { *this };
+    RemoteControlServer remoteServer {
+        [this] (const std::string& message)
+        {
+            // JSON objects are tool calls; anything else is a text command.
+            const auto first = message.find_first_not_of (" \t\r\n");
+            return first != std::string::npos && message[first] == '{' ? remoteTools.handleJsonMessage (message)
+                                                                       : remote::handleRemoteMessage (message, *this);
+        },
+        [this] (const std::string& body, int& status) { return remoteTools.handleMcpRequest (body, status); }
+    };
     juce::RecentlyOpenedFilesList recentSessions;
     juce::ThreadPool jobs { juce::ThreadPoolOptions{}.withThreadName ("Media Jobs").withNumberOfThreads (2) };
 
