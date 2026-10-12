@@ -1,5 +1,6 @@
 #pragma once
 
+#include "FloatCompare.h"
 #include "MixKernels.h"
 
 #include <algorithm>
@@ -27,7 +28,7 @@ public:
         Re-targeting mid-ramp continues smoothly from wherever the ramp is now. */
     void setTarget (double newTarget, int rampSamples) noexcept
     {
-        if (newTarget == target)
+        if (exactlyEqual (newTarget, target))
             return;
 
         target = newTarget;

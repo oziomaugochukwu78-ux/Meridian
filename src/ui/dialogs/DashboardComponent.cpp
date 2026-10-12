@@ -52,8 +52,7 @@ DashboardComponent::DashboardComponent (AppController& a, UnsavedGuard g) : app 
 
     dialogs::styleFieldLabel (sampleRateLabel, "Sample Rate:");
     for (int i = 0; i < (int) std::size (sampleRates); ++i)
-        sampleRate.addItem (juce::String (sampleRates[i] / 1000.0, sampleRates[i] == 44100.0 || sampleRates[i] == 88200.0
-                                                                       || sampleRates[i] == 176400.0 ? 1 : 0) + " kHz", i + 1);
+        sampleRate.addItem (juce::String (sampleRates[i] / 1000.0, (int) sampleRates[i] % 1000 != 0 ? 1 : 0) + " kHz", i + 1); // 44.1, 48
     sampleRate.setSelectedId (2, juce::dontSendNotification);
 
     dialogs::styleFieldLabel (bitDepthLabel, "Bit Depth:");

@@ -230,7 +230,7 @@ void TrackLane::pencilDown (const juce::MouseEvent& e)
 
     um->beginNewTransaction ("Draw Automation");
     auto lane = automation::getOrCreateVolumeLane (trackNode, um);
-    const auto time = juce::jmax<juce::int64> (0, editState.xToSample (e.position.x));
+    const auto time = std::max<juce::int64> (0, editState.xToSample (e.position.x));
     const auto tolerance = (juce::int64) (6.0 * editState.samplesPerPixel);
 
     // Near an existing point: Alt-click deletes it, a drag moves it.
@@ -273,7 +273,7 @@ void TrackLane::pencilDrag (const juce::MouseEvent& e)
     if (um == nullptr)
         return;
 
-    const auto time = juce::jmax<juce::int64> (0, editState.xToSample (e.position.x));
+    const auto time = std::max<juce::int64> (0, editState.xToSample (e.position.x));
 
     if (pencilAction == PencilAction::movePoint && draggedPoint.isValid())
     {
@@ -313,7 +313,7 @@ void TrackLane::mouseDown (const juce::MouseEvent& e)
     }
 
     draggingSelection = false;
-    selectionAnchor = editState.snap (juce::jmax<juce::int64> (0, editState.xToSample (e.position.x)));
+    selectionAnchor = editState.snap (std::max<juce::int64> (0, editState.xToSample (e.position.x)));
     editState.setTimeSelection (selectionAnchor, selectionAnchor, { track::id (trackNode) });
 }
 
@@ -329,7 +329,7 @@ void TrackLane::mouseDrag (const juce::MouseEvent& e)
         return;
     draggingSelection = true;
 
-    const auto here = editState.snap (juce::jmax<juce::int64> (0, editState.xToSample (e.position.x)));
+    const auto here = editState.snap (std::max<juce::int64> (0, editState.xToSample (e.position.x)));
     editState.setTimeSelection (selectionAnchor, here, { track::id (trackNode) });
 }
 

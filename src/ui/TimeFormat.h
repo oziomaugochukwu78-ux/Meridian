@@ -30,7 +30,7 @@ inline juce::String barsBeats (juce::int64 samples, double sampleRate)
 {
     if (sampleRate <= 0.0)
         return "1| 1| 000";
-    const double beats = (double) juce::jmax<juce::int64> (0, samples) / samplesPerBeat (sampleRate);
+    const double beats = (double) std::max<juce::int64> (0, samples) / samplesPerBeat (sampleRate);
     const auto wholeBeats = (juce::int64) std::floor (beats);
     const auto bar = wholeBeats / beatsPerBar + 1;
     const auto beat = wholeBeats % beatsPerBar + 1;

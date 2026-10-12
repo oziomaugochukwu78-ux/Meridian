@@ -99,9 +99,13 @@ void AppController::changeListenerCallback (juce::ChangeBroadcaster*)
 void AppController::reportProblem (const juce::String& title, const juce::String& message)
 {
     if (showProblem)
+    {
         showProblem (title, message);
+    }
     else
-        DBG (title << ": " << message);
+    {
+        DBG (title << ": " << message); // braces: DBG is empty in Release builds
+    }
 }
 
 //==============================================================================
@@ -537,7 +541,11 @@ BounceResult AppController::bounceNow (const BounceRequest& request)
     juce::String error;
     auto offline = createOfflineEngine (error);
     if (offline == nullptr)
-        return { false, error };
+    {
+        BounceResult failed;
+        failed.error = error;
+        return failed;
+    }
 
     auto result = renderBounce (*offline, request, {});
     offline.reset();

@@ -40,7 +40,7 @@ void addPoint (juce::ValueTree lane, juce::int64 time, double db, juce::UndoMana
     }
 
     juce::ValueTree p (ids::POINT);
-    p.setProperty (ids::time, juce::jmax<juce::int64> (0, time), nullptr);
+    p.setProperty (ids::time, std::max<juce::int64> (0, time), nullptr);
     p.setProperty (ids::value, db, nullptr);
     lane.appendChild (p, um);
 }
@@ -95,7 +95,7 @@ double valueAt (const std::vector<Point>& pts, juce::int64 time)
                                         [] (juce::int64 t, const Point& p) { return t < p.time; });
     const auto& b = *next;
     const auto& a = *(next - 1);
-    const double fraction = (double) (time - a.time) / (double) juce::jmax<juce::int64> (1, b.time - a.time);
+    const double fraction = (double) (time - a.time) / (double) std::max<juce::int64> (1, b.time - a.time);
     return a.db + fraction * (b.db - a.db);
 }
 

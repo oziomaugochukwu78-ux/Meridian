@@ -94,7 +94,7 @@ void MasterBusProcessor::process (double* left, double* right, int numSamples) n
 
     wetRamp.setTarget (consoleEnabled.load (std::memory_order_relaxed) ? 1.0 : 0.0, (int) (0.05 * sampleRate));
 
-    if (! wetRamp.isRamping() && wetRamp.getTarget() == 0.0)
+    if (! wetRamp.isRamping() && juce::exactlyEqual (wetRamp.getTarget(), 0.0))
     {
         // Console fully bypassed: output the aligned dry signal and let the
         // filters go cold, so re-engaging starts from a clean state.

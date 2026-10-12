@@ -300,7 +300,7 @@ juce::String checkArgument (const juce::String& name, const juce::var& value, co
         return {};
     }
     if (t == "boolean")
-        return value.isBool() || (isFiniteNumber (value) && ((double) value == 0.0 || (double) value == 1.0))
+        return value.isBool() || (isFiniteNumber (value) && (juce::exactlyEqual ((double) value, 0.0) || juce::exactlyEqual ((double) value, 1.0)))
                    ? juce::String() : "\"" + name + "\" must be true or false";
     if (t == "string")
         return value.isString() || isFiniteNumber (value) ? juce::String() : "\"" + name + "\" must be a string";

@@ -94,7 +94,8 @@ jobs:
       - name: Configure
         run: cmake -S . -B build/app -DCMAKE_BUILD_TYPE=Release -DMERIDIAN_WARNINGS_AS_ERRORS=ON
       - name: Build
-        run: cmake --build build/app --parallel 4
+        # -k: keep going after an error, so one run reports every problem
+        run: cmake --build build/app --parallel 4 -- -k
       - name: Unit tests
         run: ctest --test-dir build/app --output-on-failure
       - name: Self test
@@ -137,7 +138,7 @@ jobs:
       - name: Configure
         run: cmake -S . -B build/asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMERIDIAN_ENABLE_ASAN=ON
       - name: Build
-        run: cmake --build build/asan --parallel 4
+        run: cmake --build build/asan --parallel 4 -- -k
       - name: Unit tests
         run: ctest --test-dir build/asan --output-on-failure
       - name: Self test

@@ -38,14 +38,14 @@ BounceResult renderBounce (AudioEngine& engine, const BounceRequest& request, co
 
     for (juce::int64 rendered = 0; rendered < total && ! cancelled;)
     {
-        const int n = (int) juce::jmin<juce::int64> (blockSize, total - rendered);
+        const int n = (int) std::min<juce::int64> (blockSize, total - rendered);
         engine.renderOffline (block.getArrayOfWritePointers(), 2, n);
         rendered += n;
 
         // Drop the master bus's latency from the head of the render.
         const int drop = (int) juce::jlimit<juce::int64> (0, n, latency - skipped);
         skipped += drop;
-        const int keep = (int) juce::jmin<juce::int64> (n - drop, length - written);
+        const int keep = (int) std::min<juce::int64> (n - drop, length - written);
         if (keep <= 0)
             continue;
 
@@ -78,8 +78,8 @@ BounceResult renderBounce (AudioEngine& engine, const BounceRequest& request, co
         return result;
     }
 
-    result.left.rms = std::sqrt (sumSquares[0] / (double) juce::jmax<juce::int64> (1, written));
-    result.right.rms = std::sqrt (sumSquares[1] / (double) juce::jmax<juce::int64> (1, written));
+    result.left.rms = std::sqrt (sumSquares[0] / (double) std::max<juce::int64> (1, written));
+    result.right.rms = std::sqrt (sumSquares[1] / (double) std::max<juce::int64> (1, written));
     result.length = written;
     result.ok = true;
     return result;

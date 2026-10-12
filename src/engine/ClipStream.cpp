@@ -27,7 +27,7 @@ int ClipStream::findReadyHalf (juce::int64 cell) const noexcept
 
 void ClipStream::cue (juce::int64 sourcePosition) noexcept
 {
-    const juce::int64 current = juce::jmax<juce::int64> (0, sourcePosition) / halfSize;
+    const juce::int64 current = std::max<juce::int64> (0, sourcePosition) / halfSize;
     const juce::int64 lastCell = length > 0 ? (length - 1) / halfSize : -1;
 
     juce::uint64 words[2] = { halves[0].word.load (std::memory_order_acquire),
@@ -88,14 +88,14 @@ bool ClipStream::read (juce::int64 sourcePosition, float* const* dest, int numDe
         {
             const juce::int64 cell = frame / halfSize;
             offsetInCell = (int) (frame - cell * halfSize);
-            count = (int) juce::jmin<juce::int64> (count, halfSize - offsetInCell, length - frame);
+            count = (int) std::min<juce::int64> ({ count, halfSize - offsetInCell, length - frame });
             half = findReadyHalf (cell);
             if (half < 0)
                 complete = false;
         }
         else if (frame < 0)
         {
-            count = (int) juce::jmin<juce::int64> (count, -frame);
+            count = (int) std::min<juce::int64> (count, -frame);
         }
 
         if (half < 0)
@@ -134,7 +134,7 @@ bool ClipStream::read (juce::int64 sourcePosition, float* const* dest, int numDe
 
 void ClipStream::loadBlocking (juce::int64 sourcePosition, int numFrames)
 {
-    const auto first = juce::jmax<juce::int64> (0, sourcePosition);
+    const auto first = std::max<juce::int64> (0, sourcePosition);
     const auto last = juce::jmin (length - 1, sourcePosition + numFrames - 1);
     if (last < first)
         return;

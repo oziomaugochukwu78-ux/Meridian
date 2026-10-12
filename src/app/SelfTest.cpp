@@ -486,7 +486,8 @@ void SelfTest::testSessionRoundTrip()
     {
         const auto lt = loaded->getTrack (0);
         expect ("reloaded track name, volume and pan match",
-                track::name (lt) == "Saved Track" && track::volumeDb (lt) == -3.5 && track::pan (lt) == -0.25,
+                track::name (lt) == "Saved Track" && juce::exactlyEqual (track::volumeDb (lt), -3.5)
+                    && juce::exactlyEqual (track::pan (lt), -0.25),
                 track::name (lt) + ", " + fmt (track::volumeDb (lt)) + " dB, pan " + fmt (track::pan (lt)));
         const auto lc = track::clips (lt).getChild (0);
         expect ("reloaded clip position and fade match",
@@ -759,7 +760,7 @@ void SelfTest::testBusesAndSends()
         const auto lt = loaded->getTrack (0);
         const auto ls = routing::findSend (lt, 2);
         expect ("routing and sends are saved with the session",
-                track::outputBus (lt) == busId && ls.isValid() && send::target (ls) == track::id (bus2) && send::levelDb (ls) == -9.5,
+                track::outputBus (lt) == busId && ls.isValid() && send::target (ls) == track::id (bus2) && juce::exactlyEqual (send::levelDb (ls), -9.5),
                 "output " + juce::String (track::outputBus (lt)) + ", send level " + fmt (send::levelDb (ls)));
     }
     else
@@ -833,7 +834,7 @@ void SelfTest::compareWithReference (const juce::String& name, const BounceResul
             residualPeak = juce::jmax (residualPeak, std::abs (d));
             residualEnergy += d * d;
             referenceEnergy += (double) b[i] * (double) b[i];
-            differing += d != 0.0 ? 1 : 0;
+            differing += juce::exactlyEqual (d, 0.0) ? 0 : 1;
         }
     }
 
@@ -1143,7 +1144,7 @@ void SelfTest::testDamagedSessions (const juce::File& originalSession)
         expect ("repair is complete in one pass (a second pass changes nothing)", again.isEmpty(), again.joinIntoString ("; "));
         expect ("routing loop Bus X -> Bus Y -> Bus X was broken",
                 ! routing::feeds (*loaded, 6, 6) && ! routing::feeds (*loaded, 7, 7), {});
-        expect ("sample rate repaired to 48 kHz", loaded->getSampleRate() == 48000.0, juce::String (loaded->getSampleRate()));
+        expect ("sample rate repaired to 48 kHz", juce::exactlyEqual (loaded->getSampleRate(), 48000.0), juce::String (loaded->getSampleRate()));
         repairedXml = loaded->getState().toXmlString();
     }
 
@@ -1403,11 +1404,12 @@ void SelfTest::testMcpTools()
     r = toolCall ("set_send", R"({"track":"Vocal","slot":"A","bus":"Verb","level_db":-8,"pre_fader":false})");
     const auto vocal = app.getSession()->getTrack (0);
     expect ("set_send routes the vocal into the bus at -8 dB",
-            ! failed (r) && send::levelDb (routing::findSend (vocal, 0)) == -8.0, callText (r).substring (0, 200));
+            ! failed (r) && juce::exactlyEqual (send::levelDb (routing::findSend (vocal, 0)), -8.0), callText (r).substring (0, 200));
 
     r = toolCall ("set_track", R"({"track":1,"volume_db":-3.5,"pan":-0.4,"solo":true})");
     expect ("set_track changes several settings at once",
-            ! failed (r) && track::volumeDb (vocal) == -3.5 && track::pan (vocal) == -0.4 && track::solo (vocal),
+            ! failed (r) && juce::exactlyEqual (track::volumeDb (vocal), -3.5) && juce::exactlyEqual (track::pan (vocal), -0.4)
+                && track::solo (vocal),
             callText (r).substring (0, 160));
 
     r = toolCall ("split_clip", R"({"track":"Vocal","seconds":1.0})");
@@ -1419,7 +1421,8 @@ void SelfTest::testMcpTools()
 
     r = toolCall ("set_clip", R"({"track":"Vocal","clip":2,"fade_out_seconds":0.25,"gain_db":-2})");
     expect ("set_clip sets fades and clip gain",
-            ! failed (r) && clip::fadeOut (track::clips (vocal).getChild (1)) == 12000 && clip::gainDb (track::clips (vocal).getChild (1)) == -2.0,
+            ! failed (r) && clip::fadeOut (track::clips (vocal).getChild (1)) == 12000
+                && juce::exactlyEqual (clip::gainDb (track::clips (vocal).getChild (1)), -2.0),
             callText (r));
 
     if (testPlugin != nullptr)
@@ -1492,7 +1495,7 @@ void SelfTest::testRemoteCommands()
     expect ("MUTE_TRACK_1 again unmutes it", ! track::mute (t1), reply);
 
     reply = send ("SET_VOLUME_TRACK_2_-12.5dB");
-    expect ("SET_VOLUME_TRACK_2_-12.5dB sets the fader", track::volumeDb (t2) == -12.5, reply);
+    expect ("SET_VOLUME_TRACK_2_-12.5dB sets the fader", juce::exactlyEqual (track::volumeDb (t2), -12.5), reply);
     expect ("remote edits are undoable", session->getUndoManager().canUndo(), session->getUndoManager().getUndoDescription());
 
     const auto before = main.getActiveWindow();
@@ -1838,7 +1841,7 @@ void SelfTest::finishRecordingTest()
     {
         std::unique_ptr<juce::AudioFormatReader> reader (app.getFormatManager().createReaderFor (file));
         expect ("take file is a valid 24-bit, 48 kHz WAV",
-                reader != nullptr && reader->bitsPerSample == 24 && reader->sampleRate == 48000.0,
+                reader != nullptr && reader->bitsPerSample == 24 && juce::exactlyEqual (reader->sampleRate, 48000.0),
                 reader != nullptr ? juce::String ((int) reader->bitsPerSample) + "-bit, " + juce::String (reader->sampleRate) + " Hz"
                                   : juce::String ("unreadable"));
 
@@ -2002,7 +2005,7 @@ void SelfTest::testUserInterface()
         expectNear ("fader move sets the track volume", track::volumeDb (t), -6.0, 1.0e-9, "dB");
 
         strip->getPanKnob().setValue (0.5, juce::sendNotificationSync);
-        expect ("pan knob sets pan and shows 50>", track::pan (t) == 0.5 && strip->getPanReadout() == "50>",
+        expect ("pan knob sets pan and shows 50>", juce::exactlyEqual (track::pan (t), 0.5) && strip->getPanReadout() == "50>",
                 "pan " + fmt (track::pan (t)) + ", readout " + strip->getPanReadout());
 
         strip->getMuteButton().onClick();

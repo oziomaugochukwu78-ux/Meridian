@@ -38,8 +38,8 @@ public:
     void setView (juce::int64 newStart, double newSamplesPerPixel)
     {
         newSamplesPerPixel = juce::jlimit (minSamplesPerPixel, maxSamplesPerPixel, newSamplesPerPixel);
-        newStart = juce::jmax<juce::int64> (0, newStart);
-        if (newStart != viewStart || newSamplesPerPixel != samplesPerPixel)
+        newStart = std::max<juce::int64> (0, newStart);
+        if (newStart != viewStart || ! juce::exactlyEqual (newSamplesPerPixel, samplesPerPixel))
         {
             viewStart = newStart;
             samplesPerPixel = newSamplesPerPixel;
@@ -69,7 +69,7 @@ public:
     {
         if (mode != EditMode::grid)
             return sample;
-        const auto grid = juce::jmax<juce::int64> (1, gridSize());
+        const auto grid = std::max<juce::int64> (1, gridSize());
         return (juce::int64) std::llround ((double) sample / (double) grid) * grid;
     }
 

@@ -56,7 +56,7 @@ private:
             return;
         const double value = node[property];
         const double fixed = std::isfinite (value) ? juce::jlimit (lo, hi, value) : fallback;
-        if (! (fixed == value))
+        if (! juce::exactlyEqual (fixed, value)) // also true for NaN, which never equals itself
             set (node, property, fixed, where, property.toString());
     }
 

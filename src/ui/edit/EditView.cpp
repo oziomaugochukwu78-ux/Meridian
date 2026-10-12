@@ -348,7 +348,7 @@ void EditView::filesDropped (const juce::StringArray& files, int x, int y)
     if (audioFiles.isEmpty())
         return;
 
-    const auto position = state.snap (juce::jmax<juce::int64> (0, state.xToSample (x - trackHeaderWidth)));
+    const auto position = state.snap (std::max<juce::int64> (0, state.xToSample (x - trackHeaderWidth)));
     const auto target = trackAtScreenPosition (localPointToGlobal (juce::Point<int> (x, y)));
     app.importAudioFiles (audioFiles, position, target);
 }

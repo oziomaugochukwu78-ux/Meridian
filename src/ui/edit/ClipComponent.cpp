@@ -263,12 +263,12 @@ void ClipComponent::mouseDrag (const juce::MouseEvent& e)
     switch (dragAction)
     {
         case Action::move:
-            clipNode.setProperty (ids::start, juce::jmax<juce::int64> (0, editState.snap (originalStart + delta)), um);
+            clipNode.setProperty (ids::start, std::max<juce::int64> (0, editState.snap (originalStart + delta)), um);
             break;
 
         case Action::trimStart:
         {
-            const auto earliest = juce::jmax<juce::int64> (0, originalStart - originalOffset); // cannot reveal before the file starts
+            const auto earliest = std::max<juce::int64> (0, originalStart - originalOffset); // cannot reveal before the file starts
             const auto newStart = juce::jlimit (earliest, originalEnd - minimumClipLength, editState.snap (originalStart + delta));
             clipNode.setProperty (ids::start, newStart, um);
             clipNode.setProperty (ids::offset, originalOffset + (newStart - originalStart), um);

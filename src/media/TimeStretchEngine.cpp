@@ -105,7 +105,7 @@ TimeStretchResult renderTimeStretch (const TimeStretchRequest& request, juce::Au
     // Pass 1: study the whole clip (gives the offline engine its look-ahead).
     for (juce::int64 pos = 0; pos < length; pos += blockSize)
     {
-        const int n = (int) juce::jmin<juce::int64> (blockSize, length - pos);
+        const int n = (int) std::min<juce::int64> (blockSize, length - pos);
         reader->read (input.getArrayOfWritePointers(), numChannels, start + pos, n);
         stretcher.study (input.getArrayOfReadPointers(), (size_t) n, pos + n >= length);
         if (! report (0.3 * (double) (pos + n) / (double) length))
@@ -118,7 +118,7 @@ TimeStretchResult renderTimeStretch (const TimeStretchRequest& request, juce::Au
     // Pass 2: process and collect.
     for (juce::int64 pos = 0; pos < length && result.error.isEmpty(); pos += blockSize)
     {
-        const int n = (int) juce::jmin<juce::int64> (blockSize, length - pos);
+        const int n = (int) std::min<juce::int64> (blockSize, length - pos);
         reader->read (input.getArrayOfWritePointers(), numChannels, start + pos, n);
         stretcher.process (input.getArrayOfReadPointers(), (size_t) n, pos + n >= length);
         drain();

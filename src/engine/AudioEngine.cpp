@@ -227,7 +227,7 @@ void AudioEngine::processChunk (const float* const* inputs, int numInputs, float
         dsp::multiplyInPlace (masterOut[0].data(), faderGains.data(), numSamples);
         dsp::multiplyInPlace (masterOut[1].data(), faderGains.data(), numSamples);
     }
-    else if (masterFader.getCurrent() != 1.0)
+    else if (! juce::exactlyEqual (masterFader.getCurrent(), 1.0))
     {
         dsp::multiplyInPlace (masterOut[0].data(), masterFader.getCurrent(), numSamples);
         dsp::multiplyInPlace (masterOut[1].data(), masterFader.getCurrent(), numSamples);
@@ -471,7 +471,7 @@ void AudioEngine::mixTrackIntoBus (TrackRender& t, const BlockContext& ctx) noex
     if (steady && t.sends.empty())
     {
         const double gain = s.faderRamp.getCurrent() * s.muteRamp.getCurrent();
-        if (gain == 0.0)
+        if (juce::exactlyEqual (gain, 0.0))
             return; // muted or fader off: nothing to add, meters read silence
 
         const double gl = gain * s.panLeftRamp.getCurrent();

@@ -71,7 +71,7 @@ ImportResult importAudioFile (const juce::File& source, const juce::File& destin
     {
         for (juce::int64 pos = 0; pos < reader->lengthInSamples && ! cancelled; pos += blockSize)
         {
-            const int n = (int) juce::jmin<juce::int64> (blockSize, reader->lengthInSamples - pos);
+            const int n = (int) std::min<juce::int64> (blockSize, reader->lengthInSamples - pos);
             reader->read (block.getArrayOfWritePointers(), numChannels, pos, n);
             writer->writeFromAudioSampleBuffer (block, 0, n);
             cancelled = progress && ! progress ((double) (pos + n) / (double) reader->lengthInSamples);
@@ -131,7 +131,7 @@ ImportResult importAudioFile (const juce::File& source, const juce::File& destin
 
         while (produced < totalToProduce && ! cancelled)
         {
-            const int numOut = (int) juce::jmin<juce::int64> (blockSize, totalToProduce - produced);
+            const int numOut = (int) std::min<juce::int64> (blockSize, totalToProduce - produced);
             refill ((size_t) std::ceil (numOut * ratio) + 8);
 
             int used = 0;

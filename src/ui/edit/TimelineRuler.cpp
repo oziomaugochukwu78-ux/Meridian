@@ -140,7 +140,7 @@ void TimelineRuler::locateFromMouse (const juce::MouseEvent& e)
 {
     if (e.x < trackHeaderWidth || ! onLocate)
         return;
-    onLocate (state.snap (juce::jmax<juce::int64> (0, state.xToSample (e.x - trackHeaderWidth))));
+    onLocate (state.snap (std::max<juce::int64> (0, state.xToSample (e.x - trackHeaderWidth))));
 }
 
 void TimelineRuler::mouseDown (const juce::MouseEvent& e) { locateFromMouse (e); }
