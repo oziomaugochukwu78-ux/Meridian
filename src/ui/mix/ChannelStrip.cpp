@@ -11,6 +11,7 @@ namespace
 {
 constexpr int sectionHeader = 13;
 constexpr int slotHeight = 17;
+constexpr const char* automationModes[] = { "off", "read", "touch", "latch", "write" };
 
 juce::String formatDb (double db)
 {
@@ -74,12 +75,15 @@ ChannelStrip::ChannelStrip (AppController& a, juce::ValueTree t)
     };
     addAndMakeVisible (outputButton);
 
-    automationSelector.addItem ("auto off", 1);
-    automationSelector.addItem ("auto read", 2);
-    automationSelector.setTooltip ("Automation mode");
+    for (int i = 0; i < (int) std::size (automationModes); ++i)
+        automationSelector.addItem (juce::String ("auto ") + automationModes[i], i + 1);
+    automationSelector.setTooltip ("Automation mode. Read: play the lanes. Touch: record a control while you hold it. "
+                                   "Latch: record from the first touch until stop. Write: record everything while playing.");
     automationSelector.onChange = [this]
     {
-        setProperty (ids::automationMode, automationSelector.getSelectedId() == 2 ? "read" : "off", "Automation Mode");
+        const int index = automationSelector.getSelectedId() - 1;
+        if (index >= 0 && index < (int) std::size (automationModes))
+            setProperty (ids::automationMode, automationModes[index], "Automation Mode");
     };
     addAndMakeVisible (automationSelector);
 
@@ -87,7 +91,13 @@ ChannelStrip::ChannelStrip (AppController& a, juce::ValueTree t)
     panKnob.setDoubleClickReturnValue (true, 0.0);
     panKnob.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
     panKnob.setTooltip ("Pan (double-click to centre)");
-    panKnob.onDragStart = [this] { if (auto* um = app.getUndoManager()) um->beginNewTransaction ("Pan"); };
+    panKnob.onDragStart = [this]
+    {
+        app.getAutomationRecorder().setTouched (track::id (trackNode), "pan", true);
+        if (auto* um = app.getUndoManager())
+            um->beginNewTransaction ("Pan");
+    };
+    panKnob.onDragEnd = [this] { app.getAutomationRecorder().setTouched (track::id (trackNode), "pan", false); };
     panKnob.onValueChange = [this]
     {
         if (auto* um = app.getUndoManager())
@@ -115,10 +125,15 @@ ChannelStrip::ChannelStrip (AppController& a, juce::ValueTree t)
     fader.onDragStart = [this]
     {
         draggingFader = true;
+        app.getAutomationRecorder().setTouched (track::id (trackNode), "volume", true); // Touch/Latch: write while held
         if (auto* um = app.getUndoManager())
             um->beginNewTransaction ("Volume");
     };
-    fader.onDragEnd = [this] { draggingFader = false; };
+    fader.onDragEnd = [this]
+    {
+        draggingFader = false;
+        app.getAutomationRecorder().setTouched (track::id (trackNode), "volume", false);
+    };
     fader.onValueChange = [this]
     {
         if (auto* um = app.getUndoManager())
@@ -262,7 +277,9 @@ void ChannelStrip::refresh()
     muteButton.setToggleState (track::mute (trackNode), juce::dontSendNotification);
 
     inputSelector.setSelectedId (track::inputChannel (trackNode) + 2, juce::dontSendNotification);
-    automationSelector.setSelectedId (track::automationRead (trackNode) ? 2 : 1, juce::dontSendNotification);
+    for (int i = 0; i < (int) std::size (automationModes); ++i)
+        if (track::automationMode (trackNode) == automationModes[i])
+            automationSelector.setSelectedId (i + 1, juce::dontSendNotification);
 
     namePlate.setText (track::name (trackNode), juce::dontSendNotification);
     namePlate.setColour (juce::Label::backgroundColourId, track::colour (trackNode));

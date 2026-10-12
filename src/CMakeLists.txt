@@ -10,6 +10,8 @@ juce_add_gui_app(Meridian
 
 target_sources(Meridian PRIVATE
     app/AppController.cpp
+    app/AutomationRecorder.cpp
+    app/AutomationRecorder.h
     app/AppController.h
     app/CommandIds.h
     app/Main.cpp

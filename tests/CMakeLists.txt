@@ -3,6 +3,7 @@
 
 add_executable(meridian_core_tests
     dsp/AutomationCurveTests.cpp
+    dsp/AutomationWriterTests.cpp
     dsp/DelayLineTests.cpp
     dsp/DynamicsTests.cpp
     dsp/EffectsTests.cpp

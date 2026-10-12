@@ -71,6 +71,10 @@ public:
     juce::int64 getLastRecordingCompensation() const noexcept { return lastRecordingCompensation; }
     juce::int64 getLastMidiCompensation() const noexcept { return midiCompensation; }
 
+    /** A control is held (Touch/Latch): the engine follows the control, not its lane.
+        bit: TrackRealtimeState::touchVolume, touchPan, touchMute or touchSend (slot). */
+    void setControlTouched (int trackId, uint32_t bit, bool isTouched);
+
     // Plug-in delay compensation --------------------------------------------------------
     void setDelayCompensationEnabled (bool enabled);
     bool isDelayCompensationEnabled() const noexcept { return delayCompensationEnabled; }

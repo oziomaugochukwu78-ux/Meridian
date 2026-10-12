@@ -1,5 +1,7 @@
 #include "SendSlotButton.h"
 
+#include "model/Automation.h"
+
 #include "model/Routing.h"
 #include "ui/Theme.h"
 
@@ -33,7 +35,15 @@ public:
         level.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         level.setRange (0.0, 1.0);
         level.setDoubleClickReturnValue (true, dsp::FaderTaper::unityPosition);
-        level.onDragStart = [this] { begin ("Send Level"); };
+        level.onDragStart = [this]
+        {
+            app.getAutomationRecorder().setTouched (track::id (send::owningTrack (node)), automation::sendParameter (send::slot (node)), true);
+            begin ("Send Level");
+        };
+        level.onDragEnd = [this]
+        {
+            app.getAutomationRecorder().setTouched (track::id (send::owningTrack (node)), automation::sendParameter (send::slot (node)), false);
+        };
         level.onValueChange = [this] { set (ids::levelDb, dsp::FaderTaper::positionToDb (level.getValue())); };
         addAndMakeVisible (level);
 

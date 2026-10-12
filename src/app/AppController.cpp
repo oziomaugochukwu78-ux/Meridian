@@ -68,12 +68,14 @@ AppController::AppController()
     }
 
     backupTimer.startTimer (30 * 1000); // checks twice a minute; writes only on the set interval
+    automationRecorder = std::make_unique<AutomationRecorder> (*this);
 }
 
 AppController::~AppController()
 {
     shuttingDown.store (true);
     *lifetime = false;
+    automationRecorder.reset();
     backupTimer.stopTimer();
     if (session != nullptr)
         backups::markClosed (session->getSessionFile()); // a clean exit: nothing to recover next time

@@ -216,9 +216,9 @@ void TrackLane::paintAutomation (juce::Graphics& g)
     for (const auto& p : pts)
     {
         const auto x = (float) juce::jlimit (-10.0, getWidth() + 10.0, editState.sampleToX (p.time));
-        line.lineTo (x, dbToY (p.db));
+        line.lineTo (x, dbToY (p.value));
     }
-    line.lineTo ((float) getWidth(), dbToY (pts.back().db));
+    line.lineTo ((float) getWidth(), dbToY (pts.back().value));
 
     g.setColour (colour);
     g.strokePath (line, juce::PathStrokeType (1.6f));
@@ -227,7 +227,7 @@ void TrackLane::paintAutomation (juce::Graphics& g)
     {
         const auto x = (float) editState.sampleToX (p.time);
         if (x >= -4.0f && x <= getWidth() + 4.0f)
-            g.fillRect (juce::Rectangle<float> (x - 2.5f, dbToY (p.db) - 2.5f, 5.0f, 5.0f));
+            g.fillRect (juce::Rectangle<float> (x - 2.5f, dbToY (p.value) - 2.5f, 5.0f, 5.0f));
     }
 }
 

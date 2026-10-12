@@ -69,8 +69,8 @@ What a home producer, songwriter or podcaster needs.
 Acceptance: MIDI timing jitter of zero samples in offline renders, and at most one buffer live.
 
 **Automation**
-- pan, mute, send level and plug-in parameters
-- write modes (Write, Touch, Latch) and trim
+- done: pan, mute, send level and plug-in parameters; write modes (Write, Touch, Latch)
+- still to do: trim mode, drawing the new lanes in the Edit window, plug-in control touch from plug-in windows
 
 **Built-in processing**
 - done: Meridian EQ, Compressor, Limiter (true peak), Reverb

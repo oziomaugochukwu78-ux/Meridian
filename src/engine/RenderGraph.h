@@ -110,6 +110,16 @@ struct SendRender
     int targetBus = -1;                            ///< index into RenderGraph::buses
     int slot = 0;                                  ///< A..E as 0..4
     PathDelay compensation;
+    dsp::AutomationCurve levelAutomation;          ///< dB, interpolated linearly in dB
+};
+
+/** Automation of one plug-in parameter (normalised 0..1), applied at the start
+    of each block. The parameter belongs to an insert this graph keeps alive. */
+struct ParameterAutomation
+{
+    juce::AudioProcessorParameter* parameter = nullptr;
+    dsp::AutomationCurve curve;
+    float lastValue = -1.0f;                       ///< audio thread: what was last applied
 };
 
 /** The input of an aux track: a stereo compensated (double-double) sum,
@@ -149,6 +159,9 @@ struct TrackRender
     std::vector<std::shared_ptr<InsertSlot>> inserts;
     std::shared_ptr<RecordTake> take;
     dsp::AutomationCurve volumeAutomation;         ///< values in dB, interpolated linearly in dB
+    dsp::AutomationCurve panAutomation;            ///< -1..+1, sample-accurate
+    dsp::AutomationCurve muteAutomation;           ///< 0 or 1, applied per block with the 5 ms declick ramp
+    std::vector<ParameterAutomation> parameterAutomation;
 
     // Scratch, sized for the graph's maxBlockSize when the graph is built.
     juce::AudioBuffer<float> buffer;

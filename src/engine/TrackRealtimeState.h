@@ -3,6 +3,7 @@
 #include <dsp/LinearRamp.h>
 
 #include <atomic>
+#include <cstdint>
 #include <utility>
 
 namespace meridian
@@ -32,7 +33,13 @@ struct TrackRealtimeState
     std::atomic<bool> muted { false };
     std::atomic<bool> soloed { false };
     std::atomic<bool> recordArmed { false };
-    std::atomic<bool> automationRead { true };
+    std::atomic<bool> automationRead { true };   ///< play the automation lanes (Read, Touch and Latch modes)
+
+    /** Controls the user is holding (Touch/Latch): while held, the engine follows
+        the control instead of its lane. Bits: touchVolume, touchPan, touchMute, touchSend (slot). */
+    std::atomic<uint32_t> touched { 0 };
+    static constexpr uint32_t touchVolume = 1u, touchPan = 2u, touchMute = 4u;
+    static constexpr uint32_t touchSend (int slot) noexcept { return 8u << slot; }
 
     // Audio thread -> UI: peak since the UI last collected it (post-fader).
     std::atomic<float> peakLeft { 0.0f };

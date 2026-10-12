@@ -377,6 +377,21 @@ void AudioEngine::renderTrack (TrackRender& t, const BlockContext& ctx) noexcept
             writeTake (*t.take, ctx);
     }
 
+    // Plug-in parameter automation: set at the start of the block, only when it changes.
+    if (! t.parameterAutomation.empty() && ctx.state != Transport::State::stopped
+        && t.state->automationRead.load (std::memory_order_relaxed))
+    {
+        for (auto& automated : t.parameterAutomation)
+        {
+            const auto value = (float) juce::jlimit (0.0, 1.0, automated.curve.valueAt (ctx.position));
+            if (! juce::exactlyEqual (value, automated.lastValue))
+            {
+                automated.parameter->setValue (value);
+                automated.lastValue = value;
+            }
+        }
+    }
+
     if (! t.inserts.empty())
     {
         juce::AudioBuffer<float> view (t.buffer.getArrayOfWritePointers(), numChannels, 0, ctx.numSamples);
@@ -598,12 +613,19 @@ void AudioEngine::mixTrackIntoBus (TrackRender& t, const BlockContext& ctx) noex
     for (size_t i = 0; ! soloedHere && i < t.upstream.size(); ++i)
         soloedHere = t.upstream[i]->soloed.load (std::memory_order_relaxed);
 
+    // Automation plays while rolling in Read/Touch/Latch, except for a control being held.
+    const bool readAutomation = rolling && s.automationRead.load (std::memory_order_relaxed);
+    const auto held = s.touched.load (std::memory_order_relaxed);
+    const bool useAutomation = readAutomation && ! t.volumeAutomation.isEmpty() && (held & TrackRealtimeState::touchVolume) == 0;
+    const bool usePanAutomation = readAutomation && ! t.panAutomation.isEmpty() && (held & TrackRealtimeState::touchPan) == 0;
+    const bool automatedMute = readAutomation && ! t.muteAutomation.isEmpty() && (held & TrackRealtimeState::touchMute) == 0
+                               && t.muteAutomation.valueAt (ctx.position) >= 0.5;
+
     const bool silencedBySolo = ctx.anySolo && ! soloedHere;
-    const double muteTarget = (s.muted.load (std::memory_order_relaxed) || silencedBySolo) ? 0.0 : 1.0;
+    const double muteTarget = (s.muted.load (std::memory_order_relaxed) || silencedBySolo || automatedMute) ? 0.0 : 1.0;
     const double faderTarget = decibelsToGain (s.volumeDb.load (std::memory_order_relaxed));
     const double pan = s.pan.load (std::memory_order_relaxed);
     const auto panGains = t.numChannels == 1 ? dsp::monoPan (pan) : dsp::stereoBalance (pan);
-    const bool useAutomation = rolling && s.automationRead.load (std::memory_order_relaxed) && ! t.volumeAutomation.isEmpty();
 
     if (! s.rampsInitialised)
     {
@@ -663,7 +685,7 @@ void AudioEngine::mixTrackIntoBus (TrackRender& t, const BlockContext& ctx) noex
         bus[1] = { target.sum[1].data(), target.comp[1].data() };
     }
 
-    const bool steady = ! useAutomation && ! s.faderRamp.isRamping() && ! s.muteRamp.isRamping()
+    const bool steady = ! useAutomation && ! usePanAutomation && ! s.faderRamp.isRamping() && ! s.muteRamp.isRamping()
                         && ! s.panLeftRamp.isRamping() && ! s.panRightRamp.isRamping();
 
     if (steady && t.sends.empty())
@@ -696,8 +718,25 @@ void AudioEngine::mixTrackIntoBus (TrackRender& t, const BlockContext& ctx) noex
     std::copy (faderGains.begin(), faderGains.begin() + n, totalGains.begin());
     dsp::multiplyInPlace (totalGains.data(), muteGains.data(), n); // fader x mute/solo: post-fader gain
 
-    s.panLeftRamp.render (panLeft.data(), n);
-    s.panRightRamp.render (panRight.data(), n);
+    if (usePanAutomation)
+    {
+        // Sample-accurate pan: the curve, then the pan law per sample.
+        t.panAutomation.render (ctx.position, panLeft.data(), n);
+        for (int i = 0; i < n; ++i)
+        {
+            const double p = juce::jlimit (-1.0, 1.0, panLeft[(size_t) i]);
+            const auto g = t.numChannels == 1 ? dsp::monoPan (p) : dsp::stereoBalance (p);
+            panLeft[(size_t) i] = g.left;
+            panRight[(size_t) i] = g.right;
+        }
+        s.panLeftRamp.reset (panLeft[(size_t) (n - 1)]); // leaving Read mode ramps from here
+        s.panRightRamp.reset (panRight[(size_t) (n - 1)]);
+    }
+    else
+    {
+        s.panLeftRamp.render (panLeft.data(), n);
+        s.panRightRamp.render (panRight.data(), n);
+    }
     std::copy (totalGains.begin(), totalGains.begin() + n, coefLeft.begin());
     std::copy (totalGains.begin(), totalGains.begin() + n, coefRight.begin());
     dsp::multiplyInPlace (coefLeft.data(), panLeft.data(), n);
@@ -739,7 +778,17 @@ void AudioEngine::mixTrackIntoBus (TrackRender& t, const BlockContext& ctx) noex
         ss.panLeftRamp.setTarget (sendPanGains.left, rampLength (panRampSeconds, sr));
         ss.panRightRamp.setTarget (sendPanGains.right, rampLength (panRampSeconds, sr));
 
-        ss.levelRamp.render (sendGains.data(), n);
+        if (readAutomation && ! send.levelAutomation.isEmpty() && (held & TrackRealtimeState::touchSend (send.slot)) == 0
+            && ! ss.muted.load (std::memory_order_relaxed))
+        {
+            send.levelAutomation.render (ctx.position, sendGains.data(), n);          // dB, sample-accurate
+            dsp::decibelsToGain (sendGains.data(), sendGains.data(), n, silenceDb);
+            ss.levelRamp.reset (sendGains[(size_t) (n - 1)]);
+        }
+        else
+        {
+            ss.levelRamp.render (sendGains.data(), n);
+        }
         dsp::multiplyInPlace (sendGains.data(), ss.preFader.load (std::memory_order_relaxed) ? muteGains.data()
                                                                                              : totalGains.data(), n);
         ss.panLeftRamp.render (panLeft.data(), n);

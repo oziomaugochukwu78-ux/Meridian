@@ -6,6 +6,8 @@
 add_library(meridian_core STATIC
     dsp/AutomationCurve.cpp
     dsp/AutomationCurve.h
+    dsp/AutomationWriter.cpp
+    dsp/AutomationWriter.h
     dsp/Biquad.cpp
     dsp/Biquad.h
     dsp/Compressor.cpp

@@ -93,15 +93,16 @@ juce::var schema (std::initializer_list<Param> params)
         {
             set (property, "type", juce::Array<juce::var> { "integer", "string" });
         }
-        else if (juce::String (p.type) == "array")
+        else if (juce::String (p.type) == "array" || juce::String (p.type) == "breakpoints")
         {
-            // Automation breakpoints.
+            // Automation breakpoints: {seconds, db} for volume, {seconds, value} for any lane.
+            const char* valueName = juce::String (p.type) == "array" ? "db" : "value";
             set (property, "type", "array");
             set (property, "items", makeObject ({
                 { "type", "object" },
                 { "properties", makeObject ({ { "seconds", makeObject ({ { "type", "number" } }) },
-                                              { "db", makeObject ({ { "type", "number" } }) } }) },
-                { "required", juce::Array<juce::var> { "seconds", "db" } } }));
+                                              { valueName, makeObject ({ { "type", "number" } }) } }) },
+                { "required", juce::Array<juce::var> { "seconds", valueName } } }));
         }
         else if (juce::String (p.type) == "notes")
         {
@@ -189,7 +190,9 @@ const std::vector<ToolInfo>& toolTable()
                     { "mute", "boolean", "Mute" },
                     { "solo", "boolean", "Solo" },
                     { "record_arm", "boolean", "Record-enable: audio tracks record their input, instrument tracks record MIDI from the keyboard (and play it live)" },
-                    { "input", "integer", "Audio input channel, 1-based (0 = no input)" } }) },
+                    { "input", "integer", "Audio input channel, 1-based (0 = no input)" },
+                    { "automation_mode", "string", "off, read (play the lanes), touch / latch / write (record control moves while playing)",
+                      false, { "off", "read", "touch", "latch", "write" } } }) },
         { "create_track", "Create tracks",
           "Create audio tracks (play and record audio), aux tracks (buses that receive sends, e.g. for a shared "
           "reverb), instrument tracks (play MIDI notes through Meridian's built-in synthesiser) or drum tracks (the "
@@ -271,6 +274,16 @@ const std::vector<ToolInfo>& toolTable()
           "An empty points list removes the automation (the fader is used again).",
           schema ({ { "track", "track", trackHelp, true },
                     { "points", "array", "Breakpoints, e.g. [{\"seconds\": 0, \"db\": -60}, {\"seconds\": 4, \"db\": 0}]", true },
+                    { "replace", "boolean", "Replace existing points (default true)" } }) },
+        { "set_automation", "Automation",
+          "Draw any automatable control over time: breakpoints of {seconds, value}, joined by straight lines and held "
+          "before the first and after the last. parameter: \"volume\" (dB), \"pan\" (-1 left .. +1 right), "
+          "\"mute\" (0 or 1), \"send A\"..\"send E\" (dB), or \"insert A: <control>\" for a plug-in control "
+          "(value in the control's own units, as list_plugin_parameters shows). Replaces the lane unless "
+          "replace=false; an empty points list removes it. The track is switched to Read if its automation was off.",
+          schema ({ { "track", "track", trackHelp, true },
+                    { "parameter", "string", "What to automate, e.g. \"pan\", \"send A\", \"insert B: Mix\"", true },
+                    { "points", "breakpoints", "Breakpoints, e.g. [{\"seconds\": 0, \"value\": -1}, {\"seconds\": 4, \"value\": 1}]", true },
                     { "replace", "boolean", "Replace existing points (default true)" } }) },
         { "set_tempo", "Set the tempo",
           "Session tempo in BPM (beats per minute). MIDI notes are placed in beats, so they follow the tempo.",
@@ -484,6 +497,7 @@ RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var
     if (name == "set_clip")           return setClip (args);
     if (name == "import_audio")       return importAudio (args);
     if (name == "set_volume_automation") return setVolumeAutomation (args);
+    if (name == "set_automation")     return setAutomation (args);
     if (name == "set_tempo")          return setTempo (args);
     if (name == "add_midi_clip")      return addMidiClip (args);
     if (name == "add_notes")          return addNotes (args);
@@ -811,6 +825,8 @@ RemoteTools::Result RemoteTools::setTrack (const juce::var& args)
             return { false, {}, "Aux tracks cannot record." };
         t.setProperty (ids::recordArm, (bool) args["record_arm"], um);
     }
+    if (args.hasProperty ("automation_mode"))
+        t.setProperty (ids::automationMode, args["automation_mode"].toString(), um); // checked against the schema's list
     if (args.hasProperty ("input"))
     {
         if (! track::isAudio (t))
@@ -1222,6 +1238,82 @@ RemoteTools::Result RemoteTools::importAudio (const juce::var& args)
                                  { "note", "Copying and converting in the background; call list_clips in a moment." } }), {} };
 }
 
+RemoteTools::Result RemoteTools::setAutomation (const juce::var& args)
+{
+    juce::String error;
+    auto t = findTrack (args["track"], error);
+    if (! t.isValid())
+        return { false, {}, error };
+    const auto* points = args["points"].getArray();
+    if (points == nullptr)
+        return { false, {}, "\"points\" must be an array of {\"seconds\": number, \"value\": number}." };
+
+    // Which lane, and how to turn a value in the control's units into the lane's.
+    const auto wanted = args["parameter"].toString().trim();
+    juce::String parameter;
+    juce::AudioProcessorParameter* pluginControl = nullptr;
+    if (wanted.equalsIgnoreCase ("volume") || wanted.equalsIgnoreCase ("pan") || wanted.equalsIgnoreCase ("mute"))
+    {
+        parameter = wanted.toLowerCase();
+    }
+    else if (wanted.startsWithIgnoreCase ("send "))
+    {
+        const int slot = readSlot (wanted.fromFirstOccurrenceOf (" ", false, false).trim(), Session::maxSends);
+        if (slot < 0 || ! routing::findSend (t, slot).isValid())
+            return { false, {}, "\"" + track::name (t) + "\" has no send " + wanted.fromFirstOccurrenceOf (" ", false, false).trim() + "." };
+        parameter = automation::sendParameter (slot);
+    }
+    else if (wanted.startsWithIgnoreCase ("insert ") && wanted.contains (":"))
+    {
+        const auto slotText = wanted.fromFirstOccurrenceOf (" ", false, false).upToFirstOccurrenceOf (":", false, false).trim();
+        const auto control = wanted.fromFirstOccurrenceOf (":", false, false).trim();
+        auto* plugin = findPlugin (makeObject ({ { "track", args["track"] }, { "slot", slotText } }), error);
+        if (plugin == nullptr)
+            return { false, {}, error };
+        const auto& all = plugin->getParameters();
+        for (int i = 0; i < all.size() && pluginControl == nullptr; ++i)
+            if (parameterId (*all[i]).equalsIgnoreCase (control) || all[i]->getName (64).equalsIgnoreCase (control))
+            {
+                pluginControl = all[i];
+                parameter = automation::pluginParameter (readSlot (slotText, Session::maxInserts), i);
+            }
+        if (pluginControl == nullptr)
+            return { false, {}, "\"" + plugin->getName() + "\" has no control \"" + control + "\". Call list_plugin_parameters." };
+    }
+    else
+    {
+        return { false, {}, "Unknown parameter \"" + wanted + "\". Use volume, pan, mute, \"send A\" or \"insert A: <control>\"." };
+    }
+
+    auto* um = beginEdit ("Automation");
+    if (points->isEmpty())
+    {
+        automation::clearLane (t, parameter, um);
+        return { true, makeObject ({ { "track", track::name (t) }, { "parameter", wanted }, { "automation", "removed" } }), {} };
+    }
+
+    auto lane = automation::getOrCreateLane (t, parameter, um);
+    if (! args.hasProperty ("replace") || (bool) args["replace"])
+        lane.removeAllChildren (um);
+    for (const auto& p : *points)
+    {
+        if (! p.hasProperty ("seconds") || ! p.hasProperty ("value"))
+            return { false, {}, "Each point needs \"seconds\" and \"value\"." };
+        const double value = pluginControl != nullptr ? (double) pluginControl->getValueForText (p["value"].toString())
+                                                      : (double) p["value"];
+        automation::addPoint (lane, secondsToSamples (p["seconds"]), value, um);
+    }
+    if (track::automationMode (t) == "off")
+        t.setProperty (ids::automationMode, "read", um); // otherwise the drawing would be ignored
+
+    juce::Array<juce::var> written;
+    for (const auto& p : automation::points (lane))
+        written.add (makeObject ({ { "seconds", samplesToSeconds (p.time) },
+                                   { "value", pluginControl != nullptr ? juce::var (pluginControl->getText ((float) p.value, 32))
+                                                                       : juce::var (p.value) } }));
+    return { true, makeObject ({ { "track", track::name (t) }, { "parameter", wanted }, { "points", written } }), {} };
+}
+
 RemoteTools::Result RemoteTools::setVolumeAutomation (const juce::var& args)
 {
     juce::String error;
@@ -1258,7 +1350,7 @@ RemoteTools::Result RemoteTools::setVolumeAutomation (const juce::var& args)
 
     juce::Array<juce::var> written;
     for (const auto& p : automation::points (lane))
-        written.add (makeObject ({ { "seconds", samplesToSeconds (p.time) }, { "db", dbOrNull (p.db) } }));
+        written.add (makeObject ({ { "seconds", samplesToSeconds (p.time) }, { "db", dbOrNull (p.value) } }));
     return { true, makeObject ({ { "track", track::name (t) }, { "points", written } }), {} };
 }
 

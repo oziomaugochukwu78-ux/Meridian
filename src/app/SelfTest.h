@@ -102,6 +102,7 @@ private:
     void testBuiltinEffects();
     void testLoopClickMarkers();
     void testMidiInput();
+    void testAutomation();
     void testStress();
     void testRobustness();
     void testDamagedSessions (const juce::File& originalSession);

@@ -74,6 +74,7 @@ void SelfTest::start()
         testBuiltinEffects();
         testLoopClickMarkers();
         testMidiInput();
+        testAutomation();
         testStress();
         testRobustness(); // before the remote tests: their BOUNCE runs in the background
         testMcpTools();
@@ -1682,6 +1683,180 @@ void SelfTest::testMidiInput()
 }
 
 //==============================================================================
+// Automation of pan, mute, sends and plug-in controls; Touch, Latch and Write.
+
+void SelfTest::testAutomation()
+{
+    beginGroup ("Automation (pan, mute, sends, plug-ins; Touch, Latch, Write)");
+    auto& tools = app.getRemoteTools();
+    auto call = [&tools] (const juce::String& tool, const juce::String& arguments) { return tools.call (tool, juce::JSON::parse (arguments)); };
+    const auto tone = media.getChildFile ("tone1k_mono.wav");
+    const auto end = clipStart + (juce::int64) (2.0 * sampleRate) + 4800;
+    auto* session = app.getSession();
+    auto at = [this] (double seconds) { return (juce::int64) (seconds * sampleRate); };
+
+    // Peak (dB) of a channel of the last bounce over [from, to) seconds.
+    auto levelIn = [this, at] (const BounceResult& r, int channel, double from, double to)
+    {
+        const auto audio = readAudio (r.file);
+        const auto a = (int) at (from), b = (int) std::min<juce::int64> (at (to), audio.getNumSamples());
+        return b > a && channel < audio.getNumChannels() ? db (dsp::measureLevels (audio.getReadPointer (channel, a), b - a).peak) : -999.0;
+    };
+
+    // Pan: hard left until 1.0 s, hard right from 1.5 s.
+    clearTracks();
+    auto t = addToneTrack ("Pan Auto", 1, tone, clipStart);
+    auto r = call ("set_automation", R"({"track":"Pan Auto","parameter":"pan","points":[{"seconds":0,"value":-1},{"seconds":1.0,"value":-1},{"seconds":1.5,"value":1}]})");
+    auto b = bounce ("automation_pan", 0, end);
+    expect ("pan automation: hard left, then hard right (sample-accurate pan law)",
+            r.ok && std::abs (levelIn (b, 0, 0.6, 0.95) - toneDb) < 0.02 && levelIn (b, 1, 0.6, 0.95) < -100.0
+                && std::abs (levelIn (b, 1, 1.6, 2.4) - toneDb) < 0.02 && levelIn (b, 0, 1.6, 2.4) < -100.0,
+            r.error + " L " + fmt (levelIn (b, 0, 0.6, 0.95)) + " / R " + fmt (levelIn (b, 1, 1.6, 2.4)) + " dB");
+
+    // Mute: muted between 1.0 and 1.5 s.
+    clearTracks();
+    t = addToneTrack ("Mute Auto", 1, tone, clipStart);
+    r = call ("set_automation", R"({"track":"Mute Auto","parameter":"mute","points":[{"seconds":0,"value":0},{"seconds":1.0,"value":1},{"seconds":1.5,"value":0}]})");
+    b = bounce ("automation_mute", 0, end);
+    expect ("mute automation: silent between its points, at full level either side",
+            r.ok && levelIn (b, 0, 1.05, 1.45) < -100.0 && std::abs (levelIn (b, 0, 0.6, 0.95) - (toneDb + panCentreDb)) < 0.02
+                && std::abs (levelIn (b, 0, 1.6, 2.4) - (toneDb + panCentreDb)) < 0.02,
+            r.error + " muted part " + fmt (levelIn (b, 0, 1.05, 1.45)) + " dB");
+
+    // Send level: a pre-fader send with the fader off, so only the send is heard; -12 dB, then 0 dB.
+    clearTracks();
+    t = addToneTrack ("Send Auto", 1, tone, clipStart);
+    auto bus = session->addTrack ("FX Bus", 2, nullptr, Session::TrackKind::aux);
+    routing::setSend (*session, t, 0, track::id (bus), nullptr);
+    routing::findSend (t, 0).setProperty (ids::preFader, true, nullptr);
+    t.setProperty (ids::volumeDb, -144.0, nullptr);
+    r = call ("set_automation", R"({"track":"Send Auto","parameter":"send A","points":[{"seconds":0,"value":-12},{"seconds":1.2,"value":-12},{"seconds":1.3,"value":0}]})");
+    b = bounce ("automation_send", 0, end);
+    const double sendStep = levelIn (b, 0, 1.4, 2.4) - levelIn (b, 0, 0.6, 1.1);
+    expectNear ("send level automation: the send rises by exactly the drawn 12 dB", sendStep, 12.0, 0.02, "dB");
+
+    // Plug-in control: Meridian EQ's Output from 0 dB to -12 dB.
+    clearTracks();
+    t = addToneTrack ("Plugin Auto", 1, tone, clipStart);
+    juce::PluginDescription eq;
+    for (const auto& d : BuiltinEffectFormat::getDescriptions())
+        if (d.name == "Meridian EQ")
+            eq = d;
+    juce::String error;
+    app.getBridge().insertPlugin (t, 0, eq, error);
+    r = call ("set_automation", R"({"track":"Plugin Auto","parameter":"insert A: Output","points":[{"seconds":0,"value":0},{"seconds":1.2,"value":0},{"seconds":1.21,"value":-12}]})");
+    b = bounce ("automation_plugin", 0, end);
+    const double pluginStep = levelIn (b, 0, 1.4, 2.4) - levelIn (b, 0, 0.6, 1.1);
+    expectNear ("plug-in control automation: the EQ's output steps down by the drawn 12 dB", pluginStep, -12.0, 0.05,
+                "dB" + (r.ok ? juce::String() : " (" + r.error + ")"));
+    r = call ("set_automation", R"({"track":"Plugin Auto","parameter":"insert A: No Such Knob","points":[{"seconds":0,"value":1}]})");
+    expect ("set_automation refuses a control the plug-in does not have", ! r.ok && r.error.contains ("list_plugin_parameters"), r.error);
+
+    // The recorder: passes driven with simulated playhead positions, 20 ms apart.
+    auto& recorder = app.getAutomationRecorder();
+    const auto step = at (0.02);
+    auto runPass = [&] (double fromSeconds, double toSeconds, const std::function<void (double)>& atTime)
+    {
+        for (auto p = at (fromSeconds); p <= at (toSeconds); p += step)
+        {
+            atTime ((double) p / sampleRate);
+            recorder.process (true, p);
+        }
+        recorder.process (false, 0);
+    };
+    auto laneValue = [&] (const juce::ValueTree& track, const char* parameter, double seconds)
+    {
+        return automation::valueAt (automation::points (automation::lane (track, parameter)), at (seconds));
+    };
+
+    // Write: the whole pass is recorded, a fader ramp from -20 to -10 dB.
+    clearTracks();
+    t = addToneTrack ("Write", 1, tone, clipStart);
+    call ("set_track", R"({"track":"Write","automation_mode":"write"})");
+    runPass (0.5, 2.5, [&] (double s) { t.setProperty (ids::volumeDb, -20.0 + 10.0 * (s - 0.5) / 2.0, nullptr); });
+    expect ("Write: the pass is recorded as one undo step and follows the fader",
+            session->getUndoManager().getUndoDescription() == "Write Automation"
+                && std::abs (laneValue (t, "volume", 1.5) - (-15.0)) < 0.06 && std::abs (laneValue (t, "volume", 0.5) - (-20.0)) < 0.06,
+            session->getUndoManager().getUndoDescription() + ", " + fmt (laneValue (t, "volume", 1.5)) + " dB at 1.5 s");
+    expect ("Write: thinned to a few points (a straight ramp needs only its ends)",
+            automation::lane (t, "volume").getNumChildren() <= 6, juce::String (automation::lane (t, "volume").getNumChildren()) + " points");
+    call ("set_track", R"({"track":"Write","automation_mode":"read","volume_db":0})");
+    b = bounce ("automation_written", 0, end);
+    expectNear ("Write: playing it back in Read gives the recorded level (-15 dB at 1.5 s, before the pan law)",
+                levelIn (b, 0, 1.49, 1.51), toneDb - 15.0 + panCentreDb, 0.1, "dB");
+
+    // Touch: an existing flat -6 dB lane; the fader is held at -18 dB from 1.0 to 1.5 s.
+    clearTracks();
+    t = addToneTrack ("Touch", 1, tone, clipStart);
+    call ("set_automation", R"({"track":"Touch","parameter":"volume","points":[{"seconds":0,"value":-6},{"seconds":3,"value":-6}]})");
+    call ("set_track", R"({"track":"Touch","automation_mode":"touch"})");
+    const int touchId = track::id (t);
+    runPass (0.5, 2.5, [&] (double s)
+    {
+        const bool holding = s >= 1.0 && s < 1.5;
+        recorder.setTouched (touchId, "volume", holding);
+        if (holding)
+            t.setProperty (ids::volumeDb, -18.0, nullptr);
+    });
+    recorder.setTouched (touchId, "volume", false);
+    expect ("Touch: recorded only while held, then glides back to the existing lane",
+            std::abs (laneValue (t, "volume", 0.8) + 6.0) < 0.01 && std::abs (laneValue (t, "volume", 1.25) + 18.0) < 0.01
+                && std::abs (laneValue (t, "volume", 1.5 + AutomationRecorder::glideSeconds + 0.05) + 6.0) < 0.01,
+            fmt (laneValue (t, "volume", 0.8)) + " / " + fmt (laneValue (t, "volume", 1.25)) + " / "
+                + fmt (laneValue (t, "volume", 1.85)) + " dB");
+
+    // Latch: touched briefly at 1.0 s; the value is held from there to the stop.
+    clearTracks();
+    t = addToneTrack ("Latch", 1, tone, clipStart);
+    call ("set_automation", R"({"track":"Latch","parameter":"volume","points":[{"seconds":0,"value":-6}]})");
+    call ("set_track", R"({"track":"Latch","automation_mode":"latch"})");
+    const int latchId = track::id (t);
+    runPass (0.5, 2.5, [&] (double s)
+    {
+        const bool holding = s >= 1.0 && s < 1.1;
+        recorder.setTouched (latchId, "volume", holding);
+        if (holding)
+            t.setProperty (ids::volumeDb, -24.0, nullptr);
+    });
+    expect ("Latch: recorded from the first touch until the stop",
+            std::abs (laneValue (t, "volume", 0.8) + 6.0) < 0.01 && std::abs (laneValue (t, "volume", 2.0) + 24.0) < 0.01,
+            fmt (laneValue (t, "volume", 0.8)) + " / " + fmt (laneValue (t, "volume", 2.0)) + " dB");
+
+    // While a control is held in Touch, the engine follows the control, not the lane.
+    call ("set_track", R"({"track":"Latch","automation_mode":"touch","volume_db":0})");
+    call ("set_automation", R"({"track":"Latch","parameter":"volume","points":[{"seconds":0,"value":-20}]})");
+    b = bounce ("automation_lane", 0, end);
+    const double laneLevel = levelIn (b, 0, 1.0, 2.0);
+    recorder.setTouched (latchId, "volume", true);
+    b = bounce ("automation_held", 0, end);
+    const double heldLevel = levelIn (b, 0, 1.0, 2.0);
+    recorder.setTouched (latchId, "volume", false);
+    expect ("holding a control overrides its lane (Touch): -20 dB lane, 0 dB fader",
+            std::abs (laneLevel - (toneDb + panCentreDb - 20.0)) < 0.02 && std::abs (heldLevel - (toneDb + panCentreDb)) < 0.02,
+            "lane " + fmt (laneLevel) + " dB, held " + fmt (heldLevel) + " dB");
+
+    // Damaged lanes are repaired: an unknown parameter, a pan beyond hard right, a mute of 0.4.
+    auto automationNode = track::automation (t);
+    juce::ValueTree bogus (ids::LANE);
+    bogus.setProperty (ids::parameter, "warp drive", nullptr);
+    automationNode.appendChild (bogus, nullptr);
+    juce::ValueTree panLane (ids::LANE);
+    panLane.setProperty (ids::parameter, "pan", nullptr);
+    juce::ValueTree wide (ids::POINT);
+    wide.setProperty (ids::time, 0, nullptr);
+    wide.setProperty (ids::value, 7.0, nullptr);
+    panLane.appendChild (wide, nullptr);
+    automationNode.appendChild (panLane, nullptr);
+    const auto problemBefore = findSessionProblem (*session);
+    const auto repairs = repairSession (*session);
+    expect ("damaged automation is found by the validator and repaired (unknown lane removed, pan clamped)",
+            problemBefore.isNotEmpty() && findSessionProblem (*session).isEmpty() && ! automation::lane (t, "warp drive").isValid()
+                && juce::exactlyEqual ((double) automation::lane (t, "pan").getChild (0)[ids::value], 1.0),
+            problemBefore + " | " + repairs.joinIntoString ("; ").substring (0, 200));
+    clearTracks();
+}
+
+//==============================================================================
 // Stress: a large session must still sum exactly and render faster than real time.
 
 void SelfTest::testStress()
@@ -2298,8 +2473,8 @@ void SelfTest::testMcpTools()
     if (toolArray != nullptr)
         for (const auto& tool : *toolArray)
             allDescribed = allDescribed && tool["inputSchema"].isObject() && tool["description"].toString().length() > 20;
-    expect ("tools/list describes all 37 tools, each with a description and a JSON schema",
-            allDescribed && toolArray->size() == 37, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
+    expect ("tools/list describes all 38 tools, each with a description and a JSON schema",
+            allDescribed && toolArray->size() == 38, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
 
     auto r = toolCall ("get_status", "{}");
     expect ("get_status returns the session and tracks", ! failed (r) && callText (r).contains ("\"Vocal\""), callText (r).substring (0, 160));
@@ -2986,18 +3161,18 @@ void SelfTest::testUserInterface()
     expect ("a pencil stroke over the clips creates breakpoints", drawn.size() >= 10, juce::String ((int) drawn.size()) + " points");
     if (drawn.size() >= 2)
     {
-        expect ("the drawn line rises left to right", drawn.front().db < drawn.back().db,
-                fmt (drawn.front().db, 1) + " dB to " + fmt (drawn.back().db, 1) + " dB");
+        expect ("the drawn line rises left to right", drawn.front().value < drawn.back().value,
+                fmt (drawn.front().value, 1) + " dB to " + fmt (drawn.back().value, 1) + " dB");
 
         const auto first = drawn.front();
-        const juce::Point<float> firstPos ((float) view.sampleToX (first.time), yFor (first.db));
+        const juce::Point<float> firstPos ((float) view.sampleToX (first.time), yFor (first.value));
         drag (*lane, firstPos, { 0.0f, -25.0f });
         const auto moved = automation::points (automation::volumeLane (t)).front();
-        expect ("dragging a point with the Pencil moves it", moved.db > first.db + 1.0,
-                fmt (first.db, 1) + " dB -> " + fmt (moved.db, 1) + " dB");
+        expect ("dragging a point with the Pencil moves it", moved.value > first.value + 1.0,
+                fmt (first.value, 1) + " dB -> " + fmt (moved.value, 1) + " dB");
 
         const auto before = automation::points (automation::volumeLane (t));
-        const juce::Point<float> lastPos ((float) view.sampleToX (before.back().time), yFor (before.back().db));
+        const juce::Point<float> lastPos ((float) view.sampleToX (before.back().time), yFor (before.back().value));
         lane->mouseDown (mouseEvent (*lane, lastPos, lastPos, false, juce::ModifierKeys::altModifier));
         lane->mouseUp (mouseEvent (*lane, lastPos, lastPos, false, juce::ModifierKeys::altModifier));
         expect ("Alt-click deletes a point", automation::points (automation::volumeLane (t)).size() == before.size() - 1,

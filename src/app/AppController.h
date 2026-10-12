@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AutomationRecorder.h"
 #include "engine/AudioEngine.h"
 #include "engine/DiskStreamer.h"
 #include "engine/EngineBridge.h"
@@ -129,6 +130,9 @@ public:
     double getBounceProgress() const noexcept  { return bounceProgress.load(); }
     const BounceResult& getLastBounce() const noexcept { return lastBounce; }
 
+    /** Touch / Latch / Write automation recording. */
+    AutomationRecorder& getAutomationRecorder() noexcept { return *automationRecorder; }
+
     // MIDI input ------------------------------------------------------------------------------
     /** Opens every MIDI input (and any plugged in later); their notes play the
         record-armed instrument tracks and are recorded with them. Called for
@@ -210,6 +214,7 @@ private:
     juce::TimedCallback backupTimer { [this] { autoBackup(); } };
     bool midiInputsEnabled = false;
     juce::MidiDeviceListConnection midiDeviceListConnection;
+    std::unique_ptr<AutomationRecorder> automationRecorder; // last: stops before anything it uses
     std::shared_ptr<bool> lifetime = std::make_shared<bool> (true);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AppController)

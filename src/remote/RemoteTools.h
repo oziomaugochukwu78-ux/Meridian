@@ -77,6 +77,7 @@ private:
     Result setClip (const juce::var&);
     Result importAudio (const juce::var&);
     Result setVolumeAutomation (const juce::var&);
+    Result setAutomation (const juce::var&);
     Result setTempo (const juce::var&);
     Result addMidiClip (const juce::var&);
     Result addNotes (const juce::var&);

@@ -1,5 +1,6 @@
 #include "EngineBridge.h"
 
+#include "model/Automation.h"
 #include "model/MidiModel.h"
 #include "model/Routing.h"
 
@@ -690,12 +691,44 @@ std::unique_ptr<RenderGraph> EngineBridge::buildGraph (double sampleRate, int ma
 
             for (const auto& lane : track::automation (t))
             {
-                if (lane[ids::parameter].toString() != "volume")
-                    continue;
+                const auto parameter = lane[ids::parameter].toString();
                 std::vector<dsp::AutomationPoint> points;
-                for (const auto& p : lane)
-                    points.push_back ({ (juce::int64) p[ids::time], (double) p[ids::value] }); // dB; the engine converts per sample
-                render.volumeAutomation = dsp::AutomationCurve (std::move (points));
+                for (const auto& p : automation::points (lane))
+                    points.push_back ({ p.time, p.value }); // lane units; the engine converts
+
+                // Stepped lanes (mute) hold each value until the next point: a point one
+                // sample earlier with the previous value turns the linear curve into steps.
+                if (const auto range = automation::rangeOf (parameter); range.has_value() && range->stepped)
+                {
+                    std::vector<dsp::AutomationPoint> steps;
+                    for (size_t i = 0; i < points.size(); ++i)
+                    {
+                        if (i > 0 && points[i].time - 1 > points[i - 1].time)
+                            steps.push_back ({ points[i].time - 1, points[i - 1].value });
+                        steps.push_back (points[i]);
+                    }
+                    points = std::move (steps);
+                }
+                dsp::AutomationCurve curve (std::move (points));
+
+                if (parameter == "volume")
+                    render.volumeAutomation = std::move (curve);
+                else if (parameter == "pan")
+                    render.panAutomation = std::move (curve);
+                else if (parameter == "mute")
+                    render.muteAutomation = std::move (curve);
+                else if (const int sendSlot = automation::sendTarget (parameter); sendSlot >= 0)
+                {
+                    for (auto& send : render.sends)
+                        if (send.slot == sendSlot)
+                            send.levelAutomation = std::move (curve);
+                }
+                else if (const auto [slot, index] = automation::pluginTarget (parameter); slot >= 0)
+                {
+                    if (auto s = getInsert (track::id (t), slot); s != nullptr && s->plugin != nullptr)
+                        if (auto* p = s->plugin->getParameters()[index])
+                            render.parameterAutomation.push_back ({ p, std::move (curve), -1.0f });
+                }
             }
 
             render.buffer.setSize (render.numChannels, graph->maxBlockSize);
@@ -918,6 +951,17 @@ juce::Result EngineBridge::startRecording (int hardwareLatency, juce::int64 coun
     if (! midiTakeTracks.empty())
         startTimer (50); // drains the captured notes while recording
     return juce::Result::ok();
+}
+
+void EngineBridge::setControlTouched (int trackId, uint32_t bit, bool isTouched)
+{
+    const auto it = trackStates.find (trackId);
+    if (it == trackStates.end())
+        return;
+    if (isTouched)
+        it->second->touched.fetch_or (bit, std::memory_order_relaxed);
+    else
+        it->second->touched.fetch_and (~bit, std::memory_order_relaxed);
 }
 
 void EngineBridge::drainRecordedMidi()

@@ -1,5 +1,6 @@
 #include "SessionRepair.h"
 
+#include "Automation.h"
 #include "Routing.h"
 
 #include <dsp/FaderTaper.h>
@@ -178,6 +179,9 @@ private:
             set (t, ids::inputChannel, 0, where, "input channel");
         if (aux && track::recordArm (t)) // (instrument tracks arm to record MIDI)
             set (t, ids::recordArm, false, where, "record-arm (an aux track cannot record)");
+        if (t.hasProperty (ids::automationMode)
+            && ! juce::StringArray { "off", "read", "touch", "latch", "write" }.contains (track::automationMode (t)))
+            set (t, ids::automationMode, "read", where, "automation mode");
 
         repairSynth (t, where, instrument);
 
@@ -385,10 +389,22 @@ private:
     void repairAutomation (juce::ValueTree automation, const juce::String& where)
     {
         removeChildrenNotOfType (automation, ids::LANE, where);
-        for (auto lane : automation)
+        juce::StringArray seen;
+        for (int l = 0; l < automation.getNumChildren(); ++l)
         {
+            auto lane = automation.getChild (l);
+            const auto parameter = lane[ids::parameter].toString();
+            const auto range = automation::rangeOf (parameter);
+            if (! range.has_value() || seen.contains (parameter))
+            {
+                note (where, range.has_value() ? "removed a second \"" + parameter + "\" automation lane"
+                                               : "removed automation for an unknown parameter \"" + parameter + "\"");
+                automation.removeChild (l--, nullptr);
+                continue;
+            }
+            seen.add (parameter);
+
             removeChildrenNotOfType (lane, ids::POINT, where + " automation");
-            const bool volume = lane[ids::parameter].toString() == "volume";
             for (int i = lane.getNumChildren(); --i >= 0;)
             {
                 auto p = lane.getChild (i);
@@ -401,8 +417,9 @@ private:
                 }
                 if ((juce::int64) p[ids::time] < 0)
                     set (p, ids::time, 0, where + " automation", "point time");
-                if (volume)
-                    clampNumber (p, ids::value, dsp::FaderTaper::minDb, dsp::FaderTaper::maxDb, 0.0, where + " automation");
+                clampNumber (p, ids::value, range->min, range->max, range->min, where + " " + parameter + " automation");
+                if (range->stepped && ! juce::exactlyEqual ((double) p[ids::value], std::round ((double) p[ids::value])))
+                    set (p, ids::value, std::round ((double) p[ids::value]), where + " " + parameter + " automation", "step value");
             }
         }
     }
@@ -537,6 +554,9 @@ juce::String findSessionProblem (const Session& session)
             return name + " has an audio input but cannot record audio";
         if (track::isAux (t) && track::recordArm (t))
             return name + " is record-armed but an aux track cannot record";
+        if (t.hasProperty (ids::automationMode)
+            && ! juce::StringArray { "off", "read", "touch", "latch", "write" }.contains (track::automationMode (t)))
+            return name + " has an unknown automation mode";
 
         int synths = 0;
         for (const auto& child : t)
@@ -654,10 +674,22 @@ juce::String findSessionProblem (const Session& session)
         if (routing::feeds (session, track::id (t), track::id (t)))
             return name + " is part of a routing loop";
 
+        juce::StringArray lanes;
         for (const auto& lane : track::automation (t))
+        {
+            const auto parameter = lane[ids::parameter].toString();
+            const auto range = automation::rangeOf (parameter);
+            if (! lane.hasType (ids::LANE) || ! range.has_value() || lanes.contains (parameter))
+                return name + " has an unknown or duplicate automation lane \"" + parameter + "\"";
+            lanes.add (parameter);
             for (const auto& p : lane)
-                if (! std::isfinite ((double) p[ids::value]) || (juce::int64) p[ids::time] < 0)
-                    return name + " has an invalid automation point";
+            {
+                const double v = p[ids::value];
+                if (! std::isfinite (v) || (juce::int64) p[ids::time] < 0 || v < range->min || v > range->max
+                    || (range->stepped && ! juce::exactlyEqual (v, std::round (v))))
+                    return name + " has an invalid " + parameter + " automation point";
+            }
+        }
     }
 
     if ((int) s[ids::nextId] <= maxId)
