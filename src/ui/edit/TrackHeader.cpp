@@ -170,6 +170,12 @@ void TrackHeader::showMenu()
     menu.addItem (2, track::channels (trackNode) == 1 ? "Make Stereo" : "Make Mono", track::isAudio (trackNode));
     menu.addItem (4, "Clear Volume Automation", automation::volumeLane (trackNode).isValid());
     menu.addSeparator();
+    const auto* session = app.getSession();
+    const int index = session != nullptr ? session->indexOfTrack (trackNode) : -1;
+    menu.addItem (5, "Duplicate Track");
+    menu.addItem (6, "Move Up", index > 0);
+    menu.addItem (7, "Move Down", session != nullptr && index >= 0 && index < session->getNumTracks() - 1);
+    menu.addSeparator();
     menu.addItem (3, "Delete Track");
 
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this),
@@ -190,6 +196,13 @@ void TrackHeader::showMenu()
                             {
                                 um->beginNewTransaction ("Clear Automation");
                                 automation::clear (self.trackNode, um);
+                            }
+                            else if (result == 5)
+                                self.app.duplicateTrack (self.trackNode);
+                            else if ((result == 6 || result == 7) && self.app.getSession() != nullptr)
+                            {
+                                const int at = self.app.getSession()->indexOfTrack (self.trackNode);
+                                self.app.moveTrack (self.trackNode, at + (result == 6 ? -1 : 1)); // rebuilds the headers
                             }
                             else if (result == 3)
                                 self.app.deleteTrack (self.trackNode); // destroys this header: nothing after this

@@ -579,6 +579,25 @@ void AppController::deleteTrack (juce::ValueTree t)
     session->removeTrack (t, &um);
 }
 
+juce::ValueTree AppController::duplicateTrack (juce::ValueTree t)
+{
+    if (session == nullptr || ! t.isValid())
+        return {};
+    bridge->storePluginStates(); // the copy gets the plug-in settings as they sound now
+    auto& um = session->getUndoManager();
+    um.beginNewTransaction ("Duplicate Track");
+    return session->duplicateTrack (t, &um);
+}
+
+void AppController::moveTrack (juce::ValueTree t, int newIndex)
+{
+    if (session == nullptr || ! t.isValid())
+        return;
+    auto& um = session->getUndoManager();
+    um.beginNewTransaction ("Move Track");
+    session->moveTrack (t, newIndex, &um);
+}
+
 void AppController::importAudioFiles (const juce::Array<juce::File>& files, juce::int64 position, juce::ValueTree targetTrack)
 {
     if (session == nullptr)

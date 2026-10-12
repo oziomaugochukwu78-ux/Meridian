@@ -104,6 +104,7 @@ private:
     void testMidiInput();
     void testAutomation();
     void testLoudnessAndExport();
+    void testTrackEditing();
     void testStress();
     void testRobustness();
     void testDamagedSessions (const juce::File& originalSession);

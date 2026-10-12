@@ -78,6 +78,7 @@ void SelfTest::start()
         testMidiInput();
         testAutomation();
         testLoudnessAndExport();
+        testTrackEditing();
         testStress();
         testRobustness(); // before the remote tests: their BOUNCE runs in the background
         testMcpTools();
@@ -1862,6 +1863,70 @@ void SelfTest::testAutomation()
 }
 
 //==============================================================================
+// Track duplicate and reorder.
+
+void SelfTest::testTrackEditing()
+{
+    beginGroup ("Tracks: duplicate and reorder");
+    auto& tools = app.getRemoteTools();
+    auto call = [&tools] (const juce::String& tool, const juce::String& arguments) { return tools.call (tool, juce::JSON::parse (arguments)); };
+    auto* session = app.getSession();
+    const auto tone = media.getChildFile ("tone1k_mono.wav");
+    const auto end = clipStart + (juce::int64) (2.0 * sampleRate) + 4800;
+
+    clearTracks();
+    auto vocal = addToneTrack ("Vocal", 1, tone, clipStart);
+    juce::PluginDescription eq;
+    for (const auto& d : BuiltinEffectFormat::getDescriptions())
+        if (d.name == "Meridian EQ")
+            eq = d;
+    juce::String error;
+    app.getBridge().insertPlugin (vocal, 0, eq, error);
+    call ("set_plugin_parameter", R"({"track":"Vocal","slot":"A","parameter":"p2Gain","value":6})");
+    const double single = db (bounce ("dup_single", 0, end).left.peak);
+
+    auto copy = app.duplicateTrack (vocal);
+    const auto copyPlugin = app.getBridge().getInsert (track::id (copy), 0);
+    juce::String copiedGain;
+    if (copyPlugin != nullptr && copyPlugin->plugin != nullptr)
+        for (auto* p : copyPlugin->plugin->getParameters())
+            if (p->getName (64) == "Band 2 Gain")
+                copiedGain = p->getCurrentValueAsText();
+    expect ("Duplicate makes Vocal.dup1 right after the original, with its own plug-in at the same setting",
+            track::name (copy) == "Vocal.dup1" && session->indexOfTrack (copy) == session->indexOfTrack (vocal) + 1
+                && copiedGain == "6.00 dB" && track::id (copy) != track::id (vocal),
+            track::name (copy) + ", EQ " + copiedGain);
+    const auto clipIdsDiffer = clip::id (track::clips (copy).getChild (0)) != clip::id (track::clips (vocal).getChild (0));
+    expect ("the copy has fresh track and clip ids, and the session stays valid",
+            clipIdsDiffer && findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+    expectNear ("the copy plays the same audio: the two sum to exactly +6.02 dB", db (bounce ("dup_pair", 0, end).left.peak),
+                single + 6.0206, 0.02, "dB");
+
+    auto second = call ("duplicate_track", R"({"track":"Vocal.dup1"})");
+    expect ("duplicating a copy numbers on from the original's name (Vocal.dup2)",
+            second.ok && session->getTrack (2).isValid() && track::name (session->getTrack (2)) == "Vocal.dup2", second.error);
+
+    // Reordering changes nothing in the mix.
+    const auto before = readAudio (bounce ("order_before", 0, end).file);
+    app.moveTrack (vocal, 2);
+    const bool moved = session->indexOfTrack (vocal) == 2;
+    const auto after = readAudio (bounce ("order_after", 0, end).file);
+    double difference = 0.0;
+    for (int ch = 0; ch < 2 && before.getNumSamples() == after.getNumSamples(); ++ch)
+        for (int i = 0; i < before.getNumSamples(); ++i)
+            difference = std::max (difference, (double) std::abs (before.getSample (ch, i) - after.getSample (ch, i)));
+    expect ("Move: the track moves, and the mix is unchanged to the bit", moved && before.getNumSamples() == after.getNumSamples()
+                && juce::exactlyEqual (difference, 0.0), "largest difference " + juce::String (difference));
+    session->getUndoManager().undo();
+    expect ("undo puts it back", session->indexOfTrack (vocal) == 0, juce::String (session->indexOfTrack (vocal)));
+
+    auto r = call ("move_track", R"({"track":"Vocal","position":3})");
+    expect ("move_track moves by number (1 = first) and refuses positions that do not exist",
+            r.ok && session->indexOfTrack (vocal) == 2 && ! call ("move_track", R"({"track":"Vocal","position":9})").ok, r.error);
+    clearTracks();
+}
+
+//==============================================================================
 // Loudness (EBU R128) of bounces, normalisation, dither and FLAC.
 
 void SelfTest::testLoudnessAndExport()
@@ -2666,8 +2731,8 @@ void SelfTest::testMcpTools()
     if (toolArray != nullptr)
         for (const auto& tool : *toolArray)
             allDescribed = allDescribed && tool["inputSchema"].isObject() && tool["description"].toString().length() > 20;
-    expect ("tools/list describes all 38 tools, each with a description and a JSON schema",
-            allDescribed && toolArray->size() == 38, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
+    expect ("tools/list describes all 40 tools, each with a description and a JSON schema",
+            allDescribed && toolArray->size() == 40, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
 
     auto r = toolCall ("get_status", "{}");
     expect ("get_status returns the session and tracks", ! failed (r) && callText (r).contains ("\"Vocal\""), callText (r).substring (0, 160));

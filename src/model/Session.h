@@ -107,6 +107,14 @@ public:
     void removeMarker (const juce::ValueTree& marker, juce::UndoManager*);
     void removeTrack (const juce::ValueTree& track, juce::UndoManager*);
 
+    /** Moves a track to `newIndex` (0-based, clamped) in the track list. Undoable. */
+    void moveTrack (const juce::ValueTree& track, int newIndex, juce::UndoManager*);
+
+    /** A copy of a track (clips, automation, sends, inserts with their settings,
+        synth) right after it, named "<name>.dup1" (.dup2, ...), with fresh ids
+        for the track and its clips. Audio files are shared, not copied. Undoable. */
+    juce::ValueTree duplicateTrack (const juce::ValueTree& track, juce::UndoManager*);
+
     juce::ValueTree addClip (juce::ValueTree track, const juce::File& audioFile, juce::int64 timelineStart,
                              juce::int64 sourceOffset, juce::int64 length, juce::int64 sourceLength,
                              const juce::String& name, juce::UndoManager*);

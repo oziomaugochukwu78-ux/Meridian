@@ -193,6 +193,14 @@ const std::vector<ToolInfo>& toolTable()
                     { "input", "integer", "Audio input channel, 1-based (0 = no input)" },
                     { "automation_mode", "string", "off, read (play the lanes), touch / latch / write (record control moves while playing)",
                       false, { "off", "read", "touch", "latch", "write" } } }) },
+        { "duplicate_track", "Duplicate a track",
+          "Copy a track (clips, automation, sends, plug-ins with their settings) to a new track right after it, "
+          "named <name>.dup1. Audio files are shared, not copied.",
+          schema ({ { "track", "track", trackHelp, true } }) },
+        { "move_track", "Move a track",
+          "Change a track's position in the track list (1 = first). The mix is unchanged; only the order is.",
+          schema ({ { "track", "track", trackHelp, true },
+                    { "position", "integer", "New position, 1-based", true } }) },
         { "create_track", "Create tracks",
           "Create audio tracks (play and record audio), aux tracks (buses that receive sends, e.g. for a shared "
           "reverb), instrument tracks (play MIDI notes through Meridian's built-in synthesiser) or drum tracks (the "
@@ -485,6 +493,8 @@ RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var
     if (name == "list_markers")       return listMarkers();
     if (name == "delete_marker")      return deleteMarker (args);
     if (name == "set_track")          return setTrack (args);
+    if (name == "duplicate_track")    return duplicateTrack (args);
+    if (name == "move_track")         return moveTrack (args);
     if (name == "create_track")       return createTrack (args);
     if (name == "delete_track")       return deleteTrack (args);
     if (name == "set_output")         return setOutput (args);
@@ -744,6 +754,32 @@ RemoteTools::Result RemoteTools::transport (const juce::var& args)
     if (r.failed())
         return { false, {}, r.getErrorMessage() };
     return { true, makeObject ({ { "done", action } }), {} };
+}
+
+RemoteTools::Result RemoteTools::duplicateTrack (const juce::var& args)
+{
+    juce::String error;
+    auto t = findTrack (args["track"], error);
+    if (! t.isValid())
+        return { false, {}, error };
+    auto copy = app.duplicateTrack (t);
+    app.getSession()->getUndoManager().setCurrentTransactionName ("AI: Duplicate Track");
+    return { true, describeTrack (copy, app.getSession()->indexOfTrack (copy) + 1), {} };
+}
+
+RemoteTools::Result RemoteTools::moveTrack (const juce::var& args)
+{
+    juce::String error;
+    auto t = findTrack (args["track"], error);
+    if (! t.isValid())
+        return { false, {}, error };
+    const int position = args["position"];
+    const int count = app.getSession()->getNumTracks();
+    if (position < 1 || position > count)
+        return { false, {}, "position must be 1-" + juce::String (count) + "." };
+    app.moveTrack (t, position - 1);
+    app.getSession()->getUndoManager().setCurrentTransactionName ("AI: Move Track");
+    return { true, describeTrack (t, app.getSession()->indexOfTrack (t) + 1), {} };
 }
 
 juce::var RemoteTools::describeTransportSettings() const

@@ -102,6 +102,9 @@ public:
     void addTracks (int count, int numChannels, const juce::String& baseName,
                     Session::TrackKind kind = Session::TrackKind::audio);
     void deleteTrack (juce::ValueTree track);
+    /** A copy of the track right after it, with the plug-in settings as they are now. */
+    juce::ValueTree duplicateTrack (juce::ValueTree track);
+    void moveTrack (juce::ValueTree track, int newIndex);
 
     /** Copies (and converts) files into the session on a background thread,
         then places each on targetTrack (single file) or on a new track. */

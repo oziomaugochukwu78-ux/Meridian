@@ -351,6 +351,46 @@ void Session::removeTrack (const juce::ValueTree& t, juce::UndoManager* um)
     getTracksNode().removeChild (t, um);
 }
 
+void Session::moveTrack (const juce::ValueTree& t, int newIndex, juce::UndoManager* um)
+{
+    auto tracks = getTracksNode();
+    const int from = tracks.indexOf (t);
+    const int to = juce::jlimit (0, tracks.getNumChildren() - 1, newIndex);
+    if (from >= 0 && from != to)
+        tracks.moveChild (from, to, um);
+}
+
+juce::ValueTree Session::duplicateTrack (const juce::ValueTree& t, juce::UndoManager* um)
+{
+    auto tracks = getTracksNode();
+    const int index = tracks.indexOf (t);
+    if (index < 0)
+        return {};
+
+    // "Vocal.dup1", "Vocal.dup2"...: numbered from the original's own name.
+    auto base = track::name (t);
+    if (const auto dot = base.lastIndexOf (".dup"); dot > 0 && base.substring (dot + 4).containsOnly ("0123456789")
+                                                    && base.substring (dot + 4).isNotEmpty())
+        base = base.substring (0, dot);
+    juce::String name;
+    for (int n = 1;; ++n)
+    {
+        name = base + ".dup" + juce::String (n);
+        if (! tracks.getChildWithProperty (ids::name, name).isValid())
+            break;
+    }
+
+    auto copy = t.createCopy();
+    copy.setProperty (ids::id, allocateId(), nullptr);
+    copy.setProperty (ids::name, name, nullptr);
+    copy.setProperty (ids::recordArm, false, nullptr); // one input, one armed track
+    for (auto c : track::clips (copy))
+        c.setProperty (ids::id, allocateId(), nullptr);
+
+    tracks.addChild (copy, index + 1, um);
+    return copy;
+}
+
 juce::ValueTree Session::addClip (juce::ValueTree t, const juce::File& audioFile, juce::int64 timelineStart,
                                   juce::int64 sourceOffset, juce::int64 length, juce::int64 sourceLength,
                                   const juce::String& name, juce::UndoManager* um)
