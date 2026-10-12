@@ -32,13 +32,18 @@ public:
     /** Creates <parentFolder>/<name>/ with an empty session and saves it. */
     static std::unique_ptr<Session> createNew (const juce::File& parentFolder, const Settings&, juce::String& error);
 
+    /** Parses the file and repairs anything outside the schema's invariants
+        (see SessionRepair.h); getLoadRepairs() lists what was fixed. */
     static std::unique_ptr<Session> load (const juce::File& sessionFile, juce::String& error);
+
+    const juce::StringArray& getLoadRepairs() const noexcept { return loadRepairs; }
 
     ~Session() override;
 
     bool save (juce::String& error);
 
     juce::ValueTree& getState() noexcept               { return state; }
+    const juce::ValueTree& getState() const noexcept   { return state; }
     juce::UndoManager& getUndoManager() noexcept       { return undoManager; }
 
     const juce::File& getSessionFile() const noexcept  { return sessionFile; }
@@ -98,6 +103,7 @@ private:
     juce::File sessionFile;
     juce::ValueTree state;
     juce::UndoManager undoManager;
+    juce::StringArray loadRepairs;
     bool dirty = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Session)

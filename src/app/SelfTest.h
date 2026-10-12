@@ -20,6 +20,32 @@ namespace meridian
     Phase 2 is timed: it plays through the real device, if one is running,
     to check live disk streaming, then captures the screenshots once
     waveforms have loaded. */
+/** Collects JUCE assertion failures from any thread. Needs JUCE_LOG_ASSERTIONS,
+    which routes them through juce::Logger; installed before the main window
+    is built, so assertions during start-up are caught as well. */
+class AssertionLog final : public juce::Logger
+{
+public:
+    void logMessage (const juce::String& message) override
+    {
+        if (message.startsWith ("JUCE Assertion failure"))
+        {
+            const juce::ScopedLock sl (lock);
+            failures.addIfNotAlreadyThere (message);
+        }
+    }
+
+    juce::StringArray getFailures() const
+    {
+        const juce::ScopedLock sl (lock);
+        return failures;
+    }
+
+private:
+    juce::CriticalSection lock;
+    juce::StringArray failures;
+};
+
 class SelfTest final : private juce::Timer
 {
 public:
@@ -37,6 +63,9 @@ public:
         are reported as SKIP instead of FAIL. */
     void setAllowNoAudioDevice (bool shouldAllow) noexcept { allowNoAudioDevice = shouldAllow; }
 
+    /** Every assertion it collected becomes a failure in the report. */
+    void setAssertionLog (const AssertionLog* log) noexcept { assertionLog = log; }
+
 private:
     struct Check
     {
@@ -51,6 +80,7 @@ private:
     void expect (const juce::String& name, bool passed, const juce::String& detail);
     void expectNear (const juce::String& name, double actual, double expected, double tolerance, const juce::String& unit);
     void skip (const juce::String& name, const juce::String& reason);
+    void trace (const juce::String& message);
     void beginGroup (const juce::String& name) { group = name; }
 
     // Phase 1
@@ -68,6 +98,10 @@ private:
     void testMcpTools();
     void testRemoteCommands();
     void testGoldenRenders();
+    void testStress();
+    void testRobustness();
+    void testDamagedSessions (const juce::File& originalSession);
+    void testRemoteFuzz();
 
     // Phase 2
     bool setUpDelayCompensationTest();
@@ -105,6 +139,7 @@ private:
     std::function<void (int)> onFinished;
 
     std::vector<Check> checks;
+    const AssertionLog* assertionLog = nullptr;
     juce::String group;
     int phase = 0;
     int ticks = 0;

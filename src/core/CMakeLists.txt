@@ -27,6 +27,8 @@ add_library(meridian_core STATIC
     remote/CommandDispatcher.h
     remote/CommandParser.cpp
     remote/CommandParser.h
+    remote/JsonLimits.cpp
+    remote/JsonLimits.h
     remote/JsonWriter.h
     remote/RemoteCommand.h
     remote/Sha1.cpp

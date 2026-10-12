@@ -6,6 +6,10 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#if JUCE_WINDOWS && defined (_DEBUG)
+ #include <crtdbg.h>
+#endif
+
 namespace meridian
 {
 
@@ -20,13 +24,29 @@ public:
     {
         juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
-        controller = std::make_unique<AppController>();
-        window = std::make_unique<MainWindow> (*controller);
-
         // Meridian --self-test <folder>: run the end-to-end self test and exit
         // with 0 (all passed) or 1.
         const auto args = juce::StringArray::fromTokens (commandLine, true);
-        if (const int index = args.indexOf ("--self-test"); index >= 0)
+        const int selfTestIndex = args.indexOf ("--self-test");
+        if (selfTestIndex >= 0)
+        {
+            // Before anything else, so assertions during start-up are caught too.
+            assertionLog = std::make_unique<AssertionLog>();
+            juce::Logger::setCurrentLogger (assertionLog.get());
+           #if JUCE_WINDOWS && defined (_DEBUG)
+            // Unattended runs: C runtime assertions go to stderr and fail the
+            // process instead of opening a dialog that waits forever.
+            _CrtSetReportMode (_CRT_ASSERT, _CRTDBG_MODE_FILE | _CRTDBG_MODE_DEBUG);
+            _CrtSetReportFile (_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+            _CrtSetReportMode (_CRT_ERROR, _CRTDBG_MODE_FILE | _CRTDBG_MODE_DEBUG);
+            _CrtSetReportFile (_CRT_ERROR, _CRTDBG_FILE_STDERR);
+           #endif
+        }
+
+        controller = std::make_unique<AppController>();
+        window = std::make_unique<MainWindow> (*controller);
+
+        if (const int index = selfTestIndex; index >= 0)
         {
             const auto folder = args[index + 1].unquoted();
             const auto outputFolder = juce::File::isAbsolutePath (folder)
@@ -42,7 +62,9 @@ public:
             // --update-golden: rewrite the reference renders in tests/golden
             // (only after a deliberate, reviewed change to the sound).
             selfTest->setUpdateGoldenFiles (args.contains ("--update-golden"));
-            selfTest->setAllowNoAudioDevice (args.contains ("--allow-no-audio-device")); // CI servers            // Start once the window is on screen (screenshots need it).
+            selfTest->setAllowNoAudioDevice (args.contains ("--allow-no-audio-device")); // CI servers
+            selfTest->setAssertionLog (assertionLog.get());
+            // Start once the window is on screen (screenshots need it).
             juce::MessageManager::callAsync ([this] { if (selfTest != nullptr) selfTest->start(); });
             return;
         }
@@ -71,6 +93,8 @@ public:
         window.reset();
         controller.reset();
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
+        juce::Logger::setCurrentLogger (nullptr);
+        assertionLog.reset();
     }
 
     void systemRequestedQuit() override
@@ -95,6 +119,7 @@ public:
 
 private:
     MeridianLookAndFeel lookAndFeel;
+    std::unique_ptr<AssertionLog> assertionLog; // self test only
     std::unique_ptr<AppController> controller;
     std::unique_ptr<MainWindow> window;
     std::unique_ptr<SelfTest> selfTest;

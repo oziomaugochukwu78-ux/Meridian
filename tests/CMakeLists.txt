@@ -12,6 +12,7 @@ add_executable(meridian_core_tests
     dsp/SignalAnalysisTests.cpp
     remote/CommandDispatcherTests.cpp
     remote/CommandParserTests.cpp
+    remote/FuzzTests.cpp
     remote/HandshakeTests.cpp
     remote/HashingTests.cpp
     remote/WebSocketReaderTests.cpp

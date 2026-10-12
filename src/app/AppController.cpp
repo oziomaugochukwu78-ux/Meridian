@@ -50,13 +50,19 @@ AppController::AppController()
     const auto savedDevice = getSettings().getXmlValue (deviceStateKey);
     const auto error = deviceManager.initialise (8, 2, savedDevice.get(), true);
     if (error.isNotEmpty())
-        DBG ("Audio device: " << error);
+    {
+        DBG ("Audio device: " << error); // braces: DBG is empty in Release builds
+    }
     deviceManager.addAudioCallback (&engine);
     deviceManager.addChangeListener (this);
 
     if (getSettings().getBoolValue (remoteEnabledKey, true))
+    {
         if (const auto result = startRemoteControl(); result.failed())
+        {
             DBG ("Remote control: " << result.getErrorMessage());
+        }
+    }
 }
 
 AppController::~AppController()
@@ -135,7 +141,22 @@ juce::Result AppController::openSession (const juce::File& file)
     if (loaded == nullptr)
         return juce::Result::fail (error);
 
+    const auto repairs = loaded->getLoadRepairs();
     installSession (std::move (loaded));
+
+    if (! repairs.isEmpty())
+    {
+        auto list = repairs;
+        if (list.size() > 12)
+        {
+            list.removeRange (12, list.size());
+            list.add ("... and " + juce::String (repairs.size() - 12) + " more");
+        }
+        reportProblem ("Session repaired",
+                       file.getFileName() + " contained " + juce::String (repairs.size())
+                           + " invalid value(s), which were fixed. Save the session to keep the repaired version.\n\n"
+                           + list.joinIntoString ("\n"));
+    }
     return juce::Result::ok();
 }
 
@@ -310,6 +331,23 @@ void AppController::deleteTrack (juce::ValueTree t)
     bridge->storePluginStates(); // so undo brings the plug-ins back with their settings
     auto& um = session->getUndoManager();
     um.beginNewTransaction ("Delete Track");
+
+    // Routes into a deleted bus go with it, in the same undo step: sends to
+    // it are removed and outputs to it fall back to the master.
+    if (track::isAux (t))
+    {
+        const int busId = track::id (t);
+        for (auto other : session->getTracksNode())
+        {
+            if (track::outputBus (other) == busId)
+                other.setProperty (ids::outputBus, 0, &um);
+            auto sends = track::sends (other);
+            for (int i = sends.getNumChildren(); --i >= 0;)
+                if (send::target (sends.getChild (i)) == busId)
+                    sends.removeChild (i, &um);
+        }
+    }
+
     session->removeTrack (t, &um);
 }
 

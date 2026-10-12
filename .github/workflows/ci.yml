@@ -74,6 +74,7 @@ jobs:
           name: self-test-windows
           path: |
             build/self-test/report.*
+            build/self-test/progress.log
             build/self-test/screens/
           if-no-files-found: ignore
 
@@ -111,6 +112,7 @@ jobs:
           name: self-test-linux
           path: |
             build/self-test/report.*
+            build/self-test/progress.log
             build/self-test/screens/
           if-no-files-found: ignore
 
@@ -142,5 +144,6 @@ jobs:
           name: self-test-macos
           path: |
             build/self-test/report.*
+            build/self-test/progress.log
             build/self-test/screens/
           if-no-files-found: ignore

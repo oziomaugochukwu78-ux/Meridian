@@ -1,5 +1,7 @@
 #include "Session.h"
 
+#include "SessionRepair.h"
+
 namespace meridian
 {
 namespace
@@ -95,7 +97,10 @@ std::unique_ptr<Session> Session::load (const juce::File& file, juce::String& er
         return nullptr;
     }
 
-    return std::unique_ptr<Session> (new Session (file, std::move (tree)));
+    std::unique_ptr<Session> session (new Session (file, std::move (tree)));
+    session->loadRepairs = repairSession (*session);
+    session->dirty = ! session->loadRepairs.isEmpty(); // the repaired version is not on disk yet
+    return session;
 }
 
 bool Session::save (juce::String& error)

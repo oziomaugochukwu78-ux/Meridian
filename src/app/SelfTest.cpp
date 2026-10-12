@@ -4,6 +4,7 @@
 #include "media/AudioImporter.h"
 #include "model/Automation.h"
 #include "model/Routing.h"
+#include "model/SessionRepair.h"
 #include "media/TimeStretchEngine.h"
 #include "ui/dialogs/DashboardComponent.h"
 #include "ui/dialogs/NewTracksComponent.h"
@@ -16,6 +17,7 @@
 #include <remote/JsonWriter.h>
 
 #include <cmath>
+#include <limits>
 
 namespace meridian
 {
@@ -40,6 +42,7 @@ void SelfTest::start()
 {
     output.deleteRecursively();
     output.createDirectory();
+    trace ("Meridian self-test started");
     app.setRememberRecentSessions (false); // keep test sessions out of the Dashboard's Recent list
     media = output.getChildFile ("media");
     media.createDirectory();
@@ -63,6 +66,8 @@ void SelfTest::start()
         testPluginHosting();
         testBusesAndSends();
         testGoldenRenders();
+        testStress();
+        testRobustness(); // before the remote tests: their BOUNCE runs in the background
         testMcpTools();
         testRemoteCommands();
     }
@@ -75,6 +80,13 @@ void SelfTest::start()
 void SelfTest::expect (const juce::String& name, bool passed, const juce::String& detail)
 {
     checks.push_back ({ group, name, passed, detail });
+    trace ((passed ? "[PASS] " : "[FAIL] ") + name);
+}
+
+void SelfTest::trace (const juce::String& message)
+{
+    // Flushed line by line, so if the process dies the last line shows where.
+    output.getChildFile ("progress.log").appendText (message + "\n");
 }
 
 void SelfTest::skip (const juce::String& name, const juce::String& reason)
@@ -900,6 +912,441 @@ void SelfTest::testGoldenRenders()
     clearTracks();
 }
 
+//==============================================================================
+// Stress: a large session must still sum exactly and render faster than real time.
+
+void SelfTest::testStress()
+{
+    beginGroup ("Stress (128 tracks, 8 buses)");
+    auto* session = app.getSession();
+    clearTracks();
+    setConsole (false);
+
+    constexpr int numTracks = 128, numBuses = 8;
+    const auto tone = media.getChildFile ("tone1k_mono.wav");
+    const auto end = clipStart + (juce::int64) (2.0 * sampleRate) + 4800;
+    const double perTrackDb = -20.0 * std::log10 ((double) numTracks); // 128 coherent copies sum back to one
+
+    juce::Array<int> buses;
+    for (int b = 0; b < numBuses; ++b)
+        buses.add (track::id (session->addTrack ("Bus " + juce::String (b + 1), 2, nullptr, Session::TrackKind::aux)));
+
+    for (int i = 0; i < numTracks; ++i)
+    {
+        auto t = addToneTrack ("T" + juce::String (i + 1), 1, tone, clipStart);
+        t.setProperty (ids::volumeDb, perTrackDb, nullptr);
+        // Every track also feeds two buses through silent sends: the routing,
+        // bus and delay machinery all run at full size without changing the sum.
+        for (int s = 0; s < 2; ++s)
+        {
+            routing::setSend (*session, t, s, buses[(i + s) % numBuses], nullptr);
+            routing::findSend (t, s).setProperty (ids::levelDb, dsp::FaderTaper::minDb, nullptr);
+        }
+    }
+
+    const auto started = juce::Time::getMillisecondCounterHiRes();
+    const auto r = bounce ("stress_128", 0, end);
+    const auto seconds = (juce::Time::getMillisecondCounterHiRes() - started) / 1000.0;
+    const auto audioSeconds = (double) end / sampleRate;
+
+    expectNear ("128 tracks at -42.14 dB sum exactly back to one track's level", db (r.left.peak), toneDb + panCentreDb, 0.02, "dB");
+    const auto speed = fmt (audioSeconds, 2) + " s of audio in " + fmt (seconds, 2) + " s ("
+                       + fmt (audioSeconds / juce::jmax (seconds, 1.0e-6), 1) + "x real time)";
+   #if JUCE_DEBUG
+    skip ("renders faster than real time (" + juce::String (numTracks + numBuses) + " channels)",
+          "not judged in a Debug build (unoptimised, ~10x slower): " + speed);
+   #else
+    expect ("renders faster than real time (" + juce::String (numTracks + numBuses) + " channels)", seconds < audioSeconds, speed);
+   #endif
+    expect ("session stays valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+    clearTracks();
+}
+
+//==============================================================================
+// Robustness: damaged files and hostile remote input must never crash the
+// application or leave the session in an invalid state.
+
+namespace
+{
+/** juce::Random with a fixed seed is deterministic across runs and platforms. */
+juce::var junkValue (juce::Random& rng, const juce::Array<int>& someIds)
+{
+    static const char* const pool[] = { "-1", "0", "1", "2", "5", "0.5", "nan", "inf", "-inf", "1e308", "-1e308", "1e999",
+                                        "abc", "", ".", "..", "999999999999", "-999999999999", "aux", "audio", "read" };
+    if (rng.nextInt (5) == 0 && ! someIds.isEmpty())
+        return someIds[rng.nextInt (someIds.size())];
+    return juce::String (pool[rng.nextInt ((int) std::size (pool))]);
+}
+
+const juce::Identifier* randomSchemaProperty (juce::Random& rng)
+{
+    static const juce::Identifier* const properties[] = {
+        &ids::name, &ids::sampleRate, &ids::bitDepth, &ids::fileFormat, &ids::nextId, &ids::masterVolumeDb,
+        &ids::consoleEnabled, &ids::consoleDrive, &ids::consoleCharacter, &ids::consoleCurve, &ids::id, &ids::channels,
+        &ids::colour, &ids::volumeDb, &ids::pan, &ids::mute, &ids::solo, &ids::recordArm, &ids::inputChannel,
+        &ids::automationMode, &ids::kind, &ids::outputBus, &ids::target, &ids::levelDb, &ids::preFader, &ids::file,
+        &ids::start, &ids::length, &ids::offset, &ids::sourceLength, &ids::gainDb, &ids::fadeIn, &ids::fadeOut,
+        &ids::slot, &ids::description, &ids::bypass, &ids::parameter, &ids::time, &ids::value
+    };
+    return properties[rng.nextInt ((int) std::size (properties))];
+}
+
+void collectNodes (const juce::ValueTree& node, juce::Array<juce::ValueTree>& nodes)
+{
+    nodes.add (node);
+    for (const auto& child : node)
+        collectNodes (child, nodes);
+}
+
+/** 1-5 random edits: junk property values, deleted, duplicated and misplaced elements. */
+void mutateSession (juce::ValueTree root, juce::Random& rng)
+{
+    juce::Array<int> someIds;
+    juce::Array<juce::ValueTree> nodes;
+    collectNodes (root, nodes);
+    for (const auto& n : nodes)
+        if (n.hasProperty (ids::id))
+            someIds.add (n[ids::id]);
+
+    for (int edit = rng.nextInt (5) + 1; --edit >= 0;)
+    {
+        nodes.clearQuick();
+        collectNodes (root, nodes);
+        auto node = nodes[rng.nextInt (nodes.size())];
+        switch (rng.nextInt (6))
+        {
+            case 0: case 1: case 2:
+                node.setProperty (*randomSchemaProperty (rng), junkValue (rng, someIds), nullptr);
+                break;
+            case 3:
+                if (node.getNumChildren() > 0)
+                    node.removeChild (rng.nextInt (node.getNumChildren()), nullptr);
+                break;
+            case 4:
+                if (node != root)
+                    node.getParent().appendChild (node.createCopy(), nullptr); // duplicate ids, slots, lists
+                break;
+            default:
+            {
+                auto destination = nodes[rng.nextInt (nodes.size())];
+                if (node != root && ! node.isAChildOf (destination) && destination != node && ! destination.isAChildOf (node))
+                {
+                    node.getParent().removeChild (node, nullptr);
+                    destination.appendChild (node, nullptr); // e.g. a TRACK inside CLIPS
+                }
+                break;
+            }
+        }
+    }
+}
+
+bool allFinite (const juce::AudioBuffer<float>& audio)
+{
+    for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+        for (int i = 0; i < audio.getNumSamples(); ++i)
+            if (! std::isfinite (audio.getSample (ch, i)))
+                return false;
+    return true;
+}
+} // namespace
+
+void SelfTest::testRobustness()
+{
+    beginGroup ("Robustness (damaged files, hostile input)");
+    const auto saved = app.saveSession();
+    expect ("save the test session before the robustness tests", saved.wasOk(), saved.getErrorMessage());
+    const auto original = app.getSession()->getSessionFile();
+
+    testDamagedSessions (original);
+    testRemoteFuzz();
+
+    beginGroup ("Robustness (damaged files, hostile input)");
+    const auto reopened = app.openSession (original);
+    expect ("the original session reopens afterwards", reopened.wasOk(), reopened.getErrorMessage());
+    setConsole (false);
+}
+
+void SelfTest::testDamagedSessions (const juce::File& originalSession)
+{
+    const auto folder = output.getChildFile ("damaged");
+    folder.createDirectory();
+    auto* before = app.getSession();
+
+    // 1. Not a session at all, and a session cut off half way (a crash mid-copy).
+    {
+        juce::Random rng (1234);
+        juce::MemoryBlock junk (4096);
+        for (size_t i = 0; i < junk.getSize(); ++i)
+            junk[i] = (char) rng.nextInt (256);
+        const auto garbage = folder.getChildFile ("garbage.meridian");
+        garbage.replaceWithData (junk.getData(), junk.getSize());
+        const auto result = app.openSession (garbage);
+        expect ("random bytes: refused with an error, current session kept", result.failed() && app.getSession() == before,
+                result.getErrorMessage());
+
+        const auto text = originalSession.loadFileAsString();
+        const auto truncated = folder.getChildFile ("truncated.meridian");
+        truncated.replaceWithText (text.substring (0, text.length() / 2));
+        const auto cut = app.openSession (truncated);
+        expect ("truncated session file: refused with an error, current session kept", cut.failed() && app.getSession() == before,
+                cut.getErrorMessage());
+
+        const auto empty = folder.getChildFile ("empty.meridian");
+        empty.replaceWithText ({});
+        expect ("empty session file: refused with an error", app.openSession (empty).failed(), {});
+
+        const auto future = folder.getChildFile ("future.meridian");
+        future.replaceWithText ("<SESSION formatVersion=\"999\"><TRACKS/></SESSION>");
+        const auto newer = app.openSession (future);
+        expect ("session from a newer version: refused with a clear message", newer.failed() && newer.getErrorMessage().contains ("newer"),
+                newer.getErrorMessage());
+    }
+
+    // 2. A hand-crafted session breaking every rule at once.
+    const auto tonePath = media.getChildFile ("tone1k_mono.wav").getFullPathName();
+    juce::String xml;
+    xml << "<SESSION name=\"Hostile\" sampleRate=\"0\" bitDepth=\"7\" fileFormat=\"mp3\" formatVersion=\"1\" nextId=\"2\""
+           " masterVolumeDb=\"nan\" consoleDrive=\"99\" consoleCurve=\"5\"><TRACKS><BOGUS/>"
+           "<TRACK id=\"5\" name=\"A\" kind=\"audio\" channels=\"9\" volumeDb=\"1e999\" pan=\"-7\" outputBus=\"6\" inputChannel=\"-40\"><CLIPS>"
+           "<CLIP id=\"5\" name=\"dup id\" file=\"" << tonePath << "\" start=\"-100\" offset=\"0\" length=\"48000\" sourceLength=\"96000\""
+           " fadeIn=\"40000\" fadeOut=\"40000\" gainDb=\"-1e300\"/>"
+           "<CLIP id=\"7\" name=\"no length\" file=\"x.wav\" start=\"0\" length=\"-5\"/>"
+           "<CLIP id=\"8\" name=\"past end\" file=\"" << tonePath << "\" start=\"0\" offset=\"90000\" length=\"48000\" sourceLength=\"96000\"/>"
+           "<CLIP id=\"9\" name=\"missing file\" file=\"does/not/exist.wav\" start=\"0\" offset=\"0\" length=\"48000\" sourceLength=\"0\"/>"
+           "<CLIP id=\"10\" name=\"a folder\" file=\".\" start=\"0\" offset=\"0\" length=\"48000\" sourceLength=\"0\"/>"
+           "<CLIP id=\"11\" name=\"valid\" file=\"" << tonePath << "\" start=\"60000\" offset=\"0\" length=\"20000\" sourceLength=\"96000\"/>"
+           "</CLIPS><CLIPS/><SENDS><SEND slot=\"0\" target=\"6\" levelDb=\"nan\"/><SEND slot=\"0\" target=\"6\"/>"
+           "<SEND slot=\"9\" target=\"6\"/><SEND slot=\"1\" target=\"999\"/><SEND slot=\"2\" target=\"5\"/></SENDS>"
+           "<INSERTS><INSERT slot=\"0\" description=\"not a plug-in\" state=\"%%%\"/></INSERTS>"
+           "<AUTOMATION><LANE parameter=\"volume\"><POINT time=\"-5\" value=\"500\"/><POINT time=\"10\"/></LANE></AUTOMATION></TRACK>"
+           "<TRACK id=\"6\" name=\"Bus X\" kind=\"aux\" channels=\"1\" outputBus=\"7\"><SENDS><SEND slot=\"0\" target=\"5\"/></SENDS></TRACK>"
+           "<TRACK id=\"7\" name=\"Bus Y\" kind=\"aux\" outputBus=\"6\"/>"
+           "<TRACK id=\"7\" name=\"Dup\" kind=\"weird\"/>"
+           "</TRACKS></SESSION>";
+    const auto hostileFolder = folder.getChildFile ("Hostile");
+    hostileFolder.createDirectory();
+    const auto hostileFile = hostileFolder.getChildFile ("Hostile.meridian");
+    hostileFile.replaceWithText (xml);
+
+    juce::String error;
+    auto loaded = Session::load (hostileFile, error);
+    expect ("hostile session loads (repaired, not refused)", loaded != nullptr, error);
+    juce::String repairedXml;
+    if (loaded != nullptr)
+    {
+        const auto& repairs = loaded->getLoadRepairs();
+        expect ("every problem was found and repaired", repairs.size() >= 20, juce::String (repairs.size()) + " repairs, e.g. "
+                + repairs.joinIntoString ("; ").substring (0, 300));
+        const auto problem = findSessionProblem (*loaded);
+        expect ("repaired session passes the independent validator", problem.isEmpty(), problem);
+        const auto again = repairSession (*loaded);
+        expect ("repair is complete in one pass (a second pass changes nothing)", again.isEmpty(), again.joinIntoString ("; "));
+        expect ("routing loop Bus X -> Bus Y -> Bus X was broken",
+                ! routing::feeds (*loaded, 6, 6) && ! routing::feeds (*loaded, 7, 7), {});
+        expect ("sample rate repaired to 48 kHz", loaded->getSampleRate() == 48000.0, juce::String (loaded->getSampleRate()));
+        repairedXml = loaded->getState().toXmlString();
+    }
+
+    // The repaired session must open in the application and render cleanly,
+    // including the clips whose files are missing or are a folder.
+    const auto previousHandler = app.showProblem;
+    juce::StringArray problems;
+    app.showProblem = [&problems] (const juce::String& title, const juce::String& message) { problems.add (title + ": " + message); };
+
+    const auto opened = app.openSession (hostileFile);
+    expect ("hostile session opens in the application", opened.wasOk(), opened.getErrorMessage());
+    expect ("the user is told the session was repaired", problems.joinIntoString ("\n").contains ("Session repaired"),
+            problems.joinIntoString (" | ").substring (0, 200));
+    if (opened.wasOk())
+    {
+        const auto r = bounce ("hostile_render", 0, 96000);
+        const auto audio = readAudio (r.file);
+        expect ("hostile session renders: finite audio, no NaN or infinity", r.ok && allFinite (audio),
+                "peak " + fmt (db (juce::jmax (r.left.peak, r.right.peak)), 1) + " dBFS");
+        // The one intact clip (60000-80000) still plays; the missing-file and
+        // folder clips are silent instead of failing the whole render.
+        double validPeak = 0.0;
+        if (audio.getNumSamples() >= 80000)
+            for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+                validPeak = juce::jmax (validPeak, (double) audio.getMagnitude (ch, 62000, 16000));
+        expect ("the intact clip in the repaired session is audible", db (validPeak) > -30.0,
+                "peak " + fmt (db (validPeak), 1) + " dBFS");
+    }
+
+    // 3. Fuzz: 600 randomly damaged variants of the repaired session.
+    if (repairedXml.isNotEmpty())
+    {
+        juce::Random rng (0x46555a5a);
+        const auto base = juce::ValueTree::fromXml (repairedXml);
+        int loadedCount = 0, rendered = 0;
+        juce::String firstFailure;
+        for (int i = 0; i < 600 && firstFailure.isEmpty(); ++i)
+        {
+            auto variant = base.createCopy();
+            mutateSession (variant, rng);
+            const auto file = hostileFolder.getChildFile ("fuzz.meridian");
+            if (auto x = variant.createXml())
+                x->writeTo (file);
+            if (i % 40 == 0)
+                file.copyFileTo (hostileFolder.getChildFile ("fuzz_" + juce::String (i) + ".meridian")); // kept for diagnosis
+            trace ("session fuzz variant " + juce::String (i));
+
+            juce::String loadError;
+            auto s = Session::load (file, loadError);
+            if (s == nullptr)
+                continue; // refusing a file is a valid outcome; crashing is not
+            ++loadedCount;
+            if (const auto problem = findSessionProblem (*s); problem.isNotEmpty())
+                firstFailure = "variant " + juce::String (i) + ": " + problem;
+            else if (const auto again = repairSession (*s); ! again.isEmpty())
+                firstFailure = "variant " + juce::String (i) + " needed a second repair: " + again[0];
+
+            // Every 40th variant goes through the whole application and the engine.
+            if (i % 40 == 0 && firstFailure.isEmpty() && app.openSession (file).wasOk())
+            {
+                const auto r = bounce ("fuzz_render", 0, 48000);
+                if (! r.ok || ! allFinite (readAudio (r.file)))
+                    firstFailure = "variant " + juce::String (i) + " rendered invalid audio";
+                ++rendered;
+            }
+        }
+        expect ("600 randomly damaged sessions: every one is refused or repaired to a valid state", firstFailure.isEmpty(),
+                firstFailure.isNotEmpty() ? firstFailure
+                                          : juce::String (loadedCount) + " loaded and repaired, " + juce::String (rendered)
+                                                + " opened and rendered without a crash");
+    }
+
+    app.showProblem = previousHandler;
+}
+
+void SelfTest::testRemoteFuzz()
+{
+    beginGroup ("Robustness (damaged files, hostile input)");
+    auto& tools = app.getRemoteTools();
+
+    // A scratch session with something to break: tracks, clips, a bus, a send.
+    Session::Settings settings;
+    settings.name = "FuzzSession";
+    settings.sampleRate = sampleRate;
+    const auto created = app.createSession (output, settings, nullptr);
+    expect ("create a scratch session for the remote fuzz test", created.wasOk(), created.getErrorMessage());
+    if (created.failed())
+        return;
+
+    auto* session = app.getSession();
+    addToneTrack ("One", 1, media.getChildFile ("tone1k_mono.wav"), clipStart);
+    addToneTrack ("Two", 2, media.getChildFile ("tone1k_stereo.wav"), 0);
+    auto bus = session->addTrack ("Bus", 2, nullptr, Session::TrackKind::aux);
+    routing::setSend (*session, session->getTrack (0), 0, track::id (bus), nullptr);
+
+    // Deleting a bus takes the routes into it along, and undo restores them.
+    {
+        auto one = session->getTrack (0);
+        routing::setOutput (*session, one, track::id (bus), nullptr);
+        app.deleteTrack (bus);
+        expect ("deleting a bus removes the sends and outputs that fed it",
+                track::sends (one).getNumChildren() == 0 && track::outputBus (one) == 0 && findSessionProblem (*session).isEmpty(),
+                findSessionProblem (*session));
+        session->getUndoManager().undo();
+        bus = session->getTracksNode().getChildWithProperty (ids::name, "Bus");
+        expect ("undo brings the bus back with its routes",
+                bus.isValid() && track::sends (one).getNumChildren() == 1 && track::outputBus (one) == track::id (bus), {});
+        routing::setOutput (*session, one, 0, nullptr);
+    }
+
+    // Tool calls with random arguments of every type, including the wrong ones.
+    // transport and bounce are left out: they would play or record audio.
+    const auto descriptors = tools.describeTools();
+    juce::Array<juce::var> toolList;
+    if (auto* list = descriptors.getArray())
+        toolList.addArray (*list);
+    expect ("the tool list is available for fuzzing", ! toolList.isEmpty(), juce::String (toolList.size()) + " tools");
+    if (toolList.isEmpty())
+        return;
+
+    juce::Random rng (0x544f4f4c);
+    auto randomArgument = [&rng] () -> juce::var
+    {
+        switch (rng.nextInt (9))
+        {
+            case 0:  return rng.nextInt (8) - 2;
+            case 1:  return rng.nextInt() ;
+            case 2:  return rng.nextDouble() * 200.0 - 100.0;
+            case 3:  return std::numeric_limits<double>::infinity();
+            case 4:  return std::numeric_limits<double>::quiet_NaN();
+            case 5:  return rng.nextBool();
+            case 6:  { static const char* s[] = { "", "One", "Two", "Bus", "master", "A", "edit", "mix", "../../x", "\xe2\x82\xac", "1", "-1" };
+                       return juce::String::fromUTF8 (s[rng.nextInt ((int) std::size (s))]); }
+            case 7:  return juce::var (juce::Array<juce::var> { 1, "two" });
+            default: { auto* o = new juce::DynamicObject(); o->setProperty ("x", 1); return juce::var (o); }
+        }
+    };
+
+    int calls = 0, succeeded = 0;
+    juce::String firstFailure;
+    for (int i = 0; i < 3000 && firstFailure.isEmpty(); ++i)
+    {
+        const auto& descriptor = toolList.getReference (rng.nextInt (toolList.size()));
+        const auto name = descriptor["name"].toString();
+        if (name == "transport" || name == "bounce")
+            continue;
+
+        // Held in a var for the whole iteration: the object is reference-counted,
+        // so wrapping a raw pointer in two temporaries would delete it early.
+        const juce::var args (new juce::DynamicObject());
+        if (auto* properties = descriptor["inputSchema"]["properties"].getDynamicObject())
+            for (const auto& p : properties->getProperties())
+                if (rng.nextInt (3) != 0)
+                    args.getDynamicObject()->setProperty (p.name, randomArgument());
+
+        trace ("tool fuzz " + juce::String (i) + ": " + name + " " + juce::JSON::toString (args, true));
+        const auto result = tools.call (name, args);
+        ++calls;
+        succeeded += result.ok ? 1 : 0;
+        if (! result.ok && result.error.isEmpty())
+            firstFailure = name + " failed without saying why";
+        else if (app.getSession() != nullptr)
+            if (const auto problem = findSessionProblem (*app.getSession()); problem.isNotEmpty())
+                firstFailure = "after " + name + " " + juce::JSON::toString (args, true) + ": " + problem;
+    }
+    expect ("3000 random AI tool calls: no crash, every error explained, session always valid", firstFailure.isEmpty(),
+            firstFailure.isNotEmpty() ? firstFailure
+                                      : juce::String (calls) + " calls, " + juce::String (succeeded) + " accepted, "
+                                            + juce::String (calls - succeeded) + " refused with a reason");
+
+    // Raw messages: deep nesting, invalid UTF-8, mutated JSON-RPC.
+    const std::string deep (64 * 1024, '[');
+    int status = 0;
+    const auto deepMcp = juce::JSON::parse (juce::String (tools.handleMcpRequest (deep, status)));
+    expect ("64 KB of nested brackets over MCP: refused, no stack overflow", deepMcp["error"].isObject(), {});
+    const auto deepWs = juce::JSON::parse (juce::String (tools.handleJsonMessage ("{\"tool\":" + deep)));
+    expect ("64 KB of nested brackets over the WebSocket: refused, no stack overflow", deepWs["ok"].isBool() && ! (bool) deepWs["ok"], {});
+
+    const std::string validRequest = R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"set_track","arguments":{"track":1,"volume_db":-6}}})";
+    juce::String mcpFailure;
+    for (int i = 0; i < 2000 && mcpFailure.isEmpty(); ++i)
+    {
+        auto body = validRequest;
+        for (int edit = rng.nextInt (4) + 1; --edit >= 0;)
+        {
+            const auto at = (size_t) rng.nextInt ((int) body.size());
+            switch (rng.nextInt (3))
+            {
+                case 0:  body[at] = (char) rng.nextInt (256); break;
+                case 1:  body.insert (at, 1, (char) rng.nextInt (256)); break;
+                default: body.erase (at, 1); break;
+            }
+        }
+        const auto reply = tools.handleMcpRequest (body, status);
+        if (status == 202 ? ! reply.empty() : ! juce::JSON::parse (juce::String::fromUTF8 (reply.data(), (int) reply.size())).isObject())
+            mcpFailure = "reply to a mutated request was not a JSON object: " + juce::String (reply).substring (0, 120);
+        if (app.getSession() != nullptr && mcpFailure.isEmpty())
+            if (const auto problem = findSessionProblem (*app.getSession()); problem.isNotEmpty())
+                mcpFailure = "a mutated request broke the session: " + problem;
+    }
+    expect ("2000 mutated MCP requests: every reply well-formed, session always valid", mcpFailure.isEmpty(), mcpFailure);
+}
+
 void SelfTest::testMcpTools()
 {
     beginGroup ("MCP server and AI tools");
@@ -1619,6 +2066,13 @@ void SelfTest::finish()
         beginGroup ("Recording (microphone)");
         recordingToDelete.deleteFile();
         expect ("test recording deleted afterwards", ! recordingToDelete.exists(), recordingToDelete.getFileName());
+    }
+
+    if (assertionLog != nullptr)
+    {
+        beginGroup ("Internal consistency");
+        const auto fired = assertionLog->getFailures();
+        expect ("no JUCE assertion fired during the whole run", fired.isEmpty(), fired.joinIntoString ("; "));
     }
 
     int failures = 0, skipped = 0;

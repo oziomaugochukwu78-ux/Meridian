@@ -5,17 +5,20 @@
 namespace meridian::commands
 {
 
+// JUCE reserves 0x1000-0x1fff for StandardApplicationCommandIDs (quit = 0x1001,
+// del, copy, paste, ...). Meridian's ids start at 0x10000 so none can collide:
+// an overlap made "Open Session" share an id with Quit.
 enum : juce::CommandID
 {
     // File
-    dashboard = 0x1000,
+    dashboard = 0x11000,
     openSession,
     saveSession,
     importAudio,
     bounceMix,
 
     // Edit
-    undo = 0x2000,
+    undo = 0x12000,
     redo,
     separateClip,
     deleteSelection,
@@ -24,7 +27,7 @@ enum : juce::CommandID
     zoomOut,
 
     // Tools and modes
-    slipMode = 0x2100,
+    slipMode = 0x12100,
     gridMode,
     trimTool,
     selectorTool,
@@ -33,22 +36,22 @@ enum : juce::CommandID
     pencilTool,
 
     // Track
-    newTracks = 0x3000,
+    newTracks = 0x13000,
     deleteTrack,
 
     // Transport
-    playStop = 0x4000,
+    playStop = 0x14000,
     record,
     returnToZero,
 
     // Setup
-    playbackEngine = 0x5000,
+    playbackEngine = 0x15000,
     pluginManager,
     toggleRemoteControl,
     remoteControlInfo,
 
     // Window
-    toggleWindow = 0x6000,
+    toggleWindow = 0x16000,
     showEditWindow,
     showMixWindow,
 };

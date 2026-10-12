@@ -5,6 +5,7 @@
 #include "model/Routing.h"
 
 #include <dsp/SignalAnalysis.h>
+#include <remote/JsonLimits.h>
 
 namespace meridian
 {
@@ -257,8 +258,96 @@ juce::var RemoteTools::describeTools() const
     return list;
 }
 
+namespace
+{
+bool isFiniteNumber (const juce::var& v)
+{
+    return (v.isInt() || v.isInt64() || v.isDouble()) && std::isfinite ((double) v);
+}
+
+/** A string that is entirely one finite decimal number, e.g. "-6.5". */
+bool isNumericString (const juce::var& v)
+{
+    if (! v.isString())
+        return false;
+    const auto s = v.toString().trim();
+    return s.isNotEmpty() && s.containsOnly ("+-.0123456789eE") && s.containsAnyOf ("0123456789")
+           && std::isfinite (s.getDoubleValue());
+}
+
+bool isDbWord (const juce::var& v)
+{
+    const auto s = v.toString().trim();
+    return v.isString() && (s.startsWithIgnoreCase ("-inf") || s.equalsIgnoreCase ("off"));
+}
+
+/** Checks one argument against its schema entry. Returns an error, or empty. */
+juce::String checkArgument (const juce::String& name, const juce::var& value, const juce::var& property)
+{
+    const auto type = property["type"];
+    const bool dbParameter = name.endsWith ("_db");
+
+    if (type.isArray()) // "track": a number or a name
+        return isFiniteNumber (value) || value.isString() ? juce::String() : "\"" + name + "\" must be a track number or name";
+
+    const auto t = type.toString();
+    if (t == "number" || t == "integer")
+    {
+        if (dbParameter && (value.isVoid() || isDbWord (value)))
+            return {};
+        if (! isFiniteNumber (value) && ! isNumericString (value))
+            return "\"" + name + "\" must be a finite number";
+        return {};
+    }
+    if (t == "boolean")
+        return value.isBool() || (isFiniteNumber (value) && ((double) value == 0.0 || (double) value == 1.0))
+                   ? juce::String() : "\"" + name + "\" must be true or false";
+    if (t == "string")
+        return value.isString() || isFiniteNumber (value) ? juce::String() : "\"" + name + "\" must be a string";
+    if (t == "array")
+    {
+        const auto* items = value.getArray();
+        if (items == nullptr)
+            return "\"" + name + "\" must be an array";
+        for (const auto& item : *items)
+            if (! item.isObject() || ! (isFiniteNumber (item["seconds"]) || isNumericString (item["seconds"]))
+                || ! (isFiniteNumber (item["db"]) || isNumericString (item["db"]) || isDbWord (item["db"])))
+                return "every entry of \"" + name + "\" must be {\"seconds\": <number>, \"db\": <number or \"-inf\">}";
+        return {};
+    }
+    return {};
+}
+
+/** Validates arguments against a tool's published input schema, so no tool
+    ever sees a NaN, an infinity, or a value of the wrong type. Arguments the
+    schema does not mention are ignored. */
+juce::String validateArguments (const juce::var& schema, const juce::var& args)
+{
+    if (! args.isVoid() && ! args.isObject())
+        return "arguments must be a JSON object";
+
+    if (const auto* required = schema["required"].getArray())
+        for (const auto& r : *required)
+            if (! args.hasProperty (r.toString()))
+                return "missing required argument \"" + r.toString() + "\"";
+
+    if (auto* object = args.getDynamicObject())
+        if (auto* properties = schema["properties"].getDynamicObject())
+            for (const auto& a : object->getProperties())
+                if (properties->hasProperty (a.name))
+                    if (const auto error = checkArgument (a.name.toString(), a.value, properties->getProperty (a.name)); error.isNotEmpty())
+                        return error;
+    return {};
+}
+} // namespace
+
 RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var& args)
 {
+    for (const auto& tool : toolTable())
+        if (name == tool.name)
+            if (const auto error = validateArguments (tool.inputSchema, args); error.isNotEmpty())
+                return { false, {}, "Invalid arguments for " + name + ": " + error + "." };
+
     if (name != "get_status" && name != "list_plugins" && app.getSession() == nullptr)
         return { false, {}, "No session is open. Ask the user to create or open one in the Dashboard." };
 
@@ -349,7 +438,10 @@ juce::UndoManager* RemoteTools::beginEdit (const juce::String& name)
 
 juce::int64 RemoteTools::secondsToSamples (const juce::var& seconds) const
 {
-    return (juce::int64) std::llround (juce::jmax (0.0, (double) seconds) * app.getSession()->getSampleRate());
+    // Up to 24 hours: far beyond any session, and far from int64 overflow.
+    constexpr double maxSeconds = 24.0 * 60.0 * 60.0;
+    const double s = (double) seconds;
+    return (juce::int64) std::llround ((std::isfinite (s) ? juce::jlimit (0.0, maxSeconds, s) : 0.0) * app.getSession()->getSampleRate());
 }
 
 double RemoteTools::samplesToSeconds (juce::int64 samples) const
@@ -930,7 +1022,13 @@ RemoteTools::Result RemoteTools::showWindow (const juce::var& args)
 
 std::string RemoteTools::handleJsonMessage (const std::string& message)
 {
-    const auto request = juce::JSON::parse (juce::String (message));
+    if (remote::exceedsJsonNesting (message))
+        return toJson (makeObject ({ { "ok", false },
+                                     { "error", "JSON nested deeper than " + juce::String (remote::maxJsonNesting) + " levels." } })).toStdString();
+    if (! remote::isValidJson (message)) // strict check: only well-formed JSON reaches the parser
+        return toJson (makeObject ({ { "ok", false }, { "error", "The message is not valid JSON." } })).toStdString();
+
+    const auto request = juce::JSON::parse (juce::String::fromUTF8 (message.data(), (int) message.size()));
     const auto tool = request["tool"].toString();
     if (! request.isObject() || tool.isEmpty())
         return toJson (makeObject ({ { "ok", false }, { "error", "Expected {\"tool\": \"name\", \"arguments\": {...}}." } })).toStdString();
@@ -948,13 +1046,18 @@ std::string RemoteTools::handleJsonMessage (const std::string& message)
 std::string RemoteTools::handleMcpRequest (const std::string& body, int& httpStatus)
 {
     httpStatus = 200;
-    const auto request = juce::JSON::parse (juce::String (body));
-
     auto error = [] (const juce::var& id, int code, const juce::String& message)
     {
         return toJson (makeObject ({ { "jsonrpc", "2.0" }, { "id", id },
                                      { "error", makeObject ({ { "code", code }, { "message", message } }) } })).toStdString();
     };
+
+    if (remote::exceedsJsonNesting (body))
+        return error ({}, -32700, "Parse error: JSON nested deeper than " + juce::String (remote::maxJsonNesting) + " levels");
+    if (! remote::isValidJson (body)) // HTTP bodies arrive unchecked from the network
+        return error ({}, -32700, "Parse error: the request body is not valid JSON (RFC 8259, UTF-8)");
+
+    const auto request = juce::JSON::parse (juce::String::fromUTF8 (body.data(), (int) body.size()));
 
     if (! request.isObject())
         return error ({}, -32700, "Parse error: expected one JSON-RPC request object");

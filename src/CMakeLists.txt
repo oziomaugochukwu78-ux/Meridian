@@ -42,6 +42,8 @@ target_sources(Meridian PRIVATE
     model/Session.cpp
     model/Session.h
     model/SessionIds.h
+    model/SessionRepair.cpp
+    model/SessionRepair.h
     model/SessionTemplates.cpp
     model/SessionTemplates.h
 
@@ -112,6 +114,9 @@ target_compile_definitions(Meridian PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1
+    # Route assertion failures through juce::Logger, so the self test can fail on
+    # them even without a debugger attached (where they would otherwise be silent).
+    JUCE_LOG_ASSERTIONS=1
     JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_LV2=1
     JUCE_PLUGINHOST_AU=$<BOOL:${APPLE}>
@@ -149,6 +154,12 @@ if(MSVC)
     target_compile_options(Meridian PRIVATE /fp:precise /utf-8 /permissive-)
 else()
     target_compile_options(Meridian PRIVATE -ffp-contract=off)
+endif()
+
+# The application builds JUCE's module sources too; JUCE is warning-clean under
+# its recommended flags, so the whole target can be held to zero warnings.
+if(MERIDIAN_WARNINGS_AS_ERRORS)
+    target_compile_options(Meridian PRIVATE $<IF:$<CXX_COMPILER_ID:MSVC>,/WX,-Werror>)
 endif()
 meridian_configure_simd(Meridian)
 

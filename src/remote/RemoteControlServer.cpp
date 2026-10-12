@@ -130,7 +130,9 @@ private:
         const auto result = ws::evaluateHandshake (request, owner.policy);
         sendAll (result.response);
         if (! result.accepted)
-            DBG ("Remote control: refused connection: " << juce::String (result.rejectReason));
+        {
+            DBG ("Remote control: refused connection: " << juce::String (result.rejectReason)); // empty in Release
+        }
         return result.accepted;
     }
 

@@ -9,18 +9,18 @@ An open-source digital audio workstation for Windows and macOS, written in C++20
 
 ## Status
 
-This is an early foundation, not a finished DAW. Everything listed as working compiles and runs; the core maths and the remote protocol are covered by unit tests.
+This is an early foundation, not a finished DAW. Everything listed as working compiles, runs and is checked by the automated tests described under [Testing](#testing). No feature depends on anyone listening to it. See [ROADMAP.md](ROADMAP.md) for what comes next.
 
 | Area | Working now | Planned |
 |---|---|---|
-| Sessions | Dashboard (create from template or blank, recent, open), save/load, full undo/redo | Save As, session import |
-| Edit window | Tracks, clips with waveforms, Smart Tool (select/move/trim/fade zones), Slip and Grid modes, separate, delete, zoom, page-scroll, drag-and-drop import | Shuffle and Spot modes, Zoomer and Pencil tools, automation lane drawing, playlists |
+| Sessions | Dashboard (create from template or blank, recent, open), save/load (atomic), full undo/redo, automatic repair of damaged session files on open | Save As, auto-backups, session import |
+| Edit window | Tracks, clips with waveforms, Smart Tool (select/move/trim/fade zones), Slip and Grid modes, separate, delete, zoom, page-scroll, drag-and-drop import, volume automation drawing (Pencil tool) | Shuffle and Spot modes, Zoomer tool, playlists, more automation parameters |
 | Mix window | Channel strips: 10 inserts, 5 sends (level, pan, pre/post, mute), output routing to master or any bus, I/O, automation mode, pan, R/S/M, console-taper fader, segmented meters; Aux Input (bus) tracks, bus-to-bus chains with loop protection, implicit solo; master strip with console controls | VCAs, mono buses, surround |
 | Audio engine | Lock-free render graph, double-buffered disk streaming, record to disk with round-trip latency compensation, input monitoring, sample-accurate volume automation, ramped gain/mute/pan, automatic plug-in delay compensation across tracks, sends and buses, offline bounce to WAV/AIFF (File > Bounce Mix) | Multi-core track rendering, dither options, manual recording offset |
 | Mixing maths | 64-bit compensated summing bus, SIMD (SSE2/AVX/NEON) mix kernels, constant-power pan, 4x-oversampled tanh/cubic console saturation | Per-track console channels |
 | Plug-ins | VST3 and LV2 hosting (plus AU on macOS), scanning with crash protection, editors, bypass, state saved in the session | CLAP hosting (needs a CLAP-SDK format adapter), sidechains, instruments |
 | Elastic Audio | Offline time-compress/expand and pitch shift with Rubber Band (R3 engine), Alt-drag TCE on clip edges | Real-time (preview) elastic mode, warp markers |
-| AI remote | WebSocket on 127.0.0.1: PLAY, STOP, RECORD, TOGGLE_WINDOW, MUTE_TRACK_X, SET_VOLUME_TRACK_X_YdB, BOUNCE, STATUS, HELP | A Model Context Protocol (MCP) server bridging to this port |
+| AI remote | MCP server (25 tools; every argument checked against the published schema), JSON tools and text commands (PLAY, STOP, RECORD, TOGGLE_WINDOW, MUTE_TRACK_X, SET_VOLUME_TRACK_X_YdB, BOUNCE, STATUS, HELP) on 127.0.0.1; strict input validation (RFC 8259 JSON, UTF-8, nesting limit) | Presets applied by plain request (see the roadmap) |
 
 ## Building
 
@@ -196,9 +196,9 @@ $ws.SendAsync([ArraySegment[byte]]$msg, 'Text', $true, [Threading.CancellationTo
 
 ## Testing
 
-Two layers, both automated:
+Meridian is developed without human listening tests, so every quality claim must be measured by a machine. The checks are in layers, all automated, and all run on every push (see CI below).
 
-**Unit tests** (`tests/`, Catch2): the mixing maths, ramps, pan law, saturation, automation, signal analysis, and the WebSocket and command protocol. No JUCE or audio hardware needed.
+**Unit tests** (`tests/`, Catch2): the mixing maths, ramps, pan law, saturation, automation, signal analysis, and the WebSocket and command protocol. No JUCE or audio hardware needed. They include **fuzz tests**: several hundred thousand random and mutated inputs, with fixed seeds so any failure reproduces, are fed through every parser that reads network input (WebSocket frames, HTTP handshakes, commands, JSON). Each must survive without a crash and keep its output contract.
 
 ```bash
 ctest --test-dir build/core -C Debug
@@ -221,14 +221,37 @@ It drives the real application and checks the results numerically. Each scenario
 - Elastic Audio length and pitch
 - VST3 hosting, using a bundled test plug-in (`tests/plugin`): effect, bypass, parameter, state recall and undo
 - AI commands, live playback with disk streaming, and the Edit and Mix windows driven by simulated mouse input
+- **stress:** 128 tracks and 8 buses must still sum to the exact expected level, and must render faster than real time (checked in Release builds)
+- **robustness:**
+  - damaged session files (random bytes, truncated, from a future version, and a hand-crafted file breaking every rule) are refused or repaired, never crash the app, and still render;
+  - 600 randomly damaged session variants must each end up refused or repaired, and repaired ones must pass an independent validator;
+  - 3000 random AI tool calls and 2000 mutated MCP requests must never crash the app or leave the session invalid
+- **internal consistency:** the run fails if any JUCE assertion fires anywhere in the program, including at start-up (`JUCE_LOG_ASSERTIONS`)
 
-It writes `report.txt`, `report.json`, every bounce, and PNG screenshots of every window and dialog to the output folder, and exits with 0 only if every check passed.
+It writes the following to the output folder:
+- `report.txt` and `report.json`
+- `progress.log`, written line by line, so a crash shows where it happened
+- every bounce
+- PNG screenshots of every window and dialog
+
+It exits with 0 only if every check passed. Checks that cannot run on a machine (for example live playback on a server without a sound card, with `--allow-no-audio-device`) are reported as SKIP, never as PASS.
 
 **Reference renders (golden files).** Three fixed mixes are bounced and null-tested against the references in `tests/golden`. Together they exercise clip gain, fades, pan, automation, a pre-fader send, an aux bus, and both console curves. A render that differs from its reference by more than -120 dBFS fails. For scale, a 0.001 dB level change leaves a -84 dBFS residual, and the test checks that it detects one. So no change can alter the sound unnoticed. After a deliberate change to the sound, regenerate the references, listen to or measure the difference, and commit the new files with an explanation:
 
 ```bash
 build\app\src\Meridian_artefacts\Debug\Meridian.exe --self-test build\self-test --update-golden
 ```
+
+**Continuous integration** (`.github/workflows/ci.yml`) runs on every push to `main` and on every pull request:
+
+| Job | What it runs |
+|---|---|
+| Core | Unit tests on Linux and macOS |
+| Windows | Full application: unit tests, then the self test |
+| Linux | Full application: unit tests, then the self test under a virtual display |
+| macOS | Full application; started by hand |
+
+Every job treats warnings as errors. Each run uploads the self-test report, progress log and screenshots.
 
 ## Licensing
 
