@@ -37,6 +37,7 @@ endif()
 # standard-library containers together. On MSVC use RelWithDebInfo (ASan cannot
 # combine with the Debug configuration's /RTC run-time checks).
 if(MERIDIAN_ENABLE_ASAN)
+    add_compile_definitions(MERIDIAN_SANITIZERS=1) # timing checks are meaningless under instrumentation
     if(MSVC)
         add_compile_options(/fsanitize=address /Zi)
         add_link_options(/INCREMENTAL:NO /DEBUG)

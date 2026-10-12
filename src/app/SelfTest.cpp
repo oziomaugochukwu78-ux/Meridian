@@ -1138,9 +1138,9 @@ void SelfTest::testStress()
     expectNear ("128 tracks at -42.14 dB sum exactly back to one track's level", db (r.left.peak), toneDb + panCentreDb, 0.02, "dB");
     const auto speed = fmt (audioSeconds, 2) + " s of audio in " + fmt (seconds, 2) + " s ("
                        + fmt (audioSeconds / juce::jmax (seconds, 1.0e-6), 1) + "x real time)";
-   #if JUCE_DEBUG
+   #if JUCE_DEBUG || defined (MERIDIAN_SANITIZERS)
     skip ("renders faster than real time (" + juce::String (numTracks + numBuses) + " channels)",
-          "not judged in a Debug build (unoptimised, ~10x slower): " + speed);
+          "not judged in Debug or sanitizer builds (several times slower by design): " + speed);
    #else
     expect ("renders faster than real time (" + juce::String (numTracks + numBuses) + " channels)", seconds < audioSeconds, speed);
    #endif
