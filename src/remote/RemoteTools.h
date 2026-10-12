@@ -5,6 +5,8 @@
 
 #include <string>
 
+namespace juce { class AudioPluginInstance; }
+
 namespace meridian
 {
 class AppController;
@@ -58,6 +60,9 @@ private:
     Result insertPlugin (const juce::var&);
     Result removePlugin (const juce::var&);
     Result setPluginBypass (const juce::var&);
+    Result listPluginParameters (const juce::var&);
+    Result setPluginParameter (const juce::var&);
+    juce::AudioPluginInstance* findPlugin (const juce::var& args, juce::String& error) const;
     Result listClips (const juce::var&);
     Result splitClip (const juce::var&);
     Result deleteClip (const juce::var&);

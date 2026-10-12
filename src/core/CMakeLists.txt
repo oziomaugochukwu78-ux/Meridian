@@ -6,9 +6,13 @@
 add_library(meridian_core STATIC
     dsp/AutomationCurve.cpp
     dsp/AutomationCurve.h
+    dsp/Biquad.cpp
+    dsp/Biquad.h
     dsp/DcBlocker.h
     dsp/DelayLine.h
     dsp/FaderTaper.cpp
+    dsp/FdnReverb.cpp
+    dsp/FdnReverb.h
     dsp/FloatCompare.h
     dsp/FaderTaper.h
     dsp/LinearRamp.h
@@ -16,6 +20,8 @@ add_library(meridian_core STATIC
     dsp/MixKernels.cpp
     dsp/MixKernels.h
     dsp/PanLaw.h
+    dsp/ParametricEq.cpp
+    dsp/ParametricEq.h
     dsp/SaturationCurve.cpp
     dsp/SaturationCurve.h
     dsp/SignalAnalysis.cpp

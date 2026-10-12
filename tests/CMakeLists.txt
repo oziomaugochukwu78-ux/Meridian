@@ -4,6 +4,7 @@
 add_executable(meridian_core_tests
     dsp/AutomationCurveTests.cpp
     dsp/DelayLineTests.cpp
+    dsp/EffectsTests.cpp
     dsp/FaderTaperTests.cpp
     dsp/LinearRampTests.cpp
     dsp/MixKernelsTests.cpp

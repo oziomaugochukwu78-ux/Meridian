@@ -19,9 +19,10 @@ This is an early foundation, not a finished DAW. Everything listed as working co
 | Audio engine | Lock-free render graph, double-buffered disk streaming, record to disk with round-trip latency compensation, input monitoring, sample-accurate volume automation, ramped gain/mute/pan, automatic plug-in delay compensation across tracks, sends and buses, offline bounce to WAV/AIFF (File > Bounce Mix) | Multi-core track rendering, dither options, manual recording offset |
 | Mixing maths | 64-bit compensated summing bus, SIMD (SSE2/AVX/NEON) mix kernels, constant-power pan, 4x-oversampled tanh/cubic console saturation | Per-track console channels |
 | Plug-ins | VST3 and LV2 hosting (plus AU on macOS), scanning with crash protection, editors, bypass, state saved in the session | CLAP hosting (needs a CLAP-SDK format adapter), sidechains, VST3 instruments |
+| Built-in effects | Meridian EQ: 7 bands (high-pass, low shelf, 3 peaks, high shelf, low-pass) plus output gain. It matches its design curve within 0.05 dB and passes audio bit-for-bit when flat. Meridian Reverb: 8-line feedback delay network with size, decay, damping, pre-delay, mix and width; its decay time measures within 10% of the setting, and the left/right tails are decorrelated. Both appear in the plug-in list without a scan and are controlled by AI tools. | Compressor, limiter, delay, de-esser, channel strip |
 | Instruments and MIDI | Instrument tracks playing MIDI clips through a built-in polyphonic synth with measured quality: in tune, sample-accurate, folded aliasing under -87 dB; drum tracks with a built-in synthesised drum machine on the General MIDI map (kick, snare, clap, side stick, closed/pedal/open hi-hat with choke, three toms, crash, ride, cowbell; tune, decay and tone controls); session tempo, with notes stored in beats so they follow it; double-click a lane to create a MIDI clip; MIDI editor (piano roll: add, move, resize, delete, multi-select, quantize, transpose, velocity); AI tools to write notes and shape the sound | MIDI input recording, tempo and meter changes, VST3 instruments, note audition |
 | Elastic Audio | Offline time-compress/expand and pitch shift with Rubber Band (R3 engine), Alt-drag TCE on clip edges | Real-time (preview) elastic mode, warp markers |
-| AI remote | MCP server (25 tools; every argument checked against the published schema), JSON tools and text commands (PLAY, STOP, RECORD, TOGGLE_WINDOW, MUTE_TRACK_X, SET_VOLUME_TRACK_X_YdB, BOUNCE, STATUS, HELP) on 127.0.0.1; strict input validation (RFC 8259 JSON, UTF-8, nesting limit) | Presets applied by plain request (see the roadmap) |
+| AI remote | MCP server (32 tools; every argument checked against the published schema), JSON tools and text commands (PLAY, STOP, RECORD, TOGGLE_WINDOW, MUTE_TRACK_X, SET_VOLUME_TRACK_X_YdB, BOUNCE, STATUS, HELP) on 127.0.0.1; strict input validation (RFC 8259 JSON, UTF-8, nesting limit) | Presets applied by plain request (see the roadmap) |
 
 ## Building
 
@@ -136,7 +137,7 @@ To be precise about the benefit: floating-point buses never clip internally, eve
 
 ## AI remote control
 
-While Meridian runs, port 47800 on 127.0.0.1 offers three interfaces to the same 30 tools:
+While Meridian runs, port 47800 on 127.0.0.1 offers three interfaces to the same 32 tools:
 
 | Interface | Address | For |
 |---|---|---|
@@ -154,7 +155,7 @@ claude mcp add --transport http meridian http://127.0.0.1:47800/mcp
 
 Claude Desktop and other stdio-only clients can use the `mcp-remote` bridge: add a server with command `npx` and arguments `mcp-remote http://127.0.0.1:47800/mcp` in the client's MCP settings.
 
-Tools: `get_status`, `transport`, `set_track`, `create_track`, `delete_track`, `set_output`, `set_send`, `remove_send`, `list_plugins`, `insert_plugin`, `remove_plugin`, `set_plugin_bypass`, `list_clips`, `split_clip`, `delete_clip`, `move_clip`, `set_clip`, `import_audio`, `set_volume_automation`, `set_tempo`, `add_midi_clip`, `add_notes`, `list_notes`, `set_synth`, `set_master`, `bounce`, `undo`, `redo`, `save_session` and `show_window`. With the MIDI tools, an AI can compose: create an instrument track, write notes in beats, shape the sound, and bounce the result. Each tool has a JSON schema and a description written for the model, and every call is checked against that schema before it runs. Tracks are referenced by number or name. Every AI edit lands in the undo history, labelled "AI: ...".
+Tools: `get_status`, `transport`, `set_track`, `create_track`, `delete_track`, `set_output`, `set_send`, `remove_send`, `list_plugins`, `insert_plugin`, `remove_plugin`, `set_plugin_bypass`, `list_plugin_parameters`, `set_plugin_parameter`, `list_clips`, `split_clip`, `delete_clip`, `move_clip`, `set_clip`, `import_audio`, `set_volume_automation`, `set_tempo`, `add_midi_clip`, `add_notes`, `list_notes`, `set_synth`, `set_master`, `bounce`, `undo`, `redo`, `save_session` and `show_window`. With the MIDI tools, an AI can compose: create an instrument track, write notes in beats, shape the sound, and bounce the result. With the plug-in parameter tools it can mix: read any plug-in's controls and set them in their own units (for example `{"parameter": "p2Gain", "value": 6}` for +6 dB on the EQ's second band). Each tool has a JSON schema and a description written for the model, and every call is checked against that schema before it runs. Tracks are referenced by number or name. Every AI edit lands in the undo history, labelled "AI: ...".
 
 ### Text commands
 
@@ -249,6 +250,7 @@ It drives the real application and checks the results numerically. Each scenario
 - import with sample-rate conversion, including anti-aliasing
 - Elastic Audio length and pitch
 - VST3 hosting, using a bundled test plug-in (`tests/plugin`): effect, bypass, parameter, state recall and undo
+- built-in effects through the real plug-in path: an EQ band set by an AI tool to +6 dB must measure +6.00 dB, and must still measure it after save and re-open; reverb on a bus, fed by a send and excited with noise (ISO 3382 interrupted-noise method), must decay in the set RT60 with decorrelated left/right tails
 - AI commands, live playback with disk streaming, and the Edit and Mix windows driven by simulated mouse input
 - **stress:** 128 tracks and 8 buses must still sum to the exact expected level, and must render faster than real time (checked in Release builds)
 - **robustness:**
@@ -265,7 +267,7 @@ It writes the following to the output folder:
 
 It exits with 0 only if every check passed. Checks that cannot run on a machine (for example live playback on a server without a sound card, with `--allow-no-audio-device`) are reported as SKIP, never as PASS.
 
-**Reference renders (golden files).** Three fixed mixes are bounced and null-tested against the references in `tests/golden`. Together they exercise clip gain, fades, pan, automation, a pre-fader send, an aux bus, and both console curves. A render that differs from its reference by more than -120 dBFS fails. For scale, a 0.001 dB level change leaves a -84 dBFS residual, and the test checks that it detects one. So no change can alter the sound unnoticed. After a deliberate change to the sound, regenerate the references, listen to or measure the difference, and commit the new files with an explanation:
+**Reference renders (golden files).** Six fixed mixes are bounced and null-tested against the references in `tests/golden`. Together they exercise clip gain, fades, pan, automation, a pre-fader send, an aux bus, both console curves, the synth, the drum machine, and the EQ and reverb. A render that differs from its reference by more than -120 dBFS fails. For scale, a 0.001 dB level change leaves a -84 dBFS residual, and the test checks that it detects one. So no change can alter the sound unnoticed. After a deliberate change to the sound, regenerate the references, listen to or measure the difference, and commit the new files with an explanation:
 
 ```bash
 build\app\src\Meridian_artefacts\Debug\Meridian.exe --self-test build\self-test --update-golden

@@ -7,6 +7,7 @@
 #include "model/Routing.h"
 #include "model/SessionRepair.h"
 #include "media/TimeStretchEngine.h"
+#include "plugins/BuiltinEffects.h"
 #include "ui/dialogs/DashboardComponent.h"
 #include "ui/dialogs/NewTracksComponent.h"
 #include "ui/dialogs/PlaybackEngineComponent.h"
@@ -68,6 +69,7 @@ void SelfTest::start()
         testBusesAndSends();
         testGoldenRenders();
         testInstruments();
+        testBuiltinEffects();
         testStress();
         testRobustness(); // before the remote tests: their BOUNCE runs in the background
         testMcpTools();
@@ -1165,6 +1167,125 @@ void SelfTest::testInstruments()
 }
 
 //==============================================================================
+// Built-in effects: Meridian EQ and Meridian Reverb, through the plug-in path.
+
+void SelfTest::testBuiltinEffects()
+{
+    beginGroup ("Built-in effects (Meridian EQ, Meridian Reverb)");
+    auto* session = app.getSession();
+    clearTracks();
+    setConsole (false);
+
+    const auto descriptions = BuiltinEffectFormat::getDescriptions();
+    const juce::PluginDescription* eqDesc = nullptr;
+    const juce::PluginDescription* reverbDesc = nullptr;
+    for (const auto& d : descriptions)
+        (d.name == "Meridian EQ" ? eqDesc : reverbDesc) = &d;
+    bool listed = true;
+    for (const auto& d : descriptions)
+        listed = listed && app.getPluginHost().getKnownPlugins().getTypeForIdentifierString (d.createIdentifierString()) != nullptr;
+    expect ("built-in effects are in the plug-in list without a scan", listed && eqDesc != nullptr && reverbDesc != nullptr,
+            juce::String (descriptions.size()) + " built-in effects");
+    if (eqDesc == nullptr || reverbDesc == nullptr)
+        return;
+
+    auto& tools = app.getRemoteTools();
+    auto call = [&tools] (const juce::String& tool, const juce::String& arguments)
+    {
+        return tools.call (tool, juce::JSON::parse (arguments));
+    };
+
+    // EQ: band 2 (1 kHz) up 6 dB through the AI tool, measured on a 1 kHz tone.
+    const auto tone = media.getChildFile ("tone1k_mono.wav");
+    auto t = addToneTrack ("EQ Test", 1, tone, clipStart);
+    juce::String error;
+    expect ("insert Meridian EQ", app.getBridge().insertPlugin (t, 0, *eqDesc, error), error);
+    const auto setGain = call ("set_plugin_parameter", R"({"track":"EQ Test","slot":"A","parameter":"p2Gain","value":6})");
+    const auto listedParams = call ("list_plugin_parameters", R"({"track":"EQ Test","slot":"A"})");
+    expect ("AI tools read and set a plug-in control (Band 2 Gain = 6 dB)",
+            setGain.ok && listedParams.ok && juce::JSON::toString (listedParams.data).contains ("6.00 dB"),
+            setGain.ok ? juce::JSON::toString (setGain.data).substring (0, 160) : setGain.error);
+    const auto end = clipStart + (juce::int64) (2.0 * sampleRate) + 4800;
+    auto r = bounce ("eq_plus6_at_1k", 0, end);
+    expectNear ("EQ band boosts its frequency by exactly its gain (1 kHz +6 dB)", db (r.left.peak), toneDb + panCentreDb + 6.0, 0.05, "dB");
+
+    // Settings survive save and re-open, and are heard again.
+    const auto sessionFile = session->getSessionFile();
+    const auto saved = app.saveSession();
+    const auto reopened = app.openSession (sessionFile);
+    session = app.getSession();
+    const auto reread = call ("list_plugin_parameters", R"({"track":"EQ Test","slot":"A"})");
+    r = bounce ("eq_after_reopen", 0, end);
+    expect ("EQ settings are saved in the session and restored",
+            saved.wasOk() && reopened.wasOk() && reread.ok && juce::JSON::toString (reread.data).contains ("6.00 dB")
+                && std::abs (db (r.left.peak) - (toneDb + panCentreDb + 6.0)) < 0.05,
+            saved.getErrorMessage() + reopened.getErrorMessage() + fmt (db (r.left.peak)) + " dB");
+
+    // Reverb on an aux bus, fed by a send: a tail that decays in the set time.
+    // Excited with broadband noise, as in ISO 3382's interrupted-noise method
+    // (a pure tone leaves both channels as sines, whose correlation is only a phase).
+    clearTracks();
+    const auto noise = writeNoise ("noise_2s", 2.0, -12.0, 0x5eed1234u);
+    auto source = addToneTrack ("Dry", 1, noise, clipStart);
+    auto bus = session->addTrack ("Reverb", 2, nullptr, Session::TrackKind::aux);
+    routing::setSend (*session, source, 0, track::id (bus), nullptr);
+    expect ("insert Meridian Reverb on a bus", app.getBridge().insertPlugin (bus, 0, *reverbDesc, error), error);
+    call ("set_plugin_parameter", R"({"track":"Reverb","slot":"A","parameter":"mix","value":1})");
+    call ("set_plugin_parameter", R"({"track":"Reverb","slot":"A","parameter":"decay","value":1.5})");
+    call ("set_plugin_parameter", R"({"track":"Reverb","slot":"A","parameter":"damping","value":0})");
+    call ("set_plugin_parameter", R"({"track":"Reverb","slot":"A","parameter":"predelay","value":0})");
+    const auto toneEnd = clipStart + (juce::int64) (2.0 * sampleRate);
+    r = bounce ("reverb_tail", 0, toneEnd + (juce::int64) (3.0 * sampleRate));
+    auto audio = readAudio (r.file);
+    if (audio.getNumSamples() > (int) toneEnd + (int) (2.5 * sampleRate))
+    {
+        // Decay rate of the tail after the tone stops: RMS in 50 ms windows, slope from -10 to -40 dB.
+        const float* x = audio.getReadPointer (0);
+        auto windowDb = [&] (juce::int64 at) { return db (dsp::measureLevels (x + at, 2400).rms); };
+        const double startDb = windowDb (toneEnd);
+        double t10 = -1, t40 = -1;
+        for (juce::int64 at = toneEnd; at + 2400 < audio.getNumSamples(); at += 480)
+        {
+            const double level = windowDb (at) - startDb;
+            if (t10 < 0 && level <= -10.0) t10 = (double) (at - toneEnd) / sampleRate;
+            if (t40 < 0 && level <= -40.0) { t40 = (double) (at - toneEnd) / sampleRate; break; }
+        }
+        const double rt60 = t40 > t10 && t10 >= 0 ? 2.0 * (t40 - t10) : 0.0; // 30 dB in (t40 - t10)
+        expectNear ("reverb tail decays in the set time (RT60 1.5 s)", rt60, 1.5, 0.2, "s");
+        double lr = 0, ll = 0, rr = 0;
+        for (int i = (int) toneEnd + 2400; i < (int) toneEnd + 48000; ++i)
+        {
+            const double a = audio.getSample (0, i), b = audio.getSample (1, i);
+            lr += a * b;
+            ll += a * a;
+            rr += b * b;
+        }
+        const double correlation = ll > 0.0 && rr > 0.0 ? lr / std::sqrt (ll * rr) : 1.0;
+        expect ("the reverb tail is wide stereo (|L/R correlation| < 0.3)", std::abs (correlation) < 0.3,
+                "correlation " + fmt (correlation, 3));
+    }
+
+    // Reference render: a pad through EQ into the reverb bus.
+    clearTracks();
+    auto pad = session->addTrack ("Pad", 2, nullptr, Session::TrackKind::instrument);
+    auto padClip = session->addMidiClip (pad, 0, 4 * 24000, "pad", nullptr);
+    for (const auto& n : std::initializer_list<midi::Note> { { 60, 0.8f, 0, 1440 }, { 64, 0.8f, 0, 1440 }, { 67, 0.8f, 0, 1440 } })
+        midimodel::addNote (padClip, n, nullptr);
+    auto room = session->addTrack ("Room", 2, nullptr, Session::TrackKind::aux);
+    routing::setSend (*session, pad, 0, track::id (room), nullptr);
+    app.getBridge().insertPlugin (pad, 0, *eqDesc, error);
+    app.getBridge().insertPlugin (room, 0, *reverbDesc, error);
+    call ("set_plugin_parameter", R"({"track":"Pad","slot":"A","parameter":"hpOn","value":1})");
+    call ("set_plugin_parameter", R"({"track":"Pad","slot":"A","parameter":"hpFreq","value":200})");
+    call ("set_plugin_parameter", R"({"track":"Pad","slot":"A","parameter":"p3Gain","value":-5})");
+    call ("set_plugin_parameter", R"({"track":"Room","slot":"A","parameter":"mix","value":1})");
+    compareWithReference ("golden_mix_effects", bounce ("golden_mix_effects", 0, 4 * 24000 + 48000));
+
+    expect ("session with built-in effects stays valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+    clearTracks();
+}
+
+//==============================================================================
 // Stress: a large session must still sum exactly and render faster than real time.
 
 void SelfTest::testStress()
@@ -1658,8 +1779,8 @@ void SelfTest::testMcpTools()
     if (toolArray != nullptr)
         for (const auto& tool : *toolArray)
             allDescribed = allDescribed && tool["inputSchema"].isObject() && tool["description"].toString().length() > 20;
-    expect ("tools/list describes all 30 tools, each with a description and a JSON schema",
-            allDescribed && toolArray->size() == 30, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
+    expect ("tools/list describes all 32 tools, each with a description and a JSON schema",
+            allDescribed && toolArray->size() == 32, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
 
     auto r = toolCall ("get_status", "{}");
     expect ("get_status returns the session and tracks", ! failed (r) && callText (r).contains ("\"Vocal\""), callText (r).substring (0, 160));

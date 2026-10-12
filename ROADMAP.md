@@ -73,7 +73,8 @@ Acceptance: MIDI timing jitter of zero samples in offline renders, and at most o
 - write modes (Write, Touch, Latch) and trim
 
 **Built-in processing**
-- EQ, compressor, gate, reverb, delay, limiter, tuner
+- EQ and reverb: done (Meridian EQ, Meridian Reverb)
+- still to do: compressor, gate, delay, limiter, tuner
 - each ships with a measured specification, checked in tests: frequency response within ±0.1 dB of design, compressor static curve, limiter true-peak ceiling
 
 **Loudness and delivery**

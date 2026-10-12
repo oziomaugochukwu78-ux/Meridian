@@ -1,5 +1,7 @@
 #include "PluginHost.h"
 
+#include "BuiltinEffects.h"
+
 #include "ui/Theme.h"
 
 namespace meridian
@@ -34,9 +36,15 @@ private:
 PluginHost::PluginHost (juce::PropertiesFile& s) : settings (s)
 {
     juce::addDefaultFormatsToManager (formatManager);
+    formatManager.addFormat (std::make_unique<BuiltinEffectFormat>());
 
     if (auto xml = settings.getXmlValue (knownPluginsKey))
         knownPlugins.recreateFromXml (*xml);
+
+    // Meridian's own effects are always available, without a scan.
+    for (const auto& d : BuiltinEffectFormat::getDescriptions())
+        if (knownPlugins.getTypeForIdentifierString (d.createIdentifierString()) == nullptr)
+            knownPlugins.addType (d);
 
     knownPlugins.addChangeListener (this);
 }

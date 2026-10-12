@@ -58,6 +58,8 @@ target_sources(Meridian PRIVATE
     media/TimeStretchEngine.cpp
     media/TimeStretchEngine.h
 
+    plugins/BuiltinEffects.cpp
+    plugins/BuiltinEffects.h
     plugins/PluginHost.cpp
     plugins/PluginHost.h
     plugins/PluginWindow.cpp

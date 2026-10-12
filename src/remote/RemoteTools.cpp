@@ -203,6 +203,20 @@ const std::vector<ToolInfo>& toolTable()
                     { "plugin", "string", "Plug-in name, as returned by list_plugins", true } }) },
         { "remove_plugin", "Remove a plug-in", "Remove the plug-in from an insert slot.",
           schema ({ { "track", "track", trackHelp, true }, { "slot", "string", "Insert slot A-J (or 1-10)", true } }) },
+        { "list_plugin_parameters", "List a plug-in's controls",
+          "Every control of the plug-in in an insert slot: its id, name and current value. Built-in effects: "
+          "\"Meridian EQ\" (hpOn, hpFreq, lsFreq, lsGain, p1Freq/p1Gain/p1Q to p3..., hsFreq, hsGain, lpOn, lpFreq, "
+          "output) and \"Meridian Reverb\" (size, decay, damping, predelay, mix, width).",
+          schema ({ { "track", "track", trackHelp, true }, { "slot", "string", "Insert slot A-J (or 1-10)", true } }) },
+        { "set_plugin_parameter", "Set a plug-in control",
+          "Set one control of the plug-in in an insert slot, by id or name, in its own units (Hz, dB, seconds, "
+          "0-1 amounts; 1 or 0 for on/off). Give \"normalized\" (0-1) instead for controls that do not accept "
+          "typed values. Not part of the undo history.",
+          schema ({ { "track", "track", trackHelp, true },
+                    { "slot", "string", "Insert slot A-J (or 1-10)", true },
+                    { "parameter", "string", "Control id or name (from list_plugin_parameters)", true },
+                    { "value", "number", "New value in the control's units" },
+                    { "normalized", "number", "New value as 0-1" } }) },
         { "set_plugin_bypass", "Bypass a plug-in", "Bypass (true) or enable (false) an insert.",
           schema ({ { "track", "track", trackHelp, true },
                     { "slot", "string", "Insert slot A-J (or 1-10)", true },
@@ -436,6 +450,8 @@ RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var
     if (name == "insert_plugin")      return insertPlugin (args);
     if (name == "remove_plugin")      return removePlugin (args);
     if (name == "set_plugin_bypass")  return setPluginBypass (args);
+    if (name == "list_plugin_parameters") return listPluginParameters (args);
+    if (name == "set_plugin_parameter")   return setPluginParameter (args);
     if (name == "list_clips")         return listClips (args);
     if (name == "split_clip")         return splitClip (args);
     if (name == "delete_clip")        return deleteClip (args);
@@ -872,6 +888,73 @@ RemoteTools::Result RemoteTools::setPluginBypass (const juce::var& args)
         return { false, {}, "There is no plug-in in that slot." };
     app.getBridge().setPluginBypassed (t, slot, (bool) args["bypass"]);
     return { true, describeTrack (t, app.getSession()->indexOfTrack (t) + 1), {} };
+}
+
+juce::AudioPluginInstance* RemoteTools::findPlugin (const juce::var& args, juce::String& error) const
+{
+    auto t = findTrack (args["track"], error);
+    if (! t.isValid())
+        return nullptr;
+    const int slot = readSlot (args["slot"], Session::maxInserts);
+    const auto instance = slot >= 0 ? app.getBridge().getInsert (track::id (t), slot) : nullptr;
+    if (instance == nullptr || instance->plugin == nullptr)
+    {
+        error = "There is no loaded plug-in in that slot of \"" + track::name (t) + "\".";
+        return nullptr;
+    }
+    return instance->plugin.get();
+}
+
+namespace
+{
+juce::String parameterId (juce::AudioProcessorParameter& p)
+{
+    if (auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (&p))
+        return hosted->getParameterID();
+    return juce::String (p.getParameterIndex());
+}
+
+juce::var describeParameter (juce::AudioProcessorParameter& p)
+{
+    return makeObject ({ { "id", parameterId (p) }, { "name", p.getName (64) },
+                         { "value", p.getCurrentValueAsText() }, { "normalized", std::round (p.getValue() * 10000.0) / 10000.0 } });
+}
+} // namespace
+
+RemoteTools::Result RemoteTools::listPluginParameters (const juce::var& args)
+{
+    juce::String error;
+    auto* plugin = findPlugin (args, error);
+    if (plugin == nullptr)
+        return { false, {}, error };
+    juce::Array<juce::var> list;
+    for (auto* p : plugin->getParameters())
+        list.add (describeParameter (*p));
+    return { true, makeObject ({ { "plugin", plugin->getName() }, { "parameters", list } }), {} };
+}
+
+RemoteTools::Result RemoteTools::setPluginParameter (const juce::var& args)
+{
+    juce::String error;
+    auto* plugin = findPlugin (args, error);
+    if (plugin == nullptr)
+        return { false, {}, error };
+    if (! args.hasProperty ("value") && ! args.hasProperty ("normalized"))
+        return { false, {}, "Give \"value\" (in the control's units) or \"normalized\" (0-1)." };
+
+    const auto wanted = args["parameter"].toString().trim();
+    juce::AudioProcessorParameter* target = nullptr;
+    for (auto* p : plugin->getParameters())
+        if (parameterId (*p).equalsIgnoreCase (wanted) || p->getName (64).equalsIgnoreCase (wanted))
+            target = p;
+    if (target == nullptr)
+        return { false, {}, "\"" + plugin->getName() + "\" has no control \"" + wanted + "\". Call list_plugin_parameters." };
+
+    const float normalized = args.hasProperty ("normalized")
+                                 ? juce::jlimit (0.0f, 1.0f, (float) (double) args["normalized"])
+                                 : juce::jlimit (0.0f, 1.0f, target->getValueForText (juce::String ((double) args["value"])));
+    target->setValueNotifyingHost (normalized);
+    return { true, makeObject ({ { "plugin", plugin->getName() }, { "parameter", describeParameter (*target) } }), {} };
 }
 
 RemoteTools::Result RemoteTools::listClips (const juce::var& args)
