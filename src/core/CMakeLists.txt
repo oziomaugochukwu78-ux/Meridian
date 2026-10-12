@@ -13,6 +13,7 @@ add_library(meridian_core STATIC
     dsp/Compressor.cpp
     dsp/Compressor.h
     dsp/DcBlocker.h
+    dsp/Dither.h
     dsp/DelayLine.h
     dsp/FaderTaper.cpp
     dsp/FdnReverb.cpp
@@ -22,6 +23,8 @@ add_library(meridian_core STATIC
     dsp/Limiter.cpp
     dsp/Limiter.h
     dsp/LinearRamp.h
+    dsp/Loudness.cpp
+    dsp/Loudness.h
     dsp/MeterScale.h
     dsp/Metronome.cpp
     dsp/Metronome.h

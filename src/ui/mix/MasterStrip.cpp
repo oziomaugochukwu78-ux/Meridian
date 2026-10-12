@@ -115,6 +115,21 @@ MasterStrip::MasterStrip (AppController& a) : app (a)
     namePlate.setColour (juce::Label::textColourId, theme::textOnLight);
     addAndMakeVisible (namePlate);
 
+    loudnessReadout.setFont (theme::monoFont (10.5f));
+    loudnessReadout.setJustificationType (juce::Justification::topLeft);
+    loudnessReadout.setColour (juce::Label::backgroundColourId, theme::well);
+    loudnessReadout.setText ("M --  S --\nI -- LUFS\nTP -- dBTP", juce::dontSendNotification);
+    loudnessReadout.setTooltip ("Loudness of the master output (EBU R128 / ITU-R BS.1770-4): momentary (400 ms), "
+                                "short-term (3 s), integrated since reset, and the highest true peak (red above -1 dBTP).");
+    addAndMakeVisible (loudnessReadout);
+    loudnessReset.setTooltip ("Restart the integrated loudness and true-peak hold");
+    loudnessReset.onClick = [this]
+    {
+        loudness.reset();
+        truePeakHeld = 0.0;
+    };
+    addAndMakeVisible (loudnessReset);
+
     refresh();
 }
 
@@ -150,6 +165,31 @@ void MasterStrip::updateMeter()
 {
     const auto [left, right] = app.getEngine().collectMasterPeaks();
     meter.pushPeaks (left, right);
+
+    // Loudness: the engine sends 100 ms K-weighted blocks; the statistics are kept here.
+    if (const double rate = app.getEngine().getSampleRate(); ! juce::exactlyEqual (rate, loudnessRate))
+    {
+        loudness.prepare (rate, 2);
+        loudnessRate = rate;
+        truePeakHeld = 0.0;
+    }
+    AudioEngine::LoudnessBlock block;
+    bool any = false;
+    while (app.getEngine().popLoudnessBlock (block))
+    {
+        loudness.addSubBlock (block.meanSquare);
+        truePeakHeld = juce::jmax (truePeakHeld, (double) block.truePeak);
+        any = true;
+    }
+    if (! any)
+        return;
+
+    auto show = [] (double v) { return v <= dsp::LoudnessMeter::absoluteGate ? juce::String ("--") : juce::String (v, 1); };
+    loudnessReadout.setText ("M " + show (loudness.getMomentary()) + "  S " + show (loudness.getShortTerm()) + "\n"
+                             + "I " + show (loudness.getIntegrated()) + " LUFS\n"
+                             + "TP " + (truePeakHeld > 0.0 ? juce::String (20.0 * std::log10 (truePeakHeld), 1) : juce::String ("--")) + " dBTP",
+                             juce::dontSendNotification);
+    loudnessReadout.setColour (juce::Label::textColourId, truePeakHeld > std::pow (10.0, -1.0 / 20.0) ? theme::record : theme::text);
 }
 
 void MasterStrip::paint (juce::Graphics& g)
@@ -196,7 +236,11 @@ void MasterStrip::resized()
     console.removeFromTop (6);
     latencyLabel.setBounds (console.removeFromTop (16));
 
-    area.removeFromTop (8);
+    area.removeFromTop (6);
+    auto loudnessArea = area.removeFromTop (46);
+    loudnessReset.setBounds (loudnessArea.removeFromTop (14).removeFromRight (40));
+    loudnessReadout.setBounds (loudnessArea.withTrimmedTop (-14).withTrimmedRight (0));
+    area.removeFromTop (6);
     namePlate.setBounds (area.removeFromBottom (22));
     area.removeFromBottom (4);
     volumeReadout.setBounds (area.removeFromBottom (18));

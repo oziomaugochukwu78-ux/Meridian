@@ -335,10 +335,16 @@ const std::vector<ToolInfo>& toolTable()
                     { "character", "number", "Console asymmetry 0-1 (more = more 2nd harmonic warmth)" },
                     { "curve", "string", "Saturation curve", false, { "tanh", "cubic" } } }) },
         { "bounce", "Bounce (export) the mix",
-          "Mix the session down to a WAV/AIFF file in the session's Bounced Files folder. Runs in the background; "
-          "get_status reports progress and then the file and its peak levels.",
+          "Mix the session down to a file in the session's Bounced Files folder. Runs in the background; get_status "
+          "reports progress, then the file, its peak levels, integrated loudness (LUFS), loudness range and true peak. "
+          "normalize_lufs gains the whole mix to that loudness (e.g. -14 for streaming), never past ceiling_dbtp.",
           schema ({ { "start_seconds", "number", "Optional start (default 0)" },
-                    { "end_seconds", "number", "Optional end (default: end of the last clip + 1 s)" } }) },
+                    { "end_seconds", "number", "Optional end (default: end of the last clip + 1 s)" },
+                    { "format", "string", "File format (default: the session's)", false, { "wav", "aiff", "flac" } },
+                    { "bit_depth", "integer", "16, 24 or 32 (float; not FLAC). Default: the session's" },
+                    { "dither", "boolean", "TPDF dither when writing 16 or 24 bits (default: on for 16-bit)" },
+                    { "normalize_lufs", "number", "Integrated loudness to reach, e.g. -14 (streaming) or -23 (broadcast)" },
+                    { "ceiling_dbtp", "number", "True-peak ceiling for normalising (default -1 dBTP)" } }) },
         { "undo", "Undo", "Undo the last edit (including edits made by AI tools).", schema ({}) },
         { "redo", "Redo", "Redo the last undone edit.", schema ({}) },
         { "save_session", "Save session", "Save the session to disk.", schema ({}) },
@@ -670,6 +676,13 @@ RemoteTools::Result RemoteTools::getStatus()
         set (bounceInfo, "last_file", last.file.getFullPathName());
         set (bounceInfo, "last_peak_db_left", std::round (dsp::gainToDb (last.left.peak) * 100.0) / 100.0);
         set (bounceInfo, "last_peak_db_right", std::round (dsp::gainToDb (last.right.peak) * 100.0) / 100.0);
+        set (bounceInfo, "last_integrated_lufs", std::round (last.integratedLufs * 10.0) / 10.0);
+        set (bounceInfo, "last_loudness_range_lu", std::round (last.loudnessRange * 10.0) / 10.0);
+        set (bounceInfo, "last_true_peak_dbtp", std::round (last.truePeakDbtp * 10.0) / 10.0);
+        if (last.appliedGainDb != 0.0)
+            set (bounceInfo, "last_normalization_gain_db", std::round (last.appliedGainDb * 100.0) / 100.0);
+        if (last.limitedByCeiling)
+            set (bounceInfo, "last_limited_by_true_peak_ceiling", true);
     }
     set (status, "bounce", bounceInfo);
 
@@ -1545,6 +1558,31 @@ RemoteTools::Result RemoteTools::bounce (const juce::var& args)
     if (args.hasProperty ("end_seconds"))   request.end = secondsToSamples (args["end_seconds"]);
     if (request.end <= request.start)
         return { false, {}, "The session is empty, or end is not after start." };
+    if (args.hasProperty ("bit_depth"))
+    {
+        request.bitDepth = args["bit_depth"];
+        if (request.bitDepth != 16 && request.bitDepth != 24 && request.bitDepth != 32)
+            return { false, {}, "bit_depth must be 16, 24 or 32." };
+        request.dither = request.bitDepth == 16;
+    }
+    if (args.hasProperty ("format"))
+    {
+        request.format = args["format"].toString();
+        if (request.format == "flac" && request.bitDepth == 32)
+            return { false, {}, "FLAC stores 16 or 24 bits; give bit_depth 16 or 24." };
+        request.destination = request.destination.getParentDirectory().getNonexistentChildFile (
+            request.destination.getFileNameWithoutExtension(), request.format == "aiff" ? ".aif" : "." + request.format, false);
+    }
+    if (args.hasProperty ("dither"))
+        request.dither = args["dither"];
+    if (args.hasProperty ("normalize_lufs"))
+    {
+        request.normalise = true;
+        request.targetLufs = args["normalize_lufs"];
+        request.ceilingDbtp = args.hasProperty ("ceiling_dbtp") ? (double) args["ceiling_dbtp"] : -1.0;
+        if (request.targetLufs < -60.0 || request.targetLufs > 0.0 || request.ceilingDbtp < -20.0 || request.ceilingDbtp > 0.0)
+            return { false, {}, "normalize_lufs must be -60..0 and ceiling_dbtp -20..0." };
+    }
 
     if (const auto started = app.startBounce (request); started.failed())
         return { false, {}, started.getErrorMessage() };

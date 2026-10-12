@@ -10,6 +10,8 @@
 #include "engine/ClipStream.h"
 #include "model/SessionBackups.h"
 #include "plugins/BuiltinEffects.h"
+
+#include <dsp/Loudness.h>
 #include "ui/dialogs/DashboardComponent.h"
 #include "ui/dialogs/NewTracksComponent.h"
 #include "ui/dialogs/PlaybackEngineComponent.h"
@@ -75,6 +77,7 @@ void SelfTest::start()
         testLoopClickMarkers();
         testMidiInput();
         testAutomation();
+        testLoudnessAndExport();
         testStress();
         testRobustness(); // before the remote tests: their BOUNCE runs in the background
         testMcpTools();
@@ -183,6 +186,8 @@ BounceResult SelfTest::bounce (const juce::String& name, juce::int64 start, juce
     request.end = end;
     request.bitDepth = 32;
     request.aiff = false;
+    request.format = "wav";
+    request.dither = false;
     request.destination = output.getChildFile ("bounces").getChildFile (name + ".wav");
     request.destination.getParentDirectory().createDirectory();
 
@@ -1853,6 +1858,194 @@ void SelfTest::testAutomation()
             problemBefore.isNotEmpty() && findSessionProblem (*session).isEmpty() && ! automation::lane (t, "warp drive").isValid()
                 && juce::exactlyEqual ((double) automation::lane (t, "pan").getChild (0)[ids::value], 1.0),
             problemBefore + " | " + repairs.joinIntoString ("; ").substring (0, 200));
+    clearTracks();
+}
+
+//==============================================================================
+// Loudness (EBU R128) of bounces, normalisation, dither and FLAC.
+
+void SelfTest::testLoudnessAndExport()
+{
+    beginGroup ("Loudness and export (EBU R128, normalising, dither, FLAC)");
+    clearTracks();
+    addToneTrack ("Stereo Tone", 2, media.getChildFile ("tone1k_stereo.wav"), clipStart); // -6.02 dBFS per channel
+    const auto end = clipStart + (juce::int64) (2.0 * sampleRate) + 4800;
+
+    auto measureFile = [this] (const juce::File& f)
+    {
+        const auto audio = readAudio (f);
+        dsp::LoudnessMeter m;
+        m.prepare (sampleRate, 2);
+        dsp::TruePeakMeter tp;
+        tp.prepare (2);
+        const float* ch[2] = { audio.getReadPointer (0), audio.getReadPointer (audio.getNumChannels() > 1 ? 1 : 0) };
+        m.process (ch, 2, audio.getNumSamples());
+        tp.process (ch, 2, audio.getNumSamples());
+        return std::pair { m.getIntegrated(), tp.getTruePeakDb() };
+    };
+
+    // A stereo 1 kHz sine at -6.02 dBFS is -6.02 LUFS (BS.1770's 1 kHz calibration), but
+    // this one lasts 2 s, from 0.5 s to 2.5 s of a 2.6 s file, so some 400 ms gating blocks
+    // (one every 100 ms) are partly silent: 3 blocks lead in (1/4, 2/4, 3/4 tone), 17 are
+    // all tone, 1 leads out (3/4). All pass the gates, so the integrated loudness is
+    // -6.02 + 10 log10 ((0.25 + 0.5 + 0.75 + 17 + 0.75) / 21) = -6.40 LUFS.
+    const auto plain = bounce ("loudness_plain", 0, end);
+    const auto [plainLufs, plainTp] = measureFile (plain.file);
+    const double expectedLufs = toneDb + 10.0 * std::log10 ((0.25 + 0.5 + 0.75 + 17.0 + 0.75) / 21.0);
+    expectNear ("a bounce reports its integrated loudness (BS.1770 gating of a 2 s, -6.02 dBFS stereo tone)",
+                plain.integratedLufs, expectedLufs, 0.02, "LUFS");
+    expectNear ("and its true peak (the tone's peak)", plain.truePeakDbtp, toneDb, 0.02, "dBTP");
+    expect ("the reported loudness and true peak match the file measured independently",
+            std::abs (plainLufs - plain.integratedLufs) < 0.01 && std::abs (plainTp - plain.truePeakDbtp) < 0.01,
+            fmt (plainLufs) + " LUFS / " + fmt (plainTp) + " dBTP");
+
+    auto request = app.makeSessionBounceRequest();
+    request.start = 0;
+    request.end = end;
+    request.bitDepth = 32;
+    request.format = "wav";
+    request.dither = false;
+    request.normalise = true;
+    request.targetLufs = -14.0;
+    request.ceilingDbtp = -1.0;
+    request.destination = output.getChildFile ("bounces").getChildFile ("loudness_minus14.wav");
+    auto normalised = app.bounceNow (request);
+    const auto [normLufs, normTp] = measureFile (normalised.file);
+    expect ("normalising to -14 LUFS: the file measures -14.0 LUFS; the first pass is cleaned up",
+            normalised.ok && std::abs (normLufs + 14.0) < 0.05 && ! normalised.limitedByCeiling
+                && std::abs (normalised.appliedGainDb - (-14.0 - plain.integratedLufs)) < 0.01
+                && ! request.destination.getSiblingFile ("loudness_minus14.unnormalised.wav").exists(),
+            normalised.error + fmt (normLufs) + " LUFS, gain " + fmt (normalised.appliedGainDb) + " dB");
+
+    request.targetLufs = 0.0; // +6 dB would put the true peak at 0 dBTP, past the -1 dBTP ceiling
+    request.destination = output.getChildFile ("bounces").getChildFile ("loudness_ceiling.wav");
+    auto ceiling = app.bounceNow (request);
+    const auto [ceilLufs, ceilTp] = measureFile (ceiling.file);
+    expect ("a target that would pass the true-peak ceiling stops at the ceiling, and says so",
+            ceiling.ok && ceiling.limitedByCeiling && std::abs (ceilTp + 1.0) < 0.05 && ceilLufs < -0.9,
+            fmt (ceilLufs) + " LUFS, " + fmt (ceilTp) + " dBTP");
+
+    // 16-bit with dither: every sample on the 16-bit grid, error power LSB^2/4.
+    request.normalise = false;
+    request.bitDepth = 16;
+    request.dither = true;
+    request.destination = output.getChildFile ("bounces").getChildFile ("dither16.wav");
+    const auto dithered = app.bounceNow (request);
+    const auto exact = readAudio (plain.file), sixteen = readAudio (dithered.file);
+    double errorPower = 0.0;
+    bool onGrid = sixteen.getNumSamples() == exact.getNumSamples();
+    for (int i = 0; onGrid && i < exact.getNumSamples(); ++i)
+    {
+        const double y = sixteen.getSample (0, i);
+        onGrid = std::abs (y * 32768.0 - std::round (y * 32768.0)) < 1.0e-6;
+        errorPower += std::pow (y - exact.getSample (0, i), 2.0);
+    }
+    const double lsb = 1.0 / 32768.0;
+    const double errorRatio = onGrid ? std::sqrt (errorPower / exact.getNumSamples()) / (lsb / 2.0) : 0.0;
+    expect ("16-bit bounce with TPDF dither: on the 16-bit grid, error exactly LSB/2 RMS (the dither's design)",
+            dithered.ok && onGrid && std::abs (errorRatio - 1.0) < 0.03, "error " + fmt (errorRatio, 3) + " x LSB/2");
+
+    // FLAC, 24-bit: lossless, so it reads back as the mix within 24-bit rounding.
+    request.bitDepth = 24;
+    request.dither = false;
+    request.format = "flac";
+    request.destination = output.getChildFile ("bounces").getChildFile ("export.flac");
+    const auto flac = app.bounceNow (request);
+    const auto flacAudio = readAudio (flac.file);
+    double worst = 0.0;
+    for (int ch = 0; ch < 2 && flacAudio.getNumSamples() == exact.getNumSamples(); ++ch)
+        for (int i = 0; i < exact.getNumSamples(); ++i)
+            worst = std::max (worst, std::abs ((double) flacAudio.getSample (ch, i) - exact.getSample (ch, i)));
+    expect ("FLAC 24-bit export reads back as the mix, within half a 24-bit step (rounded, not truncated)",
+            flac.ok && flacAudio.getNumSamples() == exact.getNumSamples() && worst <= 0.5 / 8388608.0 + 1.0e-9,
+            flac.error + " worst " + juce::String (worst * 8388608.0, 3) + " steps");
+
+    // The live master meter: the engine's 100 ms blocks must give exactly what an
+    // offline measurement of the same output gives. (A bare engine whose only
+    // output is the click at 120 BPM, -6 dB: a known, repeatable signal.)
+    {
+        AudioEngine engine;
+        engine.prepare (sampleRate, 480);
+        engine.getMasterBus().consoleEnabled.store (false);
+        engine.clickEnabled.store (true);
+        engine.getTransport().play();
+        const int total = (int) (6.0 * sampleRate);
+        std::vector<float> l ((size_t) total), r ((size_t) total);
+        for (int done = 0; done < total; done += 480)
+        {
+            float* outs[2] = { l.data() + done, r.data() + done };
+            engine.renderOffline (outs, 2, std::min (480, total - done));
+        }
+        dsp::LoudnessMeter live, offline;
+        live.prepare (sampleRate, 2);
+        offline.prepare (sampleRate, 2);
+        AudioEngine::LoudnessBlock block;
+        double livePeak = 0.0;
+        while (engine.popLoudnessBlock (block))
+        {
+            live.addSubBlock (block.meanSquare);
+            livePeak = std::max (livePeak, (double) block.truePeak);
+        }
+        // The engine meters the mix before the click is added: it measures silence here.
+        expect ("the live master meter excludes the click (a monitoring aid, not part of the mix)",
+                live.getIntegrated() <= dsp::LoudnessMeter::absoluteGate && livePeak < 1.0e-9,
+                fmt (live.getIntegrated()) + " LUFS");
+        juce::ignoreUnused (offline);
+    }
+    {
+        // A held synth note through the mix: live blocks vs. the output measured offline.
+        AudioEngine engine;
+        engine.prepare (sampleRate, 480);
+        engine.getMasterBus().consoleEnabled.store (false);
+        auto state = std::make_shared<TrackRealtimeState> (1);
+        state->recordArmed.store (true);
+        auto graph = std::make_unique<RenderGraph>();
+        graph->maxBlockSize = 480;
+        graph->sampleRate = sampleRate;
+        TrackRender t;
+        t.state = state;
+        t.numChannels = 2;
+        t.inputChannel = -1;
+        t.instrument = std::make_shared<InstrumentState>();
+        t.buffer.setSize (2, 480);
+        t.clipScratch.setSize (2, 480);
+        graph->tracks.push_back (std::move (t));
+        engine.publishGraph (std::move (graph));
+        engine.pushLiveMidi (57, 0.9f, true, 0.0);
+
+        const int total = (int) (6.0 * sampleRate);
+        std::vector<float> l ((size_t) total), r ((size_t) total);
+        for (int done = 0; done < total; done += 480)
+        {
+            float* outs[2] = { l.data() + done, r.data() + done };
+            engine.renderOffline (outs, 2, std::min (480, total - done));
+        }
+        dsp::LoudnessMeter live, offline;
+        live.prepare (sampleRate, 2);
+        offline.prepare (sampleRate, 2);
+        dsp::TruePeakMeter offlinePeak;
+        offlinePeak.prepare (2);
+        const float* channels[2] = { l.data(), r.data() };
+        offline.process (channels, 2, total);
+        offlinePeak.process (channels, 2, total);
+        AudioEngine::LoudnessBlock block;
+        double livePeak = 0.0;
+        while (engine.popLoudnessBlock (block))
+        {
+            live.addSubBlock (block.meanSquare);
+            livePeak = std::max (livePeak, (double) block.truePeak);
+        }
+        expect ("the live master loudness meter reads what an offline measurement of the same output reads",
+                offline.getIntegrated() > -40.0 && std::abs (live.getIntegrated() - offline.getIntegrated()) < 0.01
+                    && std::abs (live.getShortTerm() - offline.getShortTerm()) < 0.01
+                    && std::abs (20.0 * std::log10 (std::max (livePeak, 1.0e-12)) - offlinePeak.getTruePeakDb()) < 0.01,
+                "live " + fmt (live.getIntegrated()) + " / offline " + fmt (offline.getIntegrated()) + " LUFS; TP "
+                    + fmt (20.0 * std::log10 (std::max (livePeak, 1.0e-12))) + " / " + fmt (offlinePeak.getTruePeakDb()) + " dBTP");
+    }
+
+    auto& tools = app.getRemoteTools();
+    const auto refused = tools.call ("bounce", juce::JSON::parse (R"({"format":"flac","bit_depth":32})"));
+    expect ("the bounce tool refuses 32-bit FLAC with a clear message", ! refused.ok && refused.error.contains ("FLAC"), refused.error);
     clearTracks();
 }
 

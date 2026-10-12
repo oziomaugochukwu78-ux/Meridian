@@ -40,6 +40,12 @@ private:
     juce::Label volumeReadout, namePlate;
     juce::Rectangle<int> consoleHeader, scaleArea;
     bool draggingFader = false;
+
+    // Loudness (EBU R128) of the master output: momentary, short-term, integrated, true peak.
+    dsp::LoudnessMeter loudness;
+    double loudnessRate = 0.0, truePeakHeld = 0.0;
+    juce::Label loudnessReadout;
+    juce::TextButton loudnessReset { "reset" };
 };
 
 } // namespace meridian

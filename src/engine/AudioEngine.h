@@ -5,6 +5,7 @@
 #include "SpscQueue.h"
 #include "Transport.h"
 
+#include <dsp/Loudness.h>
 #include <dsp/Metronome.h>
 
 #include <juce_audio_devices/juce_audio_devices.h>
@@ -103,6 +104,17 @@ public:
     /** Captured notes lost because the message thread fell behind (should stay 0). */
     int collectRecordedMidiOverflows() noexcept { return recordedMidiOverflows.exchange (0); }
 
+    /** Loudness metering of the master output (the click is not included):
+        one entry per 100 ms, the K-weighted mean square summed over both
+        channels (BS.1770) and the true peak in that time. */
+    struct LoudnessBlock
+    {
+        double meanSquare = 0.0;
+        float truePeak = 0.0f;
+    };
+    /** UI thread: the next 100 ms block, if any (feed it to a dsp::LoudnessMeter). */
+    bool popLoudnessBlock (LoudnessBlock& out) noexcept { return loudnessBlocks.pop (out); }
+
     /** UI: peaks of the master output since the last call. */
     std::pair<float, float> collectMasterPeaks() noexcept;
 
@@ -192,6 +204,13 @@ private:
     std::vector<double> busSum[2], busComp[2], masterOut[2];
     std::vector<double> faderGains, muteGains, totalGains, sendGains, panLeft, panRight, coefLeft, coefRight, busScratch;
     void drainLiveMidi (int numSamples) noexcept;
+    void meterLoudness (int numSamples) noexcept;
+
+    std::array<dsp::KWeighting, 2> loudnessWeighting;
+    dsp::TruePeakMeter loudnessPeak;
+    double loudnessSum = 0.0;
+    int loudnessFill = 0, loudnessBlockLength = 4800;
+    SpscQueue<LoudnessBlock, 128> loudnessBlocks;  // audio thread -> UI, 12.8 s of slack
 
     struct LiveNote { int pitch = 60; float velocity = 0.0f; bool on = false; double time = 0.0; };
     struct BlockNote { int offset = 0; int pitch = 60; float velocity = 0.0f; bool on = false; };

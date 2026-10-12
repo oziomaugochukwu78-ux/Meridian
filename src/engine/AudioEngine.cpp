@@ -113,6 +113,13 @@ void AudioEngine::prepare (double sr, int blockSize)
     metronome.prepare (sr);
     appliedClick = metronome.getParams();
 
+    for (auto& k : loudnessWeighting)
+        k.prepare (sr);
+    loudnessPeak.prepare (2);
+    loudnessSum = 0.0;
+    loudnessFill = 0;
+    loudnessBlockLength = juce::jmax (1, (int) std::lround (0.1 * sr));
+
     masterBus.prepare (sr, blockSize);
     masterFader.reset (decibelsToGain (masterVolumeDb.load()));
 
@@ -236,6 +243,36 @@ void AudioEngine::renderBlock (const float* const* inputs, int numInputs,
     }
 }
 
+void AudioEngine::meterLoudness (int numSamples) noexcept
+{
+    // K-weighting and the 100 ms sums here (cheap, no allocation); the gating and
+    // histograms live on the UI side, fed through the queue.
+    float left[64], right[64];
+    for (int done = 0; done < numSamples;)
+    {
+        const int n = std::min (64, numSamples - done);
+        for (int i = 0; i < n; ++i)
+        {
+            const double l = masterOut[0][(size_t) (done + i)], r = masterOut[1][(size_t) (done + i)];
+            left[i] = (float) l;
+            right[i] = (float) r;
+            const double wl = loudnessWeighting[0].process (l), wr = loudnessWeighting[1].process (r);
+            loudnessSum += wl * wl + wr * wr;
+            if (++loudnessFill == loudnessBlockLength)
+            {
+                // If the UI is not reading (the queue is full), the block is dropped: metering is not critical.
+                (void) loudnessBlocks.push ({ loudnessSum / loudnessBlockLength, (float) loudnessPeak.getTruePeak() });
+                loudnessSum = 0.0;
+                loudnessFill = 0;
+                loudnessPeak.resetPeak();
+            }
+        }
+        const float* channels[2] = { left, right };
+        loudnessPeak.process (channels, 2, n);
+        done += n;
+    }
+}
+
 void AudioEngine::renderClick (int numSamples, juce::int64 gridPosition) noexcept
 {
     dsp::Metronome::Params p;
@@ -305,6 +342,9 @@ void AudioEngine::processChunk (const float* const* inputs, int numInputs, float
         dsp::multiplyInPlace (masterOut[0].data(), masterFader.getCurrent(), numSamples);
         dsp::multiplyInPlace (masterOut[1].data(), masterFader.getCurrent(), numSamples);
     }
+
+    if (! offline)
+        meterLoudness (numSamples); // the mix as heard, before the click is added
 
     // The click: after the master fader, so it is never in a bounce's mix level
     // and the fader does not change it. Count-in clicks run on their own grid.

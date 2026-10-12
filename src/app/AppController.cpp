@@ -715,6 +715,8 @@ BounceRequest AppController::makeSessionBounceRequest() const
     request.sampleRate = session->getSampleRate();
     request.bitDepth = session->getBitDepth();
     request.aiff = session->getFileFormat() == "aiff";
+    request.format = request.aiff ? "aiff" : "wav";
+    request.dither = request.bitDepth == 16; // the audible case; 24-bit rounding error is far below hearing
 
     const auto folder = session->getFolder().getChildFile ("Bounced Files");
     folder.createDirectory();
