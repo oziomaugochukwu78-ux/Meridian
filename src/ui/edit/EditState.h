@@ -26,6 +26,7 @@ public:
     juce::int64 viewStart = 0;         ///< sample at the left edge of the timeline
     double samplesPerPixel = 400.0;
     double sampleRate = 48000.0;
+    double tempo = timeformat::tempoBpm;   ///< session tempo (BPM): grid, ruler and bar counts follow it
     int trackHeight = 92;
 
     static constexpr double minSamplesPerPixel = 1.0;
@@ -63,7 +64,7 @@ public:
     void setMode (EditMode m) { mode = m; sendChangeMessage(); }
 
     /** Grid resolution: one beat at the session tempo. */
-    juce::int64 gridSize() const noexcept { return (juce::int64) std::llround (timeformat::samplesPerBeat (sampleRate)); }
+    juce::int64 gridSize() const noexcept { return (juce::int64) std::llround (timeformat::samplesPerBeat (sampleRate, tempo)); }
 
     juce::int64 snap (juce::int64 sample) const noexcept
     {

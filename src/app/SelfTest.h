@@ -98,6 +98,7 @@ private:
     void testMcpTools();
     void testRemoteCommands();
     void testGoldenRenders();
+    void testInstruments();
     void testStress();
     void testRobustness();
     void testDamagedSessions (const juce::File& originalSession);

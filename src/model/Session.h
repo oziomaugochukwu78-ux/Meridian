@@ -67,10 +67,18 @@ public:
     juce::ValueTree getTrackById (int trackId) const;
     int indexOfTrack (const juce::ValueTree& track) const;
 
-    enum class TrackKind { audio, aux };
+    enum class TrackKind { audio, aux, instrument };
 
-    /** Aux tracks are always stereo and have no input. */
+    /** Aux and instrument tracks are always stereo and have no audio input.
+        Instrument tracks get a SYNTH node with the default sound. */
     juce::ValueTree addTrack (const juce::String& name, int numChannels, juce::UndoManager*, TrackKind = TrackKind::audio);
+
+    /** An empty MIDI clip on an instrument track (timeline samples). */
+    juce::ValueTree addMidiClip (juce::ValueTree track, juce::int64 timelineStart, juce::int64 length,
+                                 const juce::String& name, juce::UndoManager*);
+
+    /** Session tempo in BPM (one tempo for the whole session for now). */
+    double getTempo() const;
     void removeTrack (const juce::ValueTree& track, juce::UndoManager*);
 
     juce::ValueTree addClip (juce::ValueTree track, const juce::File& audioFile, juce::int64 timelineStart,
@@ -116,6 +124,9 @@ namespace track
     inline int id (const juce::ValueTree& t)                  { return t[ids::id]; }
     inline juce::String name (const juce::ValueTree& t)       { return t[ids::name].toString(); }
     inline bool isAux (const juce::ValueTree& t)              { return t.getProperty (ids::kind, "audio").toString() == "aux"; }
+    inline bool isInstrument (const juce::ValueTree& t)       { return t.getProperty (ids::kind, "audio").toString() == "instrument"; }
+    inline bool isAudio (const juce::ValueTree& t)            { return ! isAux (t) && ! isInstrument (t); }
+    inline juce::ValueTree synth (const juce::ValueTree& t)   { return t.getChildWithName (ids::SYNTH); }
     inline int outputBus (const juce::ValueTree& t)           { return t.getProperty (ids::outputBus, 0); } ///< aux track id, 0 = master
     inline juce::ValueTree sends (const juce::ValueTree& t)   { return t.getChildWithName (ids::SENDS); }
     inline int channels (const juce::ValueTree& t)            { return juce::jlimit (1, 2, (int) t.getProperty (ids::channels, 1)); }
@@ -156,6 +167,10 @@ namespace clip
     inline juce::int64 fadeIn (const juce::ValueTree& c)      { return (juce::int64) c.getProperty (ids::fadeIn, 0); }
     inline juce::int64 fadeOut (const juce::ValueTree& c)     { return (juce::int64) c.getProperty (ids::fadeOut, 0); }
     inline juce::ValueTree owningTrack (const juce::ValueTree& c) { return c.getParent().getParent(); }
+    inline bool isMidi (const juce::ValueTree& c)             { return c.getProperty (ids::kind, "audio").toString() == "midi"; }
+    inline juce::ValueTree notes (const juce::ValueTree& c)   { return c.getChildWithName (ids::NOTES); }
+    /** Timeline sample where the clip's content (and its note ticks) begin. */
+    inline juce::int64 contentOrigin (const juce::ValueTree& c) { return start (c) - offset (c); }
 } // namespace clip
 
 } // namespace meridian

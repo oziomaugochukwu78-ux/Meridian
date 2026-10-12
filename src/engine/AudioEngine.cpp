@@ -3,6 +3,7 @@
 #include <dsp/MixKernels.h>
 #include <dsp/PanLaw.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace meridian
@@ -265,6 +266,12 @@ void AudioEngine::renderTrack (TrackRender& t, const BlockContext& ctx) noexcept
             dsp::convertToFloat (busScratch.data(), t.buffer.getWritePointer (ch), ctx.numSamples);
         }
     }
+    else if (t.instrument != nullptr)
+    {
+        for (int ch = 0; ch < numChannels; ++ch)
+            juce::FloatVectorOperations::clear (t.buffer.getWritePointer (ch), ctx.numSamples);
+        renderInstrument (t, ctx);
+    }
     else
     {
         for (int ch = 0; ch < numChannels; ++ch)
@@ -367,6 +374,70 @@ void AudioEngine::renderSegments (TrackRender& t, const BlockContext& ctx) noexc
         for (int ch = 0; ch < t.numChannels; ++ch)
             juce::FloatVectorOperations::addWithMultiply (t.buffer.getWritePointer (ch, destOffset), scratch[ch], seg.gain, count);
     }
+}
+
+void AudioEngine::renderInstrument (TrackRender& t, const BlockContext& ctx) noexcept
+{
+    auto& inst = *t.instrument;
+    auto& synth = inst.synth;
+
+    // prepare() and setParams() allocate nothing, so the audio thread applies them.
+    const double rate = activeGraph->sampleRate > 0.0 ? activeGraph->sampleRate : sampleRate.load (std::memory_order_relaxed);
+    if (! juce::exactlyEqual (inst.preparedRate, rate))
+    {
+        synth.prepare (rate);
+        inst.preparedRate = rate;
+        inst.appliedParamsVersion = 0;
+    }
+    if (inst.appliedParamsVersion != t.synthParamsVersion)
+    {
+        synth.setParams (t.synthParams);
+        inst.appliedParamsVersion = t.synthParamsVersion;
+    }
+
+    float* left = t.buffer.getWritePointer (0);
+    // (Instrument tracks are stereo; should one ever be mono, the right half goes to scratch.)
+    float* right = t.numChannels > 1 ? t.buffer.getWritePointer (1) : t.clipScratch.getWritePointer (1);
+    const int n = ctx.numSamples;
+
+    if (ctx.state == Transport::State::stopped)
+    {
+        // Stopped: let sounding notes release naturally, start nothing new.
+        if (inst.nextPosition >= 0)
+        {
+            synth.allNotesOff();
+            inst.nextPosition = -1;
+        }
+        synth.render (left, right, n);
+        return;
+    }
+
+    // Started, or jumped (locate, loop): notes from before the jump must not hang.
+    if (inst.nextPosition != ctx.position)
+        synth.allNotesOff();
+
+    // Render between events, applying each on its exact sample.
+    const auto pos = ctx.position, end = pos + n;
+    auto it = std::lower_bound (t.events.begin(), t.events.end(), pos,
+                                [] (const MidiEvent& e, juce::int64 time) { return e.time < time; });
+    int done = 0;
+    for (; it != t.events.end() && it->time < end; ++it)
+    {
+        const int at = (int) (it->time - pos);
+        if (at > done)
+        {
+            synth.render (left + done, right + done, at - done);
+            done = at;
+        }
+        if (it->on)
+            synth.noteOn (it->pitch, it->velocity);
+        else
+            synth.noteOff (it->pitch);
+    }
+    if (done < n)
+        synth.render (left + done, right + done, n - done);
+
+    inst.nextPosition = end;
 }
 
 void AudioEngine::writeTake (RecordTake& take, const BlockContext& ctx) noexcept

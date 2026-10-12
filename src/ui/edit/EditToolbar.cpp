@@ -82,7 +82,7 @@ void EditToolbar::refresh()
     for (int i = 0; i < toolButtons.size(); ++i)
         toolButtons[i]->setToggleState (tools[i].tool == state.tool, juce::dontSendNotification);
 
-    gridLabel.setText ("Grid: 1 beat @ " + juce::String (timeformat::tempoBpm, 0) + " BPM",
+    gridLabel.setText ("Grid: 1 beat @ " + juce::String (state.tempo, std::abs (state.tempo - std::round (state.tempo)) < 0.005 ? 0 : 2) + " BPM",
                        juce::dontSendNotification);
 }
 

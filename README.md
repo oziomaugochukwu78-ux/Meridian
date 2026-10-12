@@ -18,7 +18,8 @@ This is an early foundation, not a finished DAW. Everything listed as working co
 | Mix window | Channel strips: 10 inserts, 5 sends (level, pan, pre/post, mute), output routing to master or any bus, I/O, automation mode, pan, R/S/M, console-taper fader, segmented meters; Aux Input (bus) tracks, bus-to-bus chains with loop protection, implicit solo; master strip with console controls | VCAs, mono buses, surround |
 | Audio engine | Lock-free render graph, double-buffered disk streaming, record to disk with round-trip latency compensation, input monitoring, sample-accurate volume automation, ramped gain/mute/pan, automatic plug-in delay compensation across tracks, sends and buses, offline bounce to WAV/AIFF (File > Bounce Mix) | Multi-core track rendering, dither options, manual recording offset |
 | Mixing maths | 64-bit compensated summing bus, SIMD (SSE2/AVX/NEON) mix kernels, constant-power pan, 4x-oversampled tanh/cubic console saturation | Per-track console channels |
-| Plug-ins | VST3 and LV2 hosting (plus AU on macOS), scanning with crash protection, editors, bypass, state saved in the session | CLAP hosting (needs a CLAP-SDK format adapter), sidechains, instruments |
+| Plug-ins | VST3 and LV2 hosting (plus AU on macOS), scanning with crash protection, editors, bypass, state saved in the session | CLAP hosting (needs a CLAP-SDK format adapter), sidechains, VST3 instruments |
+| Instruments and MIDI | Instrument tracks playing MIDI clips through a built-in polyphonic synth with measured quality: in tune, sample-accurate, folded aliasing under -87 dB; session tempo, with notes stored in beats so they follow it; double-click a lane to create a MIDI clip; AI tools to write notes and shape the sound | Piano roll, MIDI input recording, tempo and meter changes, VST3 instruments |
 | Elastic Audio | Offline time-compress/expand and pitch shift with Rubber Band (R3 engine), Alt-drag TCE on clip edges | Real-time (preview) elastic mode, warp markers |
 | AI remote | MCP server (25 tools; every argument checked against the published schema), JSON tools and text commands (PLAY, STOP, RECORD, TOGGLE_WINDOW, MUTE_TRACK_X, SET_VOLUME_TRACK_X_YdB, BOUNCE, STATUS, HELP) on 127.0.0.1; strict input validation (RFC 8259 JSON, UTF-8, nesting limit) | Presets applied by plain request (see the roadmap) |
 
@@ -135,7 +136,7 @@ To be precise about the benefit: floating-point buses never clip internally, eve
 
 ## AI remote control
 
-While Meridian runs, port 47800 on 127.0.0.1 offers three interfaces to the same 25 tools:
+While Meridian runs, port 47800 on 127.0.0.1 offers three interfaces to the same 30 tools:
 
 | Interface | Address | For |
 |---|---|---|
@@ -153,7 +154,7 @@ claude mcp add --transport http meridian http://127.0.0.1:47800/mcp
 
 Claude Desktop and other stdio-only clients can use the `mcp-remote` bridge: add a server with command `npx` and arguments `mcp-remote http://127.0.0.1:47800/mcp` in the client's MCP settings.
 
-Tools: `get_status`, `transport`, `set_track`, `create_track`, `delete_track`, `set_output`, `set_send`, `remove_send`, `list_plugins`, `insert_plugin`, `remove_plugin`, `set_plugin_bypass`, `list_clips`, `split_clip`, `delete_clip`, `move_clip`, `set_clip`, `import_audio`, `set_volume_automation`, `set_master`, `bounce`, `undo`, `redo`, `save_session` and `show_window`. Each tool has a JSON schema and a description written for the model, and every call is checked against that schema before it runs. Tracks are referenced by number or name. Every AI edit lands in the undo history, labelled "AI: ...".
+Tools: `get_status`, `transport`, `set_track`, `create_track`, `delete_track`, `set_output`, `set_send`, `remove_send`, `list_plugins`, `insert_plugin`, `remove_plugin`, `set_plugin_bypass`, `list_clips`, `split_clip`, `delete_clip`, `move_clip`, `set_clip`, `import_audio`, `set_volume_automation`, `set_tempo`, `add_midi_clip`, `add_notes`, `list_notes`, `set_synth`, `set_master`, `bounce`, `undo`, `redo`, `save_session` and `show_window`. With the MIDI tools, an AI can compose: create an instrument track, write notes in beats, shape the sound, and bounce the result. Each tool has a JSON schema and a description written for the model, and every call is checked against that schema before it runs. Tracks are referenced by number or name. Every AI edit lands in the undo history, labelled "AI: ...".
 
 ### Text commands
 

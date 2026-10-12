@@ -65,6 +65,11 @@ private:
     Result setClip (const juce::var&);
     Result importAudio (const juce::var&);
     Result setVolumeAutomation (const juce::var&);
+    Result setTempo (const juce::var&);
+    Result addMidiClip (const juce::var&);
+    Result addNotes (const juce::var&);
+    Result listNotes (const juce::var&);
+    Result setSynth (const juce::var&);
     Result setMaster (const juce::var&);
     Result bounce (const juce::var&);
     Result undoRedo (const juce::var&, bool undo);
@@ -73,6 +78,7 @@ private:
 
     juce::ValueTree findTrack (const juce::var& reference, juce::String& error) const;
     juce::ValueTree findClip (const juce::ValueTree& track, const juce::var& reference, juce::String& error) const;
+    juce::ValueTree findInstrumentTrack (const juce::var& reference, juce::String& error) const;
     juce::var describeTrack (const juce::ValueTree& track, int number) const;
     juce::UndoManager* beginEdit (const juce::String& name);
     juce::int64 secondsToSamples (const juce::var& seconds) const;

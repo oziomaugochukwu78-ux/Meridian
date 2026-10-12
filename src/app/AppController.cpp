@@ -367,7 +367,7 @@ void AppController::importAudioFiles (const juce::Array<juce::File>& files, juce
     const int bitDepth = session->getBitDepth();
     const bool aiff = session->getFileFormat() == "aiff";
     const int generation = sessionGeneration;
-    const bool useTarget = targetTrack.isValid() && files.size() == 1 && ! track::isAux (targetTrack); // auxes hold no clips
+    const bool useTarget = targetTrack.isValid() && files.size() == 1 && track::isAudio (targetTrack); // only audio tracks hold audio clips
 
     for (const auto& source : files)
     {
@@ -762,7 +762,7 @@ std::string AppController::statusJson()
         const auto outputTrack = output != 0 ? session->getTrackById (output) : juce::ValueTree();
         entry.addInt ("number", i + 1)
             .addString ("name", track::name (t).toStdString())
-            .addString ("kind", track::isAux (t) ? "aux" : "audio")
+            .addString ("kind", track::isAux (t) ? "aux" : track::isInstrument (t) ? "instrument" : "audio")
             .addString ("output", outputTrack.isValid() ? track::name (outputTrack).toStdString() : std::string ("master"))
             .addInt ("sends", track::sends (t).getNumChildren())
             .addInt ("channels", track::channels (t))

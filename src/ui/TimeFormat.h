@@ -5,7 +5,7 @@
 namespace meridian::timeformat
 {
 
-/** Session tempo and metre. Fixed for now (no tempo map yet). */
+/** Default tempo, and the metre (4/4 throughout for now; no meter map yet). */
 constexpr double tempoBpm = 120.0;
 constexpr int beatsPerBar = 4;
 constexpr int ticksPerBeat = 960;
@@ -23,14 +23,17 @@ inline juce::String minSecs (juce::int64 samples, double sampleRate)
     return juce::String (minutes) + ":" + juce::String (secs).paddedLeft ('0', 2) + "." + juce::String (ms).paddedLeft ('0', 3);
 }
 
-inline double samplesPerBeat (double sampleRate) { return sampleRate * 60.0 / tempoBpm; }
+inline double samplesPerBeat (double sampleRate, double bpm = tempoBpm)
+{
+    return sampleRate * 60.0 / (bpm > 0.0 ? bpm : tempoBpm);
+}
 
 /** "bar| beat| tick", 1-based bars and beats. */
-inline juce::String barsBeats (juce::int64 samples, double sampleRate)
+inline juce::String barsBeats (juce::int64 samples, double sampleRate, double bpm = tempoBpm)
 {
     if (sampleRate <= 0.0)
         return "1| 1| 000";
-    const double beats = (double) std::max<juce::int64> (0, samples) / samplesPerBeat (sampleRate);
+    const double beats = (double) std::max<juce::int64> (0, samples) / samplesPerBeat (sampleRate, bpm);
     const auto wholeBeats = (juce::int64) std::floor (beats);
     const auto bar = wholeBeats / beatsPerBar + 1;
     const auto beat = wholeBeats % beatsPerBar + 1;

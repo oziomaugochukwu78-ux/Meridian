@@ -81,16 +81,22 @@ void PolySynth::prepare (double newSampleRate) noexcept
 
 void PolySynth::setParams (const Params& p) noexcept
 {
+    // Clamp into range; a non-finite value (from a damaged file, say) falls back to the default.
+    const Params defaults;
+    auto safe = [] (double value, double fallback, double lo, double hi)
+    {
+        return std::clamp (std::isfinite (value) ? value : fallback, lo, hi);
+    };
     params = p;
-    params.detuneCents = std::clamp (p.detuneCents, 0.0, 50.0);
-    params.attack = std::clamp (p.attack, 0.0005, 10.0);
-    params.decay = std::clamp (p.decay, 0.001, 10.0);
-    params.sustain = std::clamp (p.sustain, 0.0, 1.0);
-    params.release = std::clamp (p.release, 0.001, 20.0);
-    params.cutoffHz = std::clamp (p.cutoffHz, 20.0, 20000.0);
-    params.resonance = std::clamp (p.resonance, 0.0, 1.0);
-    params.filterEnvOctaves = std::clamp (p.filterEnvOctaves, -8.0, 8.0);
-    params.gainDb = std::clamp (p.gainDb, -60.0, 12.0);
+    params.detuneCents = safe (p.detuneCents, defaults.detuneCents, 0.0, 50.0);
+    params.attack = safe (p.attack, defaults.attack, 0.0005, 10.0);
+    params.decay = safe (p.decay, defaults.decay, 0.001, 10.0);
+    params.sustain = safe (p.sustain, defaults.sustain, 0.0, 1.0);
+    params.release = safe (p.release, defaults.release, 0.001, 20.0);
+    params.cutoffHz = safe (p.cutoffHz, defaults.cutoffHz, 20.0, 20000.0);
+    params.resonance = safe (p.resonance, defaults.resonance, 0.0, 1.0);
+    params.filterEnvOctaves = safe (p.filterEnvOctaves, defaults.filterEnvOctaves, -8.0, 8.0);
+    params.gainDb = safe (p.gainDb, defaults.gainDb, -60.0, 12.0);
 
     voiceGain = std::pow (10.0, params.gainDb / 20.0);
     attackStep = 1.0 / std::max (1.0, params.attack * internalRate);

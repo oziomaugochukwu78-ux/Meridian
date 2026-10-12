@@ -67,7 +67,7 @@ void TimelineRuler::paint (juce::Graphics& g)
 
 void TimelineRuler::paintBarsBeats (juce::Graphics& g, juce::Rectangle<int> row)
 {
-    const double samplesPerBeat = timeformat::samplesPerBeat (state.sampleRate);
+    const double samplesPerBeat = timeformat::samplesPerBeat (state.sampleRate, state.tempo);
     const double samplesPerBar = samplesPerBeat * timeformat::beatsPerBar;
     const double barPixels = samplesPerBar / state.samplesPerPixel;
 

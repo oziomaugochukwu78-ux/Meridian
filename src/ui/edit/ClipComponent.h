@@ -11,8 +11,8 @@
 namespace meridian
 {
 
-/** One audio clip on a track lane: waveform, name bar, fades, and the
-    Edit-tool behaviours.
+/** One clip on a track lane: a waveform (audio) or its notes (MIDI), the
+    name bar, fades (audio only), and the Edit-tool behaviours.
 
     SMART TOOL zones (when the Smart Tool is active):
 
@@ -57,7 +57,10 @@ private:
     void loadThumbnail();
 
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
+    void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;
+    void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override { repaint(); }
+    void paintNotes (juce::Graphics&, juce::Rectangle<int> area);
 
     AppController& app;
     EditState& editState;

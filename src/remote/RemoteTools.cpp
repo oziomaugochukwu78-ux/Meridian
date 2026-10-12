@@ -2,6 +2,7 @@
 
 #include "app/AppController.h"
 #include "model/Automation.h"
+#include "model/MidiModel.h"
 #include "model/Routing.h"
 
 #include <dsp/SignalAnalysis.h>
@@ -94,13 +95,26 @@ juce::var schema (std::initializer_list<Param> params)
         }
         else if (juce::String (p.type) == "array")
         {
-            // The only array parameter: automation breakpoints.
+            // Automation breakpoints.
             set (property, "type", "array");
             set (property, "items", makeObject ({
                 { "type", "object" },
                 { "properties", makeObject ({ { "seconds", makeObject ({ { "type", "number" } }) },
                                               { "db", makeObject ({ { "type", "number" } }) } }) },
                 { "required", juce::Array<juce::var> { "seconds", "db" } } }));
+        }
+        else if (juce::String (p.type) == "notes")
+        {
+            // MIDI notes, positioned in beats (quarter notes) from the clip start.
+            set (property, "type", "array");
+            set (property, "items", makeObject ({
+                { "type", "object" },
+                { "properties", makeObject ({
+                    { "pitch", makeObject ({ { "type", "integer" }, { "description", "MIDI note number: 60 = middle C, 69 = A 440 Hz" } }) },
+                    { "start_beats", makeObject ({ { "type", "number" }, { "description", "Start, in beats from the clip start" } }) },
+                    { "length_beats", makeObject ({ { "type", "number" }, { "description", "Length in beats (1 = a quarter note)" } }) },
+                    { "velocity", makeObject ({ { "type", "number" }, { "description", "Loudness 0-1 (default 0.8)" } }) } }) },
+                { "required", juce::Array<juce::var> { "pitch", "start_beats", "length_beats" } } }));
         }
         else
         {
@@ -157,9 +171,11 @@ const std::vector<ToolInfo>& toolTable()
                     { "record_arm", "boolean", "Record-enable (audio tracks)" },
                     { "input", "integer", "Audio input channel, 1-based (0 = no input)" } }) },
         { "create_track", "Create tracks",
-          "Create audio tracks (play and record audio) or aux tracks (buses that receive sends, e.g. for a shared reverb).",
-          schema ({ { "kind", "string", "Track type", false, { "audio", "aux" } },
-                    { "channels", "integer", "1 = mono, 2 = stereo (aux tracks are always stereo)" },
+          "Create audio tracks (play and record audio), aux tracks (buses that receive sends, e.g. for a shared "
+          "reverb) or instrument tracks (play MIDI notes through Meridian's built-in synthesiser; add notes with "
+          "add_midi_clip and add_notes, shape the sound with set_synth).",
+          schema ({ { "kind", "string", "Track type", false, { "audio", "aux", "instrument" } },
+                    { "channels", "integer", "1 = mono, 2 = stereo (aux and instrument tracks are always stereo)" },
                     { "name", "string", "Name (numbered automatically if creating several)" },
                     { "count", "integer", "How many to create (default 1)" } }) },
         { "delete_track", "Delete a track", "Delete a track (undoable).", schema ({ { "track", "track", trackHelp, true } }) },
@@ -176,7 +192,7 @@ const std::vector<ToolInfo>& toolTable()
                     { "pan", "number", "Send pan, -1 to +1" },
                     { "pre_fader", "boolean", "true = independent of the track fader" },
                     { "mute", "boolean", "Mute the send" } }) },
-        { "remove_send", "Remove a send", "Remove a send.",
+        { "remove_send", "Remove a send", "Remove one of a track's sends (undoable). The bus it fed is kept.",
           schema ({ { "track", "track", trackHelp, true }, { "slot", "string", "Send slot", true, { "A", "B", "C", "D", "E" } } }) },
         { "list_plugins", "List plug-ins", "Effect plug-ins installed and scanned on this computer.",
           schema ({ { "filter", "string", "Only names containing this text" } }) },
@@ -191,7 +207,7 @@ const std::vector<ToolInfo>& toolTable()
           schema ({ { "track", "track", trackHelp, true },
                     { "slot", "string", "Insert slot A-J (or 1-10)", true },
                     { "bypass", "boolean", "true = bypassed", true } }) },
-        { "list_clips", "List clips", "Audio clips on one track (or all tracks), with positions in seconds.",
+        { "list_clips", "List clips", "Audio and MIDI clips on one track (or all tracks), with positions in seconds.",
           schema ({ { "track", "track", "Optional: only this track" } }) },
         { "split_clip", "Split clips", "Cut every clip on a track at a time position (like Separate Clip).",
           schema ({ { "track", "track", trackHelp, true }, { "seconds", "number", "Where to cut", true } }) },
@@ -222,6 +238,41 @@ const std::vector<ToolInfo>& toolTable()
           schema ({ { "track", "track", trackHelp, true },
                     { "points", "array", "Breakpoints, e.g. [{\"seconds\": 0, \"db\": -60}, {\"seconds\": 4, \"db\": 0}]", true },
                     { "replace", "boolean", "Replace existing points (default true)" } }) },
+        { "set_tempo", "Set the tempo",
+          "Session tempo in BPM (beats per minute). MIDI notes are placed in beats, so they follow the tempo.",
+          schema ({ { "bpm", "number", "Tempo, 20-999 BPM", true } }) },
+        { "add_midi_clip", "Create a MIDI clip",
+          "Create an empty MIDI clip on an instrument track, positioned in beats (quarter notes; at 4/4 a bar is 4 "
+          "beats). Returns the clip number for add_notes.",
+          schema ({ { "track", "track", "Instrument track number or name", true },
+                    { "start_beat", "number", "Where the clip starts, in beats from the session start (0 = beginning)" },
+                    { "length_beats", "number", "Clip length in beats (default 16 = 4 bars)" },
+                    { "name", "string", "Clip name" } }) },
+        { "add_notes", "Add notes",
+          "Write notes into a MIDI clip. Positions and lengths are in beats from the clip start; pitch is a MIDI "
+          "note number (60 = middle C, 62 = D, 64 = E, 65 = F, 67 = G, 69 = A, 71 = B, 72 = the next C). "
+          "Notes outside the clip are kept but not heard until the clip is lengthened.",
+          schema ({ { "track", "track", "Instrument track number or name", true },
+                    { "clip", "track", "Clip number (from list_clips) or name", true },
+                    { "notes", "notes", "Notes to add, e.g. [{\"pitch\": 60, \"start_beats\": 0, \"length_beats\": 1}]", true },
+                    { "replace", "boolean", "Remove the clip's existing notes first (default false)" } }) },
+        { "list_notes", "List notes", "The notes of a MIDI clip, in beats from the clip start.",
+          schema ({ { "track", "track", "Instrument track number or name", true },
+                    { "clip", "track", "Clip number (from list_clips) or name", true } }) },
+        { "set_synth", "Shape an instrument's sound",
+          "Change an instrument track's built-in synthesiser. Only the given settings change.",
+          schema ({ { "track", "track", "Instrument track number or name", true },
+                    { "waveform", "string", "Oscillator: sine (pure, soft), saw (bright, rich), square (hollow)", false,
+                      { "sine", "saw", "square" } },
+                    { "detune_cents", "number", "Second oscillator detune, 0-50 cents (0 = single, thinner; 7 = gentle width)" },
+                    { "attack", "number", "Seconds to reach full level (0.001 = sharp, 0.5 = slow swell)" },
+                    { "decay", "number", "Seconds to fall 60 dB toward the sustain level" },
+                    { "sustain", "number", "Level held while the note is down, 0-1" },
+                    { "release", "number", "Seconds to fade 60 dB after the note ends" },
+                    { "cutoff_hz", "number", "Low-pass filter cutoff, 20-20000 Hz (lower = darker)" },
+                    { "resonance", "number", "Filter resonance 0-1" },
+                    { "filter_env_octaves", "number", "How far each note opens the filter, in octaves (-8 to 8)" },
+                    { "gain_db", "number", "Synth output level, -60 to +12 dB" } }) },
         { "set_master", "Master bus",
           "Master fader and the analog console emulation (saturation) on the master bus.",
           schema ({ { "volume_db", "number", "Master fader in dB" },
@@ -285,7 +336,7 @@ bool isDbWord (const juce::var& v)
 juce::String checkArgument (const juce::String& name, const juce::var& value, const juce::var& property)
 {
     const auto type = property["type"];
-    const bool dbParameter = name.endsWith ("_db");
+    const bool dbParameter = name.endsWith ("_db") || name == "db";
 
     if (type.isArray()) // "track": a number or a name
         return isFiniteNumber (value) || value.isString() ? juce::String() : "\"" + name + "\" must be a track number or name";
@@ -306,13 +357,28 @@ juce::String checkArgument (const juce::String& name, const juce::var& value, co
         return value.isString() || isFiniteNumber (value) ? juce::String() : "\"" + name + "\" must be a string";
     if (t == "array")
     {
+        // Every entry must match the item schema: an object with the required
+        // fields, each field checked like a top-level argument.
         const auto* items = value.getArray();
         if (items == nullptr)
             return "\"" + name + "\" must be an array";
-        for (const auto& item : *items)
-            if (! item.isObject() || ! (isFiniteNumber (item["seconds"]) || isNumericString (item["seconds"]))
-                || ! (isFiniteNumber (item["db"]) || isNumericString (item["db"]) || isDbWord (item["db"])))
-                return "every entry of \"" + name + "\" must be {\"seconds\": <number>, \"db\": <number or \"-inf\">}";
+        const auto itemSchema = property["items"];
+        for (int i = 0; i < items->size(); ++i)
+        {
+            const auto& item = items->getReference (i);
+            const auto where = "entry " + juce::String (i + 1) + " of \"" + name + "\"";
+            if (! item.isObject())
+                return where + " must be an object";
+            if (const auto* required = itemSchema["required"].getArray())
+                for (const auto& r : *required)
+                    if (! item.hasProperty (r.toString()))
+                        return where + " needs \"" + r.toString() + "\"";
+            if (auto* fields = itemSchema["properties"].getDynamicObject())
+                for (const auto& f : fields->getProperties())
+                    if (item.hasProperty (f.name))
+                        if (const auto error = checkArgument (f.name.toString(), item[f.name], f.value); error.isNotEmpty())
+                            return where + ": " + error;
+        }
         return {};
     }
     return {};
@@ -370,6 +436,11 @@ RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var
     if (name == "set_clip")           return setClip (args);
     if (name == "import_audio")       return importAudio (args);
     if (name == "set_volume_automation") return setVolumeAutomation (args);
+    if (name == "set_tempo")          return setTempo (args);
+    if (name == "add_midi_clip")      return addMidiClip (args);
+    if (name == "add_notes")          return addNotes (args);
+    if (name == "list_notes")         return listNotes (args);
+    if (name == "set_synth")          return setSynth (args);
     if (name == "set_master")         return setMaster (args);
     if (name == "bounce")             return bounce (args);
     if (name == "undo")               return undoRedo (args, true);
@@ -479,20 +550,31 @@ juce::var RemoteTools::describeTrack (const juce::ValueTree& t, int number) cons
     }
 
     const int input = track::inputChannel (t);
-    return makeObject ({ { "number", number },
-                         { "name", track::name (t) },
-                         { "kind", track::isAux (t) ? "aux" : "audio" },
-                         { "channels", track::channels (t) },
-                         { "volume_db", dbOrNull (track::volumeDb (t)) },
-                         { "pan", track::pan (t) },
-                         { "mute", track::mute (t) },
-                         { "solo", track::solo (t) },
-                         { "record_arm", track::recordArm (t) },
-                         { "input", track::isAux (t) ? juce::var() : juce::var (input + 1) },
-                         { "output", outTrack.isValid() ? track::name (outTrack) : juce::String ("master") },
-                         { "sends", sends },
-                         { "inserts", inserts },
-                         { "clips", track::clips (t).getNumChildren() } });
+    auto result = makeObject ({ { "number", number },
+                                { "name", track::name (t) },
+                                { "kind", track::isAux (t) ? "aux" : track::isInstrument (t) ? "instrument" : "audio" },
+                                { "channels", track::channels (t) },
+                                { "volume_db", dbOrNull (track::volumeDb (t)) },
+                                { "pan", track::pan (t) },
+                                { "mute", track::mute (t) },
+                                { "solo", track::solo (t) },
+                                { "record_arm", track::recordArm (t) },
+                                { "input", track::isAudio (t) ? juce::var (input + 1) : juce::var() },
+                                { "output", outTrack.isValid() ? track::name (outTrack) : juce::String ("master") },
+                                { "sends", sends },
+                                { "inserts", inserts },
+                                { "clips", track::clips (t).getNumChildren() } });
+
+    if (track::isInstrument (t))
+    {
+        const auto p = midimodel::readSynthParams (track::synth (t));
+        set (result, "synth", makeObject ({ { "waveform", midimodel::waveformName (p.waveform) },
+                                            { "detune_cents", p.detuneCents }, { "attack", p.attack }, { "decay", p.decay },
+                                            { "sustain", p.sustain }, { "release", p.release }, { "cutoff_hz", p.cutoffHz },
+                                            { "resonance", p.resonance }, { "filter_env_octaves", p.filterEnvOctaves },
+                                            { "gain_db", p.gainDb } }));
+    }
+    return result;
 }
 
 //==============================================================================
@@ -588,14 +670,16 @@ RemoteTools::Result RemoteTools::setTrack (const juce::var& args)
     if (args.hasProperty ("solo"))       t.setProperty (ids::solo, (bool) args["solo"], um);
     if (args.hasProperty ("record_arm"))
     {
-        if (track::isAux (t) && (bool) args["record_arm"])
-            return { false, {}, "Aux tracks cannot record." };
+        if (! track::isAudio (t) && (bool) args["record_arm"])
+            return { false, {}, track::isAux (t) ? "Aux tracks cannot record."
+                                                 : "Instrument tracks cannot record audio (MIDI recording is not available yet)." };
         t.setProperty (ids::recordArm, (bool) args["record_arm"], um);
     }
     if (args.hasProperty ("input"))
     {
-        if (track::isAux (t))
-            return { false, {}, "Aux tracks have no audio input; route or send other tracks to them instead." };
+        if (! track::isAudio (t))
+            return { false, {}, track::isAux (t) ? "Aux tracks have no audio input; route or send other tracks to them instead."
+                                                 : "Instrument tracks have no audio input; they play their MIDI clips." };
         t.setProperty (ids::inputChannel, juce::jmax (0, (int) args["input"]) - 1, um);
     }
 
@@ -605,8 +689,9 @@ RemoteTools::Result RemoteTools::setTrack (const juce::var& args)
 RemoteTools::Result RemoteTools::createTrack (const juce::var& args)
 {
     auto* session = app.getSession();
-    const bool aux = args["kind"].toString() == "aux";
-    const int channels = aux ? 2 : juce::jlimit (1, 2, args.hasProperty ("channels") ? (int) args["channels"] : 1);
+    const auto kindName = args["kind"].toString();
+    const bool aux = kindName == "aux", instrument = kindName == "instrument";
+    const int channels = aux || instrument ? 2 : juce::jlimit (1, 2, args.hasProperty ("channels") ? (int) args["channels"] : 1);
     const int count = juce::jlimit (1, 64, args.hasProperty ("count") ? (int) args["count"] : 1);
     const auto requested = args["name"].toString().trim();
 
@@ -615,8 +700,9 @@ RemoteTools::Result RemoteTools::createTrack (const juce::var& args)
     for (int i = 0; i < count; ++i)
     {
         juce::String name = requested.isNotEmpty() ? (count == 1 ? requested : requested + " " + juce::String (i + 1))
-                                                   : juce::String (aux ? "Aux " : "Audio ") + juce::String (session->getNumTracks() + 1);
-        auto t = session->addTrack (name, channels, um, aux ? Session::TrackKind::aux : Session::TrackKind::audio);
+                                                   : juce::String (aux ? "Aux " : instrument ? "Synth " : "Audio ") + juce::String (session->getNumTracks() + 1);
+        auto t = session->addTrack (name, channels, um, aux ? Session::TrackKind::aux
+                                                        : instrument ? Session::TrackKind::instrument : Session::TrackKind::audio);
         created.add (describeTrack (t, session->indexOfTrack (t) + 1));
     }
     return { true, makeObject ({ { "created", created } }), {} };
@@ -786,6 +872,8 @@ RemoteTools::Result RemoteTools::listClips (const juce::var& args)
             ++number;
             result.add (makeObject ({ { "track", track::name (t) },
                                       { "clip", number },
+                                      { "kind", clip::isMidi (c) ? "midi" : "audio" },
+                                      { "notes", clip::isMidi (c) ? juce::var (clip::notes (c).getNumChildren()) : juce::var() },
                                       { "name", clip::name (c) },
                                       { "start_seconds", samplesToSeconds (clip::start (c)) },
                                       { "end_seconds", samplesToSeconds (clip::end (c)) },
@@ -869,6 +957,9 @@ RemoteTools::Result RemoteTools::moveClip (const juce::var& args)
             return { false, {}, error };
         if (track::isAux (destination))
             return { false, {}, "Aux tracks cannot hold clips." };
+        if (track::isInstrument (destination) != clip::isMidi (c))
+            return { false, {}, clip::isMidi (c) ? "MIDI clips can only go on instrument tracks."
+                                                 : "Audio clips cannot go on instrument tracks." };
         if (destination != t)
         {
             track::clips (t).removeChild (c, um);
@@ -917,6 +1008,8 @@ RemoteTools::Result RemoteTools::importAudio (const juce::var& args)
         target = findTrack (args["track"], error);
         if (! target.isValid())
             return { false, {}, error };
+        if (! track::isAudio (target))
+            return { false, {}, "Audio can only be imported onto audio tracks (or leave out \"track\" to create one)." };
     }
 
     app.importAudioFiles ({ juce::File (path) }, secondsToSamples (args["position_seconds"]), target);
@@ -962,6 +1055,172 @@ RemoteTools::Result RemoteTools::setVolumeAutomation (const juce::var& args)
     for (const auto& p : automation::points (lane))
         written.add (makeObject ({ { "seconds", samplesToSeconds (p.time) }, { "db", dbOrNull (p.db) } }));
     return { true, makeObject ({ { "track", track::name (t) }, { "points", written } }), {} };
+}
+
+//==============================================================================
+// Instruments and MIDI
+
+namespace
+{
+constexpr double maxBeats = 100000.0; // ~7 hours at 240 BPM: far beyond any session
+
+int64_t beatsToTicks (double beats)
+{
+    return (int64_t) std::llround (juce::jlimit (0.0, maxBeats, beats) * (double) midi::ticksPerQuarter);
+}
+} // namespace
+
+juce::ValueTree RemoteTools::findInstrumentTrack (const juce::var& reference, juce::String& error) const
+{
+    auto t = findTrack (reference, error);
+    if (t.isValid() && ! track::isInstrument (t))
+    {
+        error = "\"" + track::name (t) + "\" is not an instrument track. Create one with create_track kind=instrument.";
+        return {};
+    }
+    return t;
+}
+
+RemoteTools::Result RemoteTools::setTempo (const juce::var& args)
+{
+    const double bpm = args["bpm"];
+    if (bpm < midi::TempoMap::minBpm || bpm > midi::TempoMap::maxBpm)
+        return { false, {}, "Tempo must be between 20 and 999 BPM." };
+    app.getSession()->getState().setProperty (ids::tempo, bpm, beginEdit ("Tempo"));
+    return { true, makeObject ({ { "tempo_bpm", app.getSession()->getTempo() } }), {} };
+}
+
+RemoteTools::Result RemoteTools::addMidiClip (const juce::var& args)
+{
+    juce::String error;
+    auto t = findInstrumentTrack (args["track"], error);
+    if (! t.isValid())
+        return { false, {}, error };
+
+    const double startBeat = args.hasProperty ("start_beat") ? (double) args["start_beat"] : 0.0;
+    const double lengthBeats = args.hasProperty ("length_beats") ? (double) args["length_beats"] : 16.0;
+    if (startBeat < 0.0 || startBeat > maxBeats)
+        return { false, {}, "start_beat must be 0 or more." };
+    if (lengthBeats <= 0.0 || lengthBeats > maxBeats)
+        return { false, {}, "length_beats must be more than 0." };
+
+    auto* session = app.getSession();
+    const auto tempo = midimodel::tempoMap (*session);
+    const double rate = session->getSampleRate();
+    const auto start = tempo.ticksToSamples (beatsToTicks (startBeat), rate);
+    const auto end = tempo.ticksToSamples (beatsToTicks (startBeat + lengthBeats), rate);
+    const auto name = args["name"].toString().trim();
+
+    auto c = session->addMidiClip (t, start, juce::jmax ((juce::int64) 1, end - start), name.isNotEmpty() ? name : juce::String ("MIDI"),
+                                   beginEdit ("MIDI Clip"));
+    return { true, makeObject ({ { "track", track::name (t) }, { "clip", track::clips (t).indexOf (c) + 1 },
+                                 { "name", clip::name (c) }, { "start_seconds", samplesToSeconds (clip::start (c)) },
+                                 { "length_beats", lengthBeats } }), {} };
+}
+
+RemoteTools::Result RemoteTools::addNotes (const juce::var& args)
+{
+    juce::String error;
+    auto t = findInstrumentTrack (args["track"], error);
+    if (! t.isValid())
+        return { false, {}, error };
+    auto c = findClip (t, args["clip"], error);
+    if (! c.isValid())
+        return { false, {}, error };
+    if (! clip::isMidi (c))
+        return { false, {}, "That clip is not a MIDI clip." };
+
+    const auto* list = args["notes"].getArray();
+    if (list == nullptr || list->size() > 10000)
+        return { false, {}, "\"notes\" must be an array of at most 10000 notes." };
+
+    // Positions are given from the clip start; notes are stored from the
+    // clip's content origin, which a trimmed clip has moved earlier.
+    auto* session = app.getSession();
+    const auto tempo = midimodel::tempoMap (*session);
+    const auto offsetTicks = tempo.samplesToTicks (clip::offset (c), session->getSampleRate());
+
+    std::vector<midi::Note> notes;
+    for (const auto& n : *list)
+    {
+        const double pitch = n["pitch"], start = n["start_beats"], length = n["length_beats"];
+        const double velocity = n.hasProperty ("velocity") ? (double) n["velocity"] : 0.8;
+        if (pitch < 0.0 || pitch > 127.0 || ! juce::exactlyEqual (pitch, std::floor (pitch)))
+            return { false, {}, "Each pitch must be a whole number 0-127 (60 = middle C)." };
+        if (start < 0.0 || start > maxBeats || length <= 0.0 || length > maxBeats)
+            return { false, {}, "Each note needs start_beats of 0 or more and length_beats of more than 0." };
+        if (velocity <= 0.0 || velocity > 1.0)
+            return { false, {}, "velocity must be more than 0 and at most 1." };
+        notes.push_back ({ (int) pitch, (float) velocity, offsetTicks + beatsToTicks (start), juce::jmax<int64_t> (1, beatsToTicks (length)) });
+    }
+
+    auto* um = beginEdit ("Add Notes");
+    const bool replace = args.hasProperty ("replace") && (bool) args["replace"];
+    if (replace)
+    {
+        midi::NoteSequence sequence;
+        for (const auto& n : notes)
+            sequence.add (n);
+        midimodel::writeNotes (c, sequence, um);
+    }
+    else
+    {
+        for (const auto& n : notes)
+            midimodel::addNote (c, n, um);
+    }
+    return { true, makeObject ({ { "clip", clip::name (c) }, { "added", (int) notes.size() },
+                                 { "total_notes", clip::notes (c).getNumChildren() } }), {} };
+}
+
+RemoteTools::Result RemoteTools::listNotes (const juce::var& args)
+{
+    juce::String error;
+    auto t = findInstrumentTrack (args["track"], error);
+    if (! t.isValid())
+        return { false, {}, error };
+    auto c = findClip (t, args["clip"], error);
+    if (! c.isValid())
+        return { false, {}, error };
+
+    auto* session = app.getSession();
+    const auto offsetTicks = midimodel::tempoMap (*session).samplesToTicks (clip::offset (c), session->getSampleRate());
+    juce::Array<juce::var> result;
+    const auto notes = midimodel::readNotes (c); // named: a temporary would die before the loop runs
+    for (const auto& n : notes.getNotes())
+        result.add (makeObject ({ { "pitch", n.pitch },
+                                  { "start_beats", (double) (n.start - offsetTicks) / (double) midi::ticksPerQuarter },
+                                  { "length_beats", (double) n.length / (double) midi::ticksPerQuarter },
+                                  { "velocity", std::round (n.velocity * 1000.0f) / 1000.0 } }));
+    return { true, makeObject ({ { "clip", clip::name (c) }, { "notes", result } }), {} };
+}
+
+RemoteTools::Result RemoteTools::setSynth (const juce::var& args)
+{
+    juce::String error;
+    auto t = findInstrumentTrack (args["track"], error);
+    if (! t.isValid())
+        return { false, {}, error };
+
+    auto synthNode = track::synth (t);
+    auto* um = beginEdit ("Synth");
+    auto setClamped = [&] (const char* argument, const juce::Identifier& property, double lo, double hi)
+    {
+        if (args.hasProperty (argument))
+            synthNode.setProperty (property, juce::jlimit (lo, hi, (double) args[argument]), um);
+    };
+    if (args.hasProperty ("waveform"))
+        synthNode.setProperty (ids::waveform, midimodel::waveformName (midimodel::waveformFromName (args["waveform"].toString())), um);
+    setClamped ("detune_cents", ids::detune, 0.0, 50.0);
+    setClamped ("attack", ids::attack, 0.0005, 10.0);
+    setClamped ("decay", ids::decay, 0.001, 10.0);
+    setClamped ("sustain", ids::sustain, 0.0, 1.0);
+    setClamped ("release", ids::release, 0.001, 20.0);
+    setClamped ("cutoff_hz", ids::cutoff, 20.0, 20000.0);
+    setClamped ("resonance", ids::resonance, 0.0, 1.0);
+    setClamped ("filter_env_octaves", ids::filterEnv, -8.0, 8.0);
+    setClamped ("gain_db", ids::gainDb, -60.0, 12.0);
+
+    return { true, describeTrack (t, app.getSession()->indexOfTrack (t) + 1), {} };
 }
 
 RemoteTools::Result RemoteTools::setMaster (const juce::var& args)

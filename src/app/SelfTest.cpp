@@ -3,6 +3,7 @@
 #include "CommandIds.h"
 #include "media/AudioImporter.h"
 #include "model/Automation.h"
+#include "model/MidiModel.h"
 #include "model/Routing.h"
 #include "model/SessionRepair.h"
 #include "media/TimeStretchEngine.h"
@@ -66,6 +67,7 @@ void SelfTest::start()
         testPluginHosting();
         testBusesAndSends();
         testGoldenRenders();
+        testInstruments();
         testStress();
         testRobustness(); // before the remote tests: their BOUNCE runs in the background
         testMcpTools();
@@ -914,6 +916,189 @@ void SelfTest::testGoldenRenders()
 }
 
 //==============================================================================
+// Instrument tracks: MIDI notes played by the built-in synth, measured.
+
+namespace
+{
+/** Delay (in samples) of a sinusoid at `hz` in x[from, from + count) relative
+    to a sine that started at sample `onset` with zero phase. Measured from the
+    phase of a correlation over the window (use whole cycles). */
+double sineDelay (const juce::AudioBuffer<float>& audio, int from, int count, double hz, double rate, int onset)
+{
+    const double w = juce::MathConstants<double>::twoPi * hz / rate;
+    double i = 0.0, q = 0.0;
+    for (int n = from; n < from + count; ++n)
+    {
+        i += audio.getSample (0, n) * std::sin (w * (n - onset));
+        q += audio.getSample (0, n) * std::cos (w * (n - onset));
+    }
+    return -std::atan2 (q, i) / w;
+}
+} // namespace
+
+void SelfTest::testInstruments()
+{
+    beginGroup ("Instrument tracks (MIDI + built-in synth)");
+    auto* session = app.getSession();
+    clearTracks();
+    setConsole (false);
+    session->getState().setProperty (ids::tempo, 120.0, nullptr); // a beat = 0.5 s = 24000 samples
+
+    // A measurement instrument: a pure sine at -6.02 dB, filter wide open, fast attack.
+    auto keys = session->addTrack ("Keys", 2, nullptr, Session::TrackKind::instrument);
+    auto synthNode = track::synth (keys);
+    synthNode.setProperty (ids::waveform, "sine", nullptr);
+    synthNode.setProperty (ids::detune, 0.0, nullptr);
+    synthNode.setProperty (ids::attack, 0.001, nullptr);
+    synthNode.setProperty (ids::sustain, 1.0, nullptr);
+    synthNode.setProperty (ids::release, 0.05, nullptr);
+    synthNode.setProperty (ids::cutoff, 20000.0, nullptr);
+    synthNode.setProperty (ids::filterEnv, 0.0, nullptr);
+    synthNode.setProperty (ids::resonance, 0.0, nullptr);
+    synthNode.setProperty (ids::gainDb, toneDb, nullptr);
+    expect ("an instrument track is a valid part of the session", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+
+    // One A4 (440 Hz) for two beats (1 s), starting where the clip starts.
+    auto clipNode = session->addMidiClip (keys, clipStart, 4 * 24000, "A4", nullptr);
+    midimodel::addNote (clipNode, { 69, 1.0f, 0, 2 * midi::ticksPerQuarter }, nullptr);
+    const auto end = clipStart + 2 * 48000 + 24000;
+    auto r = bounce ("instrument_a4", 0, end);
+    auto audio = readAudio (r.file);
+    const int noteStart = (int) clipStart, noteEnd = (int) clipStart + 48000;
+
+    if (audio.getNumSamples() >= (int) end)
+    {
+        const float* x = audio.getReadPointer (0);
+        expectNear ("MIDI note 69 plays at 440 Hz", dsp::estimateFrequency (x + noteStart + 4800, 38400, sampleRate), 440.0, 0.05, "Hz");
+        expectNear ("note level matches the synth's output setting (-6.02 dB)",
+                    db (dsp::toneAmplitude (x + noteStart + 4800, 36000, 440.0, sampleRate)), toneDb, 0.05, "dB");
+
+        // The synth's 16-sample filter delay is compensated: the note sits exactly on the timeline.
+        const double delay = sineDelay (audio, noteStart + 4800, 36000, 440.0, sampleRate, noteStart);
+        expect ("note starts exactly at its timeline position (synth latency compensated)", std::abs (delay) < 0.3,
+                "measured offset " + fmt (delay, 3) + " samples");
+
+        const auto before = dsp::measureLevels (x, noteStart - 40);
+        expect ("silence before the note", db (before.peak) < silentDb, "peak " + fmt (db (before.peak), 1) + " dB");
+        const auto after = dsp::measureLevels (x + noteEnd + 4800, 9600); // 100-300 ms after note-off, release 50 ms
+        expect ("the note stops at its end (released to silence)", db (after.peak) < -80.0, "peak " + fmt (db (after.peak), 1) + " dB");
+    }
+
+    // A chord: C major, three equal notes.
+    midi::NoteSequence chord;
+    for (const int p : { 60, 64, 67 })
+        chord.add ({ p, 1.0f, 0, 2 * midi::ticksPerQuarter });
+    midimodel::writeNotes (clipNode, chord, nullptr);
+    r = bounce ("instrument_chord", 0, end);
+    audio = readAudio (r.file);
+    if (audio.getNumSamples() >= (int) end)
+    {
+        const float* x = audio.getReadPointer (0) + noteStart + 4800;
+        juce::String levels;
+        double lowest = 1.0e9, highest = -1.0e9;
+        for (const int p : { 60, 64, 67 })
+        {
+            const double level = db (dsp::toneAmplitude (x, 38400, 440.0 * std::pow (2.0, (p - 69) / 12.0), sampleRate));
+            lowest = juce::jmin (lowest, level);
+            highest = juce::jmax (highest, level);
+            levels << fmt (level, 2) << " ";
+        }
+        expect ("a three-note chord plays all three notes at equal level", highest - lowest < 0.2 && lowest > toneDb - 0.3,
+                "C, E, G at " + levels + "dB");
+    }
+
+    // Alignment with audio: an audio track playing the same 440 Hz tone from the
+    // same sample must add up in phase (+6.02 dB). 16 samples off would cost 0.9 dB.
+    midimodel::writeNotes (clipNode, {}, nullptr);
+    midimodel::addNote (clipNode, { 69, 1.0f, 0, 2 * midi::ticksPerQuarter }, nullptr);
+    const auto tone440 = writeTone ("tone440_stereo", sampleRate, 1.0, 440.0, toneDb, 2);
+    addToneTrack ("Audio 440", 2, tone440, clipStart);
+    r = bounce ("instrument_with_audio", 0, end);
+    audio = readAudio (r.file);
+    if (audio.getNumSamples() >= (int) end)
+        expectNear ("instrument and audio stay sample-aligned (in-phase sum +6.02 dB)",
+                    db (dsp::toneAmplitude (audio.getReadPointer (0) + noteStart + 4800, 36000, 440.0, sampleRate)),
+                    toneDb + 6.0206, 0.02, "dB");
+
+    // Tempo: notes are placed in beats, so doubling the tempo halves their length.
+    clearTracks();
+    keys = session->addTrack ("Keys", 2, nullptr, Session::TrackKind::instrument);
+    track::synth (keys).copyPropertiesFrom (synthNode, nullptr);
+    clipNode = session->addMidiClip (keys, clipStart, 4 * 24000, "beat", nullptr);
+    midimodel::addNote (clipNode, { 69, 1.0f, midi::ticksPerQuarter, midi::ticksPerQuarter }, nullptr); // beat 2, one beat long
+    session->getState().setProperty (ids::tempo, 240.0, nullptr);
+    r = bounce ("instrument_tempo240", 0, end);
+    audio = readAudio (r.file);
+    if (audio.getNumSamples() >= (int) end)
+    {
+        // At 240 BPM a beat is 12000 samples: the note sounds from clipStart + 12000 to clipStart + 24000.
+        const float* x = audio.getReadPointer (0);
+        const auto inside = dsp::measureLevels (x + clipStart + 12000 + 1200, 9600);
+        const auto earlier = dsp::measureLevels (x + clipStart, 11900);
+        const auto later = dsp::measureLevels (x + clipStart + 24000 + 4800, 9600);
+        expect ("at 240 BPM the note sits on beat 2 and lasts one beat (notes follow the tempo)",
+                db (inside.peak) > toneDb - 0.5 && db (earlier.peak) < silentDb && db (later.peak) < -80.0,
+                "before " + fmt (db (earlier.peak), 1) + " dB, during " + fmt (db (inside.peak), 1) + " dB, after "
+                    + fmt (db (later.peak), 1) + " dB");
+    }
+    session->getState().setProperty (ids::tempo, 120.0, nullptr);
+
+    // An AI writes a melody through the tools: C, D, E on beats 1-3.
+    clearTracks();
+    auto& tools = app.getRemoteTools();
+    auto call = [&tools] (const char* json)
+    {
+        int status = 0;
+        const auto body = juce::String (R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":)") + json + "}";
+        return juce::JSON::parse (juce::String (tools.handleMcpRequest (body.toStdString(), status)));
+    };
+    auto ok = [] (const juce::var& reply) { return reply["result"].isObject() && ! (bool) reply["result"]["isError"]; };
+    const auto created = call (R"({"name":"create_track","arguments":{"kind":"instrument","name":"Melody"}})");
+    const auto shaped = call (R"({"name":"set_synth","arguments":{"track":"Melody","waveform":"sine","detune_cents":0,"attack":0.002,"sustain":1,"release":0.03,"cutoff_hz":20000,"filter_env_octaves":0,"gain_db":-6}})");
+    const auto clipReply = call (R"({"name":"add_midi_clip","arguments":{"track":"Melody","start_beat":1,"length_beats":4}})");
+    const auto notesReply = call (R"({"name":"add_notes","arguments":{"track":"Melody","clip":1,"notes":[{"pitch":60,"start_beats":0,"length_beats":1},{"pitch":62,"start_beats":1,"length_beats":1},{"pitch":64,"start_beats":2,"length_beats":1}]}})");
+    const auto listed = call (R"({"name":"list_notes","arguments":{"track":"Melody","clip":1}})");
+    expect ("AI tools: create an instrument, shape its synth, add a clip and three notes",
+            ok (created) && ok (shaped) && ok (clipReply) && ok (notesReply) && ok (listed),
+            juce::JSON::toString (notesReply, true).substring (0, 200));
+    const auto wrongKind = call (R"({"name":"add_notes","arguments":{"track":"Melody","clip":1,"notes":[{"pitch":200,"start_beats":0,"length_beats":1}]}})");
+    expect ("AI tools refuse an impossible note (pitch 200) with an explanation",
+            (bool) wrongKind["result"]["isError"], juce::JSON::toString (wrongKind, true).substring (0, 160));
+
+    r = bounce ("instrument_ai_melody", 0, 24000 * 5);
+    audio = readAudio (r.file);
+    if (audio.getNumSamples() >= 24000 * 5)
+    {
+        // The clip starts at beat 1 (24000); each note fills one beat.
+        juce::String heard;
+        bool allRight = true;
+        const double expected[] = { 261.6256, 293.6648, 329.6276 };
+        for (int k = 0; k < 3; ++k)
+        {
+            const double f = dsp::estimateFrequency (audio.getReadPointer (0, 24000 * (k + 1) + 2400), 19200, sampleRate);
+            heard << fmt (f, 2) << " ";
+            allRight = allRight && std::abs (f - expected[k]) < 0.1;
+        }
+        expect ("the AI's melody plays C4, D4, E4 in order, in tune", allRight, "heard " + heard + "Hz");
+    }
+
+    expect ("session with instruments stays valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+
+    // Reference render: the default instrument sound (detuned saws, filter
+    // envelope, resonance) playing two chords and a bass note. Any change to
+    // the synth's sound fails this null test.
+    clearTracks();
+    auto pad = session->addTrack ("Pad", 2, nullptr, Session::TrackKind::instrument);
+    auto padClip = session->addMidiClip (pad, 0, 4 * 24000, "chords", nullptr);
+    for (const auto& n : std::initializer_list<midi::Note> { { 57, 0.8f, 0, 1920 }, { 60, 0.7f, 0, 1920 }, { 64, 0.7f, 0, 1920 },
+                                                             { 53, 0.8f, 1920, 1920 }, { 57, 0.7f, 1920, 1920 }, { 60, 0.7f, 1920, 1920 },
+                                                             { 33, 1.0f, 0, 3600 } })
+        midimodel::addNote (padClip, n, nullptr);
+    compareWithReference ("golden_mix_instrument", bounce ("golden_mix_instrument", 0, 4 * 24000 + 24000));
+    clearTracks();
+}
+
+//==============================================================================
 // Stress: a large session must still sum exactly and render faster than real time.
 
 void SelfTest::testStress()
@@ -973,7 +1158,8 @@ namespace
 juce::var junkValue (juce::Random& rng, const juce::Array<int>& someIds)
 {
     static const char* const pool[] = { "-1", "0", "1", "2", "5", "0.5", "nan", "inf", "-inf", "1e308", "-1e308", "1e999",
-                                        "abc", "", ".", "..", "999999999999", "-999999999999", "aux", "audio", "read" };
+                                        "abc", "", ".", "..", "999999999999", "-999999999999", "aux", "audio", "read",
+                                        "instrument", "midi", "sine", "saw", "128", "60.5" };
     if (rng.nextInt (5) == 0 && ! someIds.isEmpty())
         return someIds[rng.nextInt (someIds.size())];
     return juce::String (pool[rng.nextInt ((int) std::size (pool))]);
@@ -987,7 +1173,9 @@ const juce::Identifier* randomSchemaProperty (juce::Random& rng)
         &ids::colour, &ids::volumeDb, &ids::pan, &ids::mute, &ids::solo, &ids::recordArm, &ids::inputChannel,
         &ids::automationMode, &ids::kind, &ids::outputBus, &ids::target, &ids::levelDb, &ids::preFader, &ids::file,
         &ids::start, &ids::length, &ids::offset, &ids::sourceLength, &ids::gainDb, &ids::fadeIn, &ids::fadeOut,
-        &ids::slot, &ids::description, &ids::bypass, &ids::parameter, &ids::time, &ids::value
+        &ids::slot, &ids::description, &ids::bypass, &ids::parameter, &ids::time, &ids::value,
+        &ids::tempo, &ids::pitch, &ids::velocity, &ids::waveform, &ids::detune, &ids::attack, &ids::decay,
+        &ids::sustain, &ids::release, &ids::cutoff, &ids::resonance, &ids::filterEnv
     };
     return properties[rng.nextInt ((int) std::size (properties))];
 }
@@ -1122,7 +1310,15 @@ void SelfTest::testDamagedSessions (const juce::File& originalSession)
            "<AUTOMATION><LANE parameter=\"volume\"><POINT time=\"-5\" value=\"500\"/><POINT time=\"10\"/></LANE></AUTOMATION></TRACK>"
            "<TRACK id=\"6\" name=\"Bus X\" kind=\"aux\" channels=\"1\" outputBus=\"7\"><SENDS><SEND slot=\"0\" target=\"5\"/></SENDS></TRACK>"
            "<TRACK id=\"7\" name=\"Bus Y\" kind=\"aux\" outputBus=\"6\"/>"
-           "<TRACK id=\"7\" name=\"Dup\" kind=\"weird\"/>"
+           "<TRACK id=\"7\" name=\"Dup\" kind=\"weird\"><CLIPS>"
+           "<CLIP id=\"23\" kind=\"midi\" name=\"midi on audio\" start=\"0\" length=\"100\"/></CLIPS></TRACK>"
+           "<TRACK id=\"20\" name=\"Keys\" kind=\"instrument\" channels=\"1\" inputChannel=\"3\" recordArm=\"1\"><CLIPS>"
+           "<CLIP id=\"21\" kind=\"midi\" name=\"riff\" start=\"0\" length=\"48000\">"
+           "<NOTES><NOTE pitch=\"300\" velocity=\"9\" start=\"-5\" length=\"0\"/><NOTE pitch=\"64.5\" start=\"0\" length=\"960\"/>"
+           "<NOTE pitch=\"60\" velocity=\"nan\" start=\"480\" length=\"960\"/><BOGUS/></NOTES><NOTES/><JUNK/></CLIP>"
+           "<CLIP id=\"22\" name=\"audio on instrument\" file=\"" << tonePath << "\" start=\"0\" length=\"100\" sourceLength=\"96000\"/>"
+           "<CLIP id=\"24\" kind=\"strange\" name=\"odd kind\" start=\"0\" length=\"100\"/>"
+           "</CLIPS><SYNTH waveform=\"noise\" cutoff=\"nan\" release=\"-4\" gainDb=\"1e999\"/><SYNTH/></TRACK>"
            "</TRACKS></SESSION>";
     const auto hostileFolder = folder.getChildFile ("Hostile");
     hostileFolder.createDirectory();
@@ -1391,9 +1587,12 @@ void SelfTest::testMcpTools()
 
     const auto list = rpc ("tools/list", juce::var (new juce::DynamicObject()));
     const auto* toolArray = list["result"]["tools"].getArray();
-    expect ("tools/list describes every tool with a JSON schema",
-            toolArray != nullptr && toolArray->size() == 25 && (*toolArray)[0]["inputSchema"].isObject(),
-            juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
+    bool allDescribed = toolArray != nullptr;
+    if (toolArray != nullptr)
+        for (const auto& tool : *toolArray)
+            allDescribed = allDescribed && tool["inputSchema"].isObject() && tool["description"].toString().length() > 20;
+    expect ("tools/list describes all 30 tools, each with a description and a JSON schema",
+            allDescribed && toolArray->size() == 30, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
 
     auto r = toolCall ("get_status", "{}");
     expect ("get_status returns the session and tracks", ! failed (r) && callText (r).contains ("\"Vocal\""), callText (r).substring (0, 160));

@@ -5,6 +5,7 @@
 
 #include <dsp/AutomationCurve.h>
 #include <dsp/DelayLine.h>
+#include <synth/PolySynth.h>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -79,6 +80,28 @@ struct PathDelay
     int samples = 0;
 };
 
+/** One note-on or note-off on an instrument track, in timeline samples. */
+struct MidiEvent
+{
+    juce::int64 time = 0;
+    int pitch = 60;
+    float velocity = 0.0f;
+    bool on = false;
+};
+
+/** An instrument track's synth and its playback bookkeeping. Kept by
+    EngineBridge across graph rebuilds (so editing during playback never cuts
+    off sounding notes) and touched only by the audio thread once a graph
+    referencing it is published. PolySynth::prepare/setParams allocate
+    nothing, so the audio thread can apply them itself. */
+struct InstrumentState
+{
+    synth::PolySynth synth;
+    double preparedRate = 0.0;
+    uint64_t appliedParamsVersion = 0;
+    juce::int64 nextPosition = -1; ///< where playback continues if nothing jumps; -1 = not rolling
+};
+
 struct SendRender
 {
     std::shared_ptr<SendRealtimeState> state;
@@ -110,6 +133,15 @@ struct TrackRender
         buses). If one of them is soloed, the aux stays audible ("implicit solo"). */
     std::vector<std::shared_ptr<TrackRealtimeState>> upstream;
     std::vector<ClipSegment> segments;             ///< sorted by start
+
+    // Instrument tracks: the synth, its settings in this graph, and every note
+    // event sorted by time (note-offs before note-ons at the same sample, so a
+    // repeated note retriggers cleanly).
+    std::shared_ptr<InstrumentState> instrument;
+    synth::PolySynth::Params synthParams;
+    uint64_t synthParamsVersion = 0;
+    std::vector<MidiEvent> events;
+
     std::vector<std::shared_ptr<InsertSlot>> inserts;
     std::shared_ptr<RecordTake> take;
     dsp::AutomationCurve volumeAutomation;         ///< values in dB, interpolated linearly in dB

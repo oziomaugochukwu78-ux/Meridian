@@ -31,17 +31,17 @@ NewTracksComponent::NewTracksComponent (AppController& a) : app (a)
 
     kind.addItem ("Audio Track", 1);
     kind.addItem ("Aux Input (bus)", 2);
-    kind.addItem ("Instrument Track (planned)", 3);
-    kind.setItemEnabled (3, false);
+    kind.addItem ("Instrument Track", 3);
     kind.setSelectedId (1, juce::dontSendNotification);
     kind.onChange = [this]
     {
-        // Aux inputs are stereo buses.
-        const bool aux = kind.getSelectedId() == 2;
-        format.setSelectedId (aux ? 2 : format.getSelectedId(), juce::dontSendNotification);
-        format.setEnabled (! aux);
-        if (baseName.getText() == "Audio" || baseName.getText() == "Aux")
-            baseName.setText (aux ? "Aux" : "Audio");
+        // Aux inputs and instruments are always stereo.
+        const int k = kind.getSelectedId();
+        const bool stereoOnly = k == 2 || k == 3;
+        format.setSelectedId (stereoOnly ? 2 : format.getSelectedId(), juce::dontSendNotification);
+        format.setEnabled (! stereoOnly);
+        if (baseName.getText() == "Audio" || baseName.getText() == "Aux" || baseName.getText() == "Synth")
+            baseName.setText (k == 2 ? "Aux" : k == 3 ? "Synth" : "Audio");
     };
 
     baseName.setText ("Audio");
@@ -65,7 +65,8 @@ void NewTracksComponent::create()
 {
     const int n = juce::jlimit (1, 128, count.getText().getIntValue());
     app.addTracks (n, format.getSelectedId() == 2 ? 2 : 1, baseName.getText().trim(),
-                   kind.getSelectedId() == 2 ? Session::TrackKind::aux : Session::TrackKind::audio);
+                   kind.getSelectedId() == 2 ? Session::TrackKind::aux
+                   : kind.getSelectedId() == 3 ? Session::TrackKind::instrument : Session::TrackKind::audio);
     dialogs::close (*this);
 }
 

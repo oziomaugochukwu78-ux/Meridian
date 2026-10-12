@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <set>
+#include <tuple>
 
 namespace meridian
 {
@@ -95,6 +96,7 @@ private:
         clampNumber (s, ids::consoleCharacter, 0.0, 1.0, 0.35, "session");
         if (s.hasProperty (ids::consoleCurve) && (int) s[ids::consoleCurve] != 0 && (int) s[ids::consoleCurve] != 1)
             set (s, ids::consoleCurve, 0, "session", "console curve");
+        clampNumber (s, ids::tempo, 20.0, 999.0, 120.0, "session");
     }
 
     //==========================================================================
@@ -126,21 +128,25 @@ private:
         const auto where = describe (t);
 
         const auto kind = t.getProperty (ids::kind, "audio").toString();
-        if (kind != "audio" && kind != "aux")
+        if (kind != "audio" && kind != "aux" && kind != "instrument")
             set (t, ids::kind, "audio", where, "kind");
-        const bool aux = track::isAux (t);
+        const bool aux = track::isAux (t), instrument = track::isInstrument (t);
 
         const int channels = t.getProperty (ids::channels, 1);
-        const int wantedChannels = aux ? 2 : juce::jlimit (1, 2, channels);
+        const int wantedChannels = aux || instrument ? 2 : juce::jlimit (1, 2, channels);
         if (channels != wantedChannels)
             set (t, ids::channels, wantedChannels, where, "channels");
 
         clampNumber (t, ids::volumeDb, dsp::FaderTaper::minDb, dsp::FaderTaper::maxDb, 0.0, where);
         clampNumber (t, ids::pan, -1.0, 1.0, 0.0, where);
-        if (aux && track::inputChannel (t) != -1)
-            set (t, ids::inputChannel, -1, where, "input (aux tracks have none)");
-        else if (! aux && (track::inputChannel (t) < -1 || track::inputChannel (t) > 255))
+        if ((aux || instrument) && track::inputChannel (t) != -1)
+            set (t, ids::inputChannel, -1, where, "input (aux and instrument tracks have no audio input)");
+        else if (! aux && ! instrument && (track::inputChannel (t) < -1 || track::inputChannel (t) > 255))
             set (t, ids::inputChannel, 0, where, "input channel");
+        if ((aux || instrument) && track::recordArm (t))
+            set (t, ids::recordArm, false, where, "record-arm (this kind of track cannot record audio)");
+
+        repairSynth (t, where, instrument);
 
         for (const auto* type : { &ids::CLIPS, &ids::INSERTS, &ids::SENDS, &ids::AUTOMATION })
         {
@@ -171,17 +177,118 @@ private:
         repairAutomation (track::automation (t), where);
     }
 
+    /** Instrument tracks: exactly one SYNTH with valid settings. Other tracks: none. */
+    void repairSynth (juce::ValueTree t, const juce::String& where, bool instrument)
+    {
+        juce::ValueTree first;
+        for (int i = 0; i < t.getNumChildren(); ++i)
+        {
+            if (! t.getChild (i).hasType (ids::SYNTH))
+                continue;
+            if (instrument && ! first.isValid())
+            {
+                first = t.getChild (i);
+                continue;
+            }
+            note (where, instrument ? "removed a duplicate <SYNTH>" : "removed a <SYNTH> from a non-instrument track");
+            t.removeChild (i--, nullptr);
+        }
+        if (! instrument)
+            return;
+
+        if (! first.isValid())
+        {
+            first = juce::ValueTree (ids::SYNTH);
+            t.appendChild (first, nullptr);
+            note (where, "added the missing instrument settings (<SYNTH>)");
+        }
+        const auto waveform = first.getProperty (ids::waveform, "saw").toString();
+        if (waveform != "saw" && waveform != "square" && waveform != "sine")
+            set (first, ids::waveform, "saw", where + " synth", "waveform");
+        const auto synthWhere = where + " synth";
+        clampNumber (first, ids::detune, 0.0, 50.0, 7.0, synthWhere);
+        clampNumber (first, ids::attack, 0.0005, 10.0, 0.005, synthWhere);
+        clampNumber (first, ids::decay, 0.001, 10.0, 0.25, synthWhere);
+        clampNumber (first, ids::sustain, 0.0, 1.0, 0.7, synthWhere);
+        clampNumber (first, ids::release, 0.001, 20.0, 0.3, synthWhere);
+        clampNumber (first, ids::cutoff, 20.0, 20000.0, 2500.0, synthWhere);
+        clampNumber (first, ids::resonance, 0.0, 1.0, 0.2, synthWhere);
+        clampNumber (first, ids::filterEnv, -8.0, 8.0, 2.0, synthWhere);
+        clampNumber (first, ids::gainDb, -60.0, 12.0, -12.0, synthWhere);
+    }
+
+    void repairNotes (juce::ValueTree c, const juce::String& where)
+    {
+        // Exactly one NOTES list, holding only valid NOTEs.
+        juce::ValueTree list;
+        for (int i = 0; i < c.getNumChildren(); ++i)
+        {
+            if (! c.getChild (i).hasType (ids::NOTES))
+            {
+                note (where, "removed an unknown <" + c.getChild (i).getType().toString() + "> element");
+                c.removeChild (i--, nullptr);
+            }
+            else if (! list.isValid())
+            {
+                list = c.getChild (i);
+            }
+            else
+            {
+                note (where, "removed a duplicate <NOTES> list");
+                c.removeChild (i--, nullptr);
+            }
+        }
+        if (! list.isValid())
+        {
+            note (where, "added the missing <NOTES> list");
+            c.appendChild (juce::ValueTree (ids::NOTES), nullptr);
+            return;
+        }
+
+        removeChildrenNotOfType (list, ids::NOTE, where);
+        for (auto n : list)
+        {
+            const auto noteWhere = where + " note";
+            clampNumber (n, ids::pitch, 0.0, 127.0, 60.0, noteWhere);
+            if (! n.hasProperty (ids::pitch)) set (n, ids::pitch, 60, noteWhere, "pitch");
+            if (! juce::exactlyEqual ((double) n[ids::pitch], std::floor ((double) n[ids::pitch])))
+                set (n, ids::pitch, (int) n[ids::pitch], noteWhere, "pitch (whole numbers only)");
+            clampNumber (n, ids::velocity, 1.0 / 127.0, 1.0, 0.8, noteWhere);
+            if ((juce::int64) n[ids::start] < 0 || ! n.hasProperty (ids::start)) set (n, ids::start, 0, noteWhere, "start");
+            if ((juce::int64) n[ids::length] < 1) set (n, ids::length, 1, noteWhere, "length");
+        }
+    }
+
     void repairClips (juce::ValueTree t, const juce::String& trackName)
     {
         auto clips = track::clips (t);
         removeChildrenNotOfType (clips, ids::CLIP, trackName);
+        const bool instrument = track::isInstrument (t);
 
         for (int i = clips.getNumChildren(); --i >= 0;)
         {
             auto c = clips.getChild (i);
             const auto where = trackName + ", " + describe (c);
 
-            if (c[ids::file].toString().isEmpty())
+            const auto clipKind = c.getProperty (ids::kind, "audio").toString();
+            if (clipKind != "audio" && clipKind != "midi")
+            {
+                note (where, "unknown clip kind \"" + clipKind + "\"; treated as audio");
+                c.removeProperty (ids::kind, nullptr);
+            }
+
+            // MIDI clips belong on instrument tracks, audio clips everywhere else.
+            if (clip::isMidi (c) != instrument)
+            {
+                note (where, clip::isMidi (c) ? "removed: a MIDI clip on a track that is not an instrument track"
+                                               : "removed: an audio clip on an instrument track");
+                clips.removeChild (i, nullptr);
+                continue;
+            }
+
+            if (clip::isMidi (c))
+                repairNotes (c, where);
+            else if (c[ids::file].toString().isEmpty())
             {
                 note (where, "removed: no audio file");
                 clips.removeChild (i, nullptr);
@@ -336,6 +443,8 @@ juce::String findSessionProblem (const Session& session)
         return "bit depth " + juce::String (bits);
     if (s.hasProperty (ids::masterVolumeDb) && ! finiteIn (s[ids::masterVolumeDb], dsp::FaderTaper::minDb, dsp::FaderTaper::maxDb))
         return "master volume " + s[ids::masterVolumeDb].toString();
+    if (s.hasProperty (ids::tempo) && ! finiteIn (s[ids::tempo], 20.0, 999.0))
+        return "tempo " + s[ids::tempo].toString();
 
     std::set<int> seenIds;
     int maxId = 0;
@@ -357,11 +466,36 @@ juce::String findSessionProblem (const Session& session)
 
         const auto name = "track \"" + track::name (t) + "\"";
         const auto kind = t.getProperty (ids::kind, "audio").toString();
-        if (kind != "audio" && kind != "aux")
+        if (kind != "audio" && kind != "aux" && kind != "instrument")
             return name + " kind " + kind;
+        const bool instrument = track::isInstrument (t);
         const int channels = t.getProperty (ids::channels, 1);
-        if (track::isAux (t) ? channels != 2 : (channels < 1 || channels > 2))
+        if (track::isAux (t) || instrument ? channels != 2 : (channels < 1 || channels > 2))
             return name + " channels " + juce::String (channels);
+        if ((track::isAux (t) || instrument) && track::inputChannel (t) != -1)
+            return name + " has an audio input but cannot record audio";
+        if ((track::isAux (t) || instrument) && track::recordArm (t))
+            return name + " is record-armed but cannot record audio";
+
+        int synths = 0;
+        for (const auto& child : t)
+            synths += child.hasType (ids::SYNTH) ? 1 : 0;
+        if (synths != (instrument ? 1 : 0))
+            return name + " has " + juce::String (synths) + " <SYNTH> nodes";
+        if (instrument)
+        {
+            const auto sy = track::synth (t);
+            const auto wf = sy.getProperty (ids::waveform, "saw").toString();
+            if (wf != "saw" && wf != "square" && wf != "sine")
+                return name + " synth waveform " + wf;
+            for (const auto& [id, lo, hi] : { std::tuple { &ids::detune, 0.0, 50.0 }, { &ids::attack, 0.0005, 10.0 },
+                                              { &ids::decay, 0.001, 10.0 }, { &ids::sustain, 0.0, 1.0 },
+                                              { &ids::release, 0.001, 20.0 }, { &ids::cutoff, 20.0, 20000.0 },
+                                              { &ids::resonance, 0.0, 1.0 }, { &ids::filterEnv, -8.0, 8.0 },
+                                              { &ids::gainDb, -60.0, 12.0 } })
+                if (sy.hasProperty (*id) && ! finiteIn (sy[*id], lo, hi))
+                    return name + " synth " + id->toString() + " " + sy[*id].toString();
+        }
         if (t.hasProperty (ids::volumeDb) && ! finiteIn (t[ids::volumeDb], dsp::FaderTaper::minDb, dsp::FaderTaper::maxDb))
             return name + " volume " + t[ids::volumeDb].toString();
         if (t.hasProperty (ids::pan) && ! finiteIn (t[ids::pan], -1.0, 1.0))
@@ -383,7 +517,34 @@ juce::String findSessionProblem (const Session& session)
             if (auto problem = claimId (c); problem.isNotEmpty())
                 return problem;
             const auto clipName = name + " clip \"" + clip::name (c) + "\"";
-            if (c[ids::file].toString().isEmpty())     return clipName + " has no file";
+            const auto clipKind = c.getProperty (ids::kind, "audio").toString();
+            if (clipKind != "audio" && clipKind != "midi")  return clipName + " kind " + clipKind;
+            if (clip::isMidi (c) != instrument)             return clipName + " is the wrong kind of clip for its track";
+            if (clip::isMidi (c))
+            {
+                int lists = 0;
+                for (const auto& child : c)
+                {
+                    if (! child.hasType (ids::NOTES))
+                        return clipName + " has an unknown <" + child.getType().toString() + "> element";
+                    ++lists;
+                }
+                if (lists != 1)
+                    return clipName + " has " + juce::String (lists) + " <NOTES> lists";
+                for (const auto& n : clip::notes (c))
+                {
+                    if (! n.hasType (ids::NOTE))
+                        return clipName + " has a non-note element";
+                    if (! finiteIn (n[ids::pitch], 0.0, 127.0) || ! juce::exactlyEqual ((double) n[ids::pitch], std::floor ((double) n[ids::pitch]))
+                        || (n.hasProperty (ids::velocity) && ! finiteIn (n[ids::velocity], 1.0 / 127.0, 1.0))
+                        || (juce::int64) n[ids::start] < 0 || (juce::int64) n[ids::length] < 1)
+                        return clipName + " has an invalid note";
+                }
+            }
+            else if (c[ids::file].toString().isEmpty())
+            {
+                return clipName + " has no file";
+            }
             if (clip::start (c) < 0)                   return clipName + " starts before zero";
             if (clip::offset (c) < 0)                  return clipName + " has a negative offset";
             if (clip::length (c) <= 0)                 return clipName + " has no length";

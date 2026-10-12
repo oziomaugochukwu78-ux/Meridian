@@ -1,6 +1,7 @@
 #include "TrackLane.h"
 
 #include "model/Automation.h"
+#include "model/MidiModel.h"
 #include "ui/Theme.h"
 
 #include <dsp/FaderTaper.h>
@@ -118,7 +119,7 @@ void TrackLane::paint (juce::Graphics& g)
     g.fillAll (theme::well);
 
     // Bar lines, with beat lines when zoomed in far enough.
-    const double samplesPerBeat = timeformat::samplesPerBeat (editState.sampleRate);
+    const double samplesPerBeat = timeformat::samplesPerBeat (editState.sampleRate, editState.tempo);
     const double samplesPerBar = samplesPerBeat * timeformat::beatsPerBar;
     const bool drawBeats = samplesPerBeat / editState.samplesPerPixel >= 12.0;
     const double step = drawBeats ? samplesPerBeat : samplesPerBar;
@@ -140,6 +141,13 @@ void TrackLane::paint (juce::Graphics& g)
         g.setColour (theme::textDim.withAlpha (0.5f));
         g.setFont (theme::font (12.0f));
         g.drawText ("Aux Input: plays what is sent or routed to it (see the Mix window)",
+                    getLocalBounds().reduced (12, 0), juce::Justification::centredLeft);
+    }
+    else if (track::isInstrument (trackNode) && track::clips (trackNode).getNumChildren() == 0)
+    {
+        g.setColour (theme::textDim.withAlpha (0.5f));
+        g.setFont (theme::font (12.0f));
+        g.drawText ("Instrument: double-click to create a MIDI clip",
                     getLocalBounds().reduced (12, 0), juce::Justification::centredLeft);
     }
 
@@ -345,6 +353,26 @@ void TrackLane::mouseUp (const juce::MouseEvent&)
     // A click without a drag places the playback cursor (the insertion point).
     if (! draggingSelection)
         app.locate (selectionAnchor);
+}
+
+void TrackLane::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    auto* session = app.getSession();
+    if (session == nullptr || ! track::isInstrument (trackNode) || editState.tool == EditTool::pencil)
+        return;
+
+    // A four-bar MIDI clip, starting at the beginning of the bar that was clicked.
+    const auto tempo = midimodel::tempoMap (*session);
+    const double rate = session->getSampleRate();
+    constexpr int64_t barTicks = midi::ticksPerQuarter * timeformat::beatsPerBar;
+    const auto tick = tempo.samplesToTicks (std::max<juce::int64> (0, editState.xToSample (e.position.x)), rate);
+    const auto startTick = (tick / barTicks) * barTicks;
+    const auto start = tempo.ticksToSamples (startTick, rate);
+    const auto end = tempo.ticksToSamples (startTick + 4 * barTicks, rate);
+
+    auto& um = session->getUndoManager();
+    um.beginNewTransaction ("New MIDI Clip");
+    editState.selectClip (session->addMidiClip (trackNode, start, end - start, "MIDI", &um));
 }
 
 } // namespace meridian

@@ -130,6 +130,7 @@ private:
                        int offset, int numSamples) noexcept;
     void renderTrack (TrackRender&, const BlockContext&) noexcept;
     void renderSegments (TrackRender&, const BlockContext&) noexcept;
+    void renderInstrument (TrackRender&, const BlockContext&) noexcept;
     void writeTake (RecordTake&, const BlockContext&) noexcept;
     void mixTrackIntoBus (TrackRender&, const BlockContext&) noexcept;
     void deleteAllGraphs();

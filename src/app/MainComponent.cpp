@@ -325,7 +325,8 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                                info.addDefaultKeypress (K::deleteKey, 0); info.addDefaultKeypress (K::backspaceKey, 0);
                                info.setActive (hasSession); break;
         case elasticAudio:     info.setInfo ("Elastic Audio (Time / Pitch)...", "Time-stretch or pitch-shift the selected clip", "Edit", 0);
-                               info.addDefaultKeypress ('t', cmd | shift); info.setActive (edit.selectedClip.isValid()); break;
+                               info.addDefaultKeypress ('t', cmd | shift);
+                               info.setActive (edit.selectedClip.isValid() && ! clip::isMidi (edit.selectedClip)); break;
         case zoomIn:           info.setInfo ("Zoom In", "Zoom in horizontally", "Edit", 0);
                                info.addDefaultKeypress (']', cmd); break;
         case zoomOut:          info.setInfo ("Zoom Out", "Zoom out horizontally", "Edit", 0);

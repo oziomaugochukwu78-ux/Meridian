@@ -121,6 +121,7 @@ private:
                         std::vector<std::shared_ptr<ClipStream>>& usedStreams,
                         std::map<juce::String, std::shared_ptr<ClipStream>>& keep);
     std::shared_ptr<ClipStream> getOrCreateStream (const juce::String& key, const juce::File&, bool shared);
+    void buildMidiEvents (const juce::ValueTree& track, TrackRender&) const;
 
     std::shared_ptr<TrackRealtimeState> ensureTrackState (const juce::ValueTree& track);
     void syncTrackState (const juce::ValueTree& track);
@@ -141,6 +142,8 @@ private:
     std::map<std::pair<int, int>, std::shared_ptr<SendRealtimeState>> sendStates; // (trackId, slot)
     std::map<std::pair<int, int>, std::shared_ptr<InsertSlot>> insertSlots;  // (trackId, slot)
     std::map<juce::String, std::shared_ptr<ClipStream>> streams;
+    std::map<int, std::shared_ptr<InstrumentState>> instruments; // live synths, by track id
+    uint64_t graphVersion = 0;                                   // stamps synth settings per graph
     juce::StringArray reportedMissingFiles;
 
     std::map<int, std::shared_ptr<RecordTake>> activeTakes;

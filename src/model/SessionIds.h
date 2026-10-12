@@ -21,13 +21,26 @@
           SENDS
             SEND  slot target levelDb pan preFader mute
 
-    kind is "audio" (plays clips, records) or "aux" (an Aux Input: a stereo bus
-    fed by sends and by tracks whose outputBus names it). outputBus is the id
+    kind is "audio" (plays clips, records), "aux" (an Aux Input: a stereo bus
+    fed by sends and by tracks whose outputBus names it) or "instrument" (a
+    stereo track whose MIDI clips play its built-in synth). outputBus is the id
     of the aux track this track feeds, or 0 for the master bus. A SEND's target
     is an aux track id. Routing never forms a cycle (see model/Routing.h).
           AUTOMATION
             LANE  parameter
               POINT  time value
+          SYNTH  waveform detune attack decay sustain release cutoff resonance filterEnv gainDb
+                 (instrument tracks only)
+
+    MIDI clips are CLIP nodes with kind="midi" on instrument tracks. They have
+    no file; start/length/offset are timeline samples as for audio clips, and
+    their notes are positioned in ticks (960 per quarter note) from the clip's
+    content origin (start - offset), so they follow the session tempo:
+            CLIP  kind="midi" ...
+              NOTES
+                NOTE  pitch velocity start length       (ticks)
+
+    SESSION also holds tempo (BPM, default 120).
 
     All times are in samples at the session sample rate. Child order of CLIPS is
     z-order: later clips cover earlier ones where they overlap.
@@ -49,6 +62,9 @@ MERIDIAN_ID (SEND)
 MERIDIAN_ID (AUTOMATION)
 MERIDIAN_ID (LANE)
 MERIDIAN_ID (POINT)
+MERIDIAN_ID (NOTES)
+MERIDIAN_ID (NOTE)
+MERIDIAN_ID (SYNTH)
 
 // SESSION
 MERIDIAN_ID (name)
@@ -62,6 +78,7 @@ MERIDIAN_ID (consoleEnabled)
 MERIDIAN_ID (consoleDrive)
 MERIDIAN_ID (consoleCharacter)
 MERIDIAN_ID (consoleCurve)
+MERIDIAN_ID (tempo)
 
 // TRACK
 MERIDIAN_ID (id)
@@ -102,6 +119,21 @@ MERIDIAN_ID (bypass)
 MERIDIAN_ID (parameter)
 MERIDIAN_ID (time)
 MERIDIAN_ID (value)
+
+// NOTE (start and length reuse the CLIP identifiers, in ticks)
+MERIDIAN_ID (pitch)
+MERIDIAN_ID (velocity)
+
+// SYNTH
+MERIDIAN_ID (waveform)
+MERIDIAN_ID (detune)
+MERIDIAN_ID (attack)
+MERIDIAN_ID (decay)
+MERIDIAN_ID (sustain)
+MERIDIAN_ID (release)
+MERIDIAN_ID (cutoff)
+MERIDIAN_ID (resonance)
+MERIDIAN_ID (filterEnv)
 
 #undef MERIDIAN_ID
 } // namespace meridian::ids

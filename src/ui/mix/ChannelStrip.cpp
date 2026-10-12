@@ -50,10 +50,12 @@ ChannelStrip::ChannelStrip (AppController& a, juce::ValueTree t)
     for (int i = 0; i < Session::maxSends; ++i)
         addAndMakeVisible (sendSlots.add (new SendSlotButton (app, trackNode, i)));
 
-    const bool aux = track::isAux (trackNode);
+    const bool aux = track::isAux (trackNode), instrument = track::isInstrument (trackNode);
     populateInputs();
-    inputSelector.setTooltip (aux ? "An aux track's input is everything sent or routed to it" : "Track input");
-    inputSelector.setEnabled (! aux);
+    inputSelector.setTooltip (aux ? "An aux track's input is everything sent or routed to it"
+                              : instrument ? "An instrument track plays its MIDI clips through its built-in synth"
+                                           : "Track input");
+    inputSelector.setEnabled (! aux && ! instrument);
     inputSelector.onChange = [this] { setProperty (ids::inputChannel, inputSelector.getSelectedId() - 2, "Track Input"); };
     addAndMakeVisible (inputSelector);
 
@@ -172,6 +174,12 @@ void ChannelStrip::refreshRouting()
 void ChannelStrip::populateInputs()
 {
     inputSelector.clear (juce::dontSendNotification);
+    if (track::isInstrument (trackNode))
+    {
+        inputSelector.addItem ("synth", 1);
+        inputSelector.setSelectedId (1, juce::dontSendNotification);
+        return;
+    }
     if (track::isAux (trackNode))
     {
         inputSelector.addItem ("bus input", 1);
@@ -248,7 +256,7 @@ void ChannelStrip::refresh()
     panReadout.setText (formatPan (track::pan (trackNode)), juce::dontSendNotification);
 
     recordButton.setToggleState (track::recordArm (trackNode), juce::dontSendNotification);
-    recordButton.setEnabled (! track::isAux (trackNode)); // nothing to record on a bus
+    recordButton.setEnabled (track::isAudio (trackNode)); // buses and instruments have no audio to record
     refreshRouting();
     soloButton.setToggleState (track::solo (trackNode), juce::dontSendNotification);
     muteButton.setToggleState (track::mute (trackNode), juce::dontSendNotification);

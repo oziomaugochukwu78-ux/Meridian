@@ -35,6 +35,7 @@ juce::ValueTree Session::createEmptyState (const Settings& settings)
     s.setProperty (ids::fileFormat, settings.fileFormat, nullptr);
     s.setProperty (ids::formatVersion, formatVersion, nullptr);
     s.setProperty (ids::nextId, 1, nullptr);
+    s.setProperty (ids::tempo, 120.0, nullptr);
     s.appendChild (juce::ValueTree (ids::TRACKS), nullptr);
     return s;
 }
@@ -157,21 +158,23 @@ juce::ValueTree Session::addTrack (const juce::String& name, int numChannels, ju
 {
     const int newId = allocateId();
     const bool aux = kind == TrackKind::aux;
-    const auto colour = aux ? juce::Colour (0xff8f9aa6)  // aux tracks: neutral grey-blue
-                            : juce::Colour (trackPalette[(size_t) getNumTracks() % std::size (trackPalette)]);
+    const bool instrument = kind == TrackKind::instrument;
+    const auto colour = aux ? juce::Colour (0xff8f9aa6)          // aux tracks: neutral grey-blue
+                      : instrument ? juce::Colour (0xff3fbf9f)   // instrument tracks: teal
+                                   : juce::Colour (trackPalette[(size_t) getNumTracks() % std::size (trackPalette)]);
 
     juce::ValueTree t (ids::TRACK);
     t.setProperty (ids::id, newId, nullptr);
     t.setProperty (ids::name, name, nullptr);
-    t.setProperty (ids::kind, aux ? "aux" : "audio", nullptr);
-    t.setProperty (ids::channels, aux ? 2 : juce::jlimit (1, 2, numChannels), nullptr);
+    t.setProperty (ids::kind, aux ? "aux" : instrument ? "instrument" : "audio", nullptr);
+    t.setProperty (ids::channels, aux || instrument ? 2 : juce::jlimit (1, 2, numChannels), nullptr);
     t.setProperty (ids::colour, colour.toString(), nullptr);
     t.setProperty (ids::volumeDb, 0.0, nullptr);
     t.setProperty (ids::pan, 0.0, nullptr);
     t.setProperty (ids::mute, false, nullptr);
     t.setProperty (ids::solo, false, nullptr);
     t.setProperty (ids::recordArm, false, nullptr);
-    t.setProperty (ids::inputChannel, aux ? -1 : 0, nullptr);
+    t.setProperty (ids::inputChannel, aux || instrument ? -1 : 0, nullptr);
     t.setProperty (ids::automationMode, "read", nullptr);
     t.setProperty (ids::outputBus, 0, nullptr);
     t.appendChild (juce::ValueTree (ids::CLIPS), nullptr);
@@ -179,8 +182,51 @@ juce::ValueTree Session::addTrack (const juce::String& name, int numChannels, ju
     t.appendChild (juce::ValueTree (ids::SENDS), nullptr);
     t.appendChild (juce::ValueTree (ids::AUTOMATION), nullptr);
 
+    if (instrument)
+    {
+        // A soft, warm default: filtered saw with a gentle envelope.
+        juce::ValueTree synth (ids::SYNTH);
+        synth.setProperty (ids::waveform, "saw", nullptr);
+        synth.setProperty (ids::detune, 7.0, nullptr);
+        synth.setProperty (ids::attack, 0.005, nullptr);
+        synth.setProperty (ids::decay, 0.6, nullptr);
+        synth.setProperty (ids::sustain, 0.6, nullptr);
+        synth.setProperty (ids::release, 0.4, nullptr);
+        synth.setProperty (ids::cutoff, 1800.0, nullptr);
+        synth.setProperty (ids::resonance, 0.15, nullptr);
+        synth.setProperty (ids::filterEnv, 2.0, nullptr);
+        synth.setProperty (ids::gainDb, -12.0, nullptr);
+        t.appendChild (synth, nullptr);
+    }
+
     getTracksNode().appendChild (t, um);
     return t;
+}
+
+juce::ValueTree Session::addMidiClip (juce::ValueTree t, juce::int64 timelineStart, juce::int64 length,
+                                      const juce::String& name, juce::UndoManager* um)
+{
+    juce::ValueTree c (ids::CLIP);
+    c.setProperty (ids::id, allocateId(), nullptr);
+    c.setProperty (ids::kind, "midi", nullptr);
+    c.setProperty (ids::name, name, nullptr);
+    c.setProperty (ids::start, juce::jmax ((juce::int64) 0, timelineStart), nullptr);
+    c.setProperty (ids::offset, 0, nullptr);
+    c.setProperty (ids::length, juce::jmax ((juce::int64) 1, length), nullptr);
+    c.setProperty (ids::sourceLength, 0, nullptr); // no source file: unlimited
+    c.setProperty (ids::gainDb, 0.0, nullptr);
+    c.setProperty (ids::fadeIn, 0, nullptr);
+    c.setProperty (ids::fadeOut, 0, nullptr);
+    c.appendChild (juce::ValueTree (ids::NOTES), nullptr);
+
+    track::clips (t).appendChild (c, um);
+    return c;
+}
+
+double Session::getTempo() const
+{
+    const double bpm = state.getProperty (ids::tempo, 120.0);
+    return std::isfinite (bpm) ? juce::jlimit (20.0, 999.0, bpm) : 120.0;
 }
 
 void Session::removeTrack (const juce::ValueTree& t, juce::UndoManager* um)

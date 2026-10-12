@@ -1,6 +1,7 @@
 #include "ClipComponent.h"
 
 #include "media/TimeStretchEngine.h"
+#include "model/MidiModel.h"
 #include "ui/Theme.h"
 
 namespace meridian
@@ -30,17 +31,84 @@ ClipComponent::~ClipComponent()
 
 void ClipComponent::loadThumbnail()
 {
+    if (clip::isMidi (clipNode))
+        return; // MIDI clips draw their notes, not a waveform
     if (auto* session = app.getSession())
         thumbnail.setSource (new juce::FileInputSource (session->resolveStoredPath (clipNode[ids::file].toString())));
 }
 
 void ClipComponent::valueTreePropertyChanged (juce::ValueTree& tree, const juce::Identifier& property)
 {
-    if (tree != clipNode)
+    if (tree == clipNode)
+    {
+        if (property == ids::file)
+            loadThumbnail();
+        repaint();
+    }
+    else if (tree.hasType (ids::NOTE))
+    {
+        repaint(); // a note was edited
+    }
+}
+
+void ClipComponent::valueTreeChildAdded (juce::ValueTree&, juce::ValueTree& child)
+{
+    if (child.hasType (ids::NOTE) || child.hasType (ids::NOTES))
+        repaint();
+}
+
+void ClipComponent::valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree& child, int)
+{
+    if (child.hasType (ids::NOTE) || child.hasType (ids::NOTES))
+        repaint();
+}
+
+void ClipComponent::paintNotes (juce::Graphics& g, juce::Rectangle<int> area)
+{
+    auto* session = app.getSession();
+    if (session == nullptr)
         return;
-    if (property == ids::file)
-        loadThumbnail();
-    repaint();
+
+    const auto notes = midimodel::readNotes (clipNode);
+    if (notes.empty())
+    {
+        g.setColour (theme::textDim);
+        g.setFont (theme::font (11.0f));
+        g.drawText ("empty MIDI clip", area, juce::Justification::centred);
+        return;
+    }
+
+    // Fit the clip's pitch range to the clip height (at least an octave tall).
+    int low = 127, high = 0;
+    for (const auto& n : notes.getNotes())
+    {
+        low = juce::jmin (low, n.pitch);
+        high = juce::jmax (high, n.pitch);
+    }
+    const int span = juce::jmax (12, high - low + 1);
+    const int bottomPitch = juce::jmax (0, (low + high) / 2 - span / 2);
+    const float rowHeight = (float) area.getHeight() / (float) span;
+
+    const auto tempo = midimodel::tempoMap (*session);
+    const double rate = session->getSampleRate();
+    const auto origin = clip::contentOrigin (clipNode);
+    const auto clipStart = clip::start (clipNode), clipEnd = clip::end (clipNode);
+
+    g.saveState();
+    g.reduceClipRegion (area);
+    for (const auto& n : notes.getNotes())
+    {
+        const auto on = origin + tempo.ticksToSamples (n.start, rate);
+        if (on < clipStart || on >= clipEnd)
+            continue; // not played: outside the clip
+        const auto off = juce::jmin (clipEnd, origin + tempo.ticksToSamples (n.end(), rate));
+        const float x0 = (float) (logicalLeft + (double) (on - clipStart) / editState.samplesPerPixel);
+        const float x1 = (float) (logicalLeft + (double) (off - clipStart) / editState.samplesPerPixel);
+        const float y = (float) area.getBottom() - (float) (n.pitch - bottomPitch + 1) * rowHeight;
+        g.setColour (colour.brighter (0.4f).withAlpha (0.45f + 0.55f * n.velocity));
+        g.fillRect (juce::Rectangle<float> (x0, y, juce::jmax (1.5f, x1 - x0 - 0.5f), juce::jmax (1.5f, rowHeight - 0.5f)));
+    }
+    g.restoreState();
 }
 
 void ClipComponent::updateLayout (int laneWidth, int laneHeight)
@@ -89,7 +157,11 @@ void ClipComponent::paint (juce::Graphics& g)
     {
         return (double) clip::offset (clipNode) + (x - logicalLeft) * editState.samplesPerPixel;
     };
-    if (thumbnail.getTotalLength() > 0.0)
+    if (clip::isMidi (clipNode))
+    {
+        paintNotes (g, waveArea);
+    }
+    else if (thumbnail.getTotalLength() > 0.0)
     {
         g.setColour (theme::waveform.withAlpha (0.9f));
         thumbnail.drawChannels (g, waveArea, sourceAt (0.0) / sampleRate, sourceAt ((double) getWidth()) / sampleRate, 1.0f);
@@ -151,6 +223,10 @@ ClipComponent::Action ClipComponent::actionAt (const juce::MouseEvent& e) const
     const bool nearStart = startVisible && std::abs (x - logicalLeft) <= edgeZonePixels;
     const bool nearEnd = endVisible && std::abs (x - logicalRight) <= edgeZonePixels;
 
+    // Fades and time-stretching are audio operations; MIDI clips just trim.
+    const bool midi = clip::isMidi (clipNode);
+    const bool stretch = e.mods.isAltDown() && ! midi;
+
     switch (editState.tool)
     {
         case EditTool::selector: return Action::select;
@@ -158,17 +234,17 @@ ClipComponent::Action ClipComponent::actionAt (const juce::MouseEvent& e) const
         case EditTool::trim:
             if (x < (logicalLeft + logicalRight) * 0.5)
                 return Action::trimStart;
-            return e.mods.isAltDown() ? Action::stretchEnd : Action::trimEnd;
+            return stretch ? Action::stretchEnd : Action::trimEnd;
 
         case EditTool::smart:
-            if (y < nameBarHeight && startVisible && x - logicalLeft < fadeZonePixels && ! nearStart)
+            if (! midi && y < nameBarHeight && startVisible && x - logicalLeft < fadeZonePixels && ! nearStart)
                 return Action::fadeIn;
-            if (y < nameBarHeight && endVisible && logicalRight - x < fadeZonePixels && ! nearEnd)
+            if (! midi && y < nameBarHeight && endVisible && logicalRight - x < fadeZonePixels && ! nearEnd)
                 return Action::fadeOut;
             if (nearStart)
                 return Action::trimStart;
             if (nearEnd)
-                return e.mods.isAltDown() ? Action::stretchEnd : Action::trimEnd;
+                return stretch ? Action::stretchEnd : Action::trimEnd;
             return y < getHeight() * 0.5 ? Action::select : Action::move;
 
         case EditTool::zoomer:
@@ -332,7 +408,8 @@ void ClipComponent::mouseUp (const juce::MouseEvent& e)
         // re-parenting the clip deletes this component.
         auto target = trackAtScreenPosition (e.getScreenPosition());
         auto source = clip::owningTrack (clipNode);
-        if (target.isValid() && target != source)
+        const bool fits = target.isValid() && (clip::isMidi (clipNode) ? track::isInstrument (target) : track::isAudio (target));
+        if (fits && target != source)
         {
             juce::MessageManager::callAsync ([clipCopy = clipNode, source, target, um = app.getUndoManager()]() mutable
             {
@@ -348,9 +425,10 @@ void ClipComponent::mouseUp (const juce::MouseEvent& e)
 void ClipComponent::showMenu()
 {
     juce::PopupMenu menu;
-    menu.addItem (1, "Elastic Audio: Time / Pitch...", isTimeStretchAvailable());
+    const bool midi = clip::isMidi (clipNode);
+    menu.addItem (1, "Elastic Audio: Time / Pitch...", isTimeStretchAvailable() && ! midi);
     menu.addSeparator();
-    menu.addItem (2, "Remove Fades", clip::fadeIn (clipNode) > 0 || clip::fadeOut (clipNode) > 0);
+    menu.addItem (2, "Remove Fades", ! midi && (clip::fadeIn (clipNode) > 0 || clip::fadeOut (clipNode) > 0));
     menu.addItem (3, "Delete Clip");
 
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMousePosition(),

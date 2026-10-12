@@ -1,5 +1,6 @@
 #include "EngineBridge.h"
 
+#include "model/MidiModel.h"
 #include "model/Routing.h"
 
 #include <algorithm>
@@ -82,6 +83,7 @@ void EngineBridge::attachSession (Session* newSession)
     }
     trackStates.clear();
     sendStates.clear();
+    instruments.clear();
     reportedMissingFiles.clear();
 
     session = newSession;
@@ -159,6 +161,7 @@ void EngineBridge::syncSendState (const juce::ValueTree& s)
 void EngineBridge::removeTrackResources (int trackId)
 {
     trackStates.erase (trackId);
+    instruments.erase (trackId); // graphs still using it keep it alive until retired
     for (auto it = sendStates.begin(); it != sendStates.end();)
         it = it->first.first == trackId ? sendStates.erase (it) : std::next (it);
     for (auto it = delayLines.begin(); it != delayLines.end();)
@@ -386,6 +389,11 @@ void EngineBridge::valueTreePropertyChanged (juce::ValueTree& tree, const juce::
         return;
     }
 
+    if (tree.hasType (ids::SESSION) && property == ids::tempo)
+    {
+        triggerAsyncUpdate(); // MIDI notes are positioned in beats: they move with the tempo
+        return;
+    }
     if (tree.hasType (ids::SESSION) || (tree.hasType (ids::CLIP) && property == ids::name))
         return;
 
@@ -479,7 +487,7 @@ void EngineBridge::buildSegments (const juce::ValueTree& t, TrackRender& render,
         const auto c = clipsNode.getChild (i);
         const auto start = clip::start (c);
         const auto end = clip::end (c);
-        if (end <= start)
+        if (end <= start || clip::isMidi (c)) // MIDI clips have no audio file
             continue;
 
         // Later siblings sit on top: subtract them to find what of this clip is audible.
@@ -522,6 +530,41 @@ void EngineBridge::buildSegments (const juce::ValueTree& t, TrackRender& render,
 
     std::sort (render.segments.begin(), render.segments.end(),
                [] (const ClipSegment& a, const ClipSegment& b) { return a.start < b.start; });
+}
+
+void EngineBridge::buildMidiEvents (const juce::ValueTree& t, TrackRender& render) const
+{
+    // Notes are in ticks from each clip's content origin; the timeline is in
+    // samples at the session rate. A note sounds if it starts inside its clip,
+    // and is cut off at the clip's end.
+    const auto tempo = midimodel::tempoMap (*session);
+    const double rate = session->getSampleRate();
+
+    for (const auto& c : track::clips (t))
+    {
+        if (! clip::isMidi (c))
+            continue;
+        const auto origin = clip::contentOrigin (c);
+        const auto start = clip::start (c), end = clip::end (c);
+
+        // Keep the sequence in a variable: iterating readNotes(c).getNotes() directly
+        // would loop over a destroyed temporary (no lifetime extension through a call).
+        const auto notes = midimodel::readNotes (c);
+        for (const auto& n : notes.getNotes())
+        {
+            const auto on = origin + tempo.ticksToSamples (n.start, rate);
+            if (on < start || on >= end)
+                continue;
+            const auto off = juce::jlimit (on + 1, end, origin + tempo.ticksToSamples (n.end(), rate));
+            render.events.push_back ({ on, n.pitch, n.velocity, true });
+            render.events.push_back ({ off, n.pitch, 0.0f, false });
+        }
+    }
+
+    std::sort (render.events.begin(), render.events.end(), [] (const MidiEvent& a, const MidiEvent& b)
+    {
+        return a.time != b.time ? a.time < b.time : (! a.on && b.on); // offs first at equal times
+    });
 }
 
 std::unique_ptr<RenderGraph> EngineBridge::buildGraph (double sampleRate, int maxBlockSize, bool sharedStreams,
@@ -618,8 +661,22 @@ std::unique_ptr<RenderGraph> EngineBridge::buildGraph (double sampleRate, int ma
                     if (other != t && routing::feeds (*session, track::id (other), track::id (t)))
                         render.upstream.push_back (ensureTrackState (other));
 
-            if (! render.isAux)
+            if (track::isInstrument (t))
+            {
+                // Live graphs share one synth per track across rebuilds; an
+                // offline render gets its own, so it never disturbs playback.
+                auto& live = instruments[track::id (t)];
+                if (live == nullptr)
+                    live = std::make_shared<InstrumentState>();
+                render.instrument = sharedStreams ? live : std::make_shared<InstrumentState>();
+                render.synthParams = midimodel::readSynthParams (track::synth (t));
+                render.synthParamsVersion = ++graphVersion;
+                buildMidiEvents (t, render);
+            }
+            else if (! render.isAux)
+            {
                 buildSegments (t, render, sharedStreams, usedStreams, keep);
+            }
 
             for (int slot = 0; slot < Session::maxInserts; ++slot)
                 if (auto s = getInsert (track::id (t), slot); s != nullptr && s->plugin != nullptr)
@@ -678,7 +735,8 @@ void EngineBridge::assignDelayCompensation (RenderGraph& graph, bool sharedDelay
 
     for (auto& t : graph.tracks)
     {
-        int pluginLatency = 0;
+        // An instrument's own synth delays its output like a plug-in would.
+        int pluginLatency = t.instrument != nullptr ? synth::PolySynth::getLatencySamples() : 0;
         for (const auto& slot : t.inserts)
             if (! slot->bypassed.load())
                 pluginLatency += juce::jmax (0, slot->plugin->getLatencySamples());

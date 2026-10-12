@@ -39,6 +39,8 @@ target_sources(Meridian PRIVATE
 
     model/Automation.cpp
     model/Automation.h
+    model/MidiModel.cpp
+    model/MidiModel.h
     model/Routing.cpp
     model/Routing.h
     model/Session.cpp

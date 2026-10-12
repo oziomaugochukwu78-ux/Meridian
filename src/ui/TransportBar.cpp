@@ -123,7 +123,8 @@ void TransportBar::timerCallback()
     mixButton.setToggleState (window == WindowKind::mix, juce::dontSendNotification);
 
     mainCounter = timeformat::minSecs (position, sr);
-    subCounter = timeformat::barsBeats (position, sr) + "    " + juce::String (position) + " smp";
+    const double bpm = app.getSession() != nullptr ? app.getSession()->getTempo() : timeformat::tempoBpm;
+    subCounter = timeformat::barsBeats (position, sr, bpm) + "    " + juce::String (position) + " smp";
 
     cpuLoad = (float) app.getDeviceManager().getCpuUsage();
     if (app.getEngine().collectDiskUnderruns() > 0)

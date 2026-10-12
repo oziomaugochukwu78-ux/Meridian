@@ -60,6 +60,7 @@ void EditView::bindSession()
         tracksNode.addListener (this);
 
     state.sampleRate = session != nullptr ? session->getSampleRate() : 48000.0;
+    state.tempo = session != nullptr ? session->getTempo() : timeformat::tempoBpm;
     state.clearSelection();
     state.setView (0, state.samplesPerPixel);
     rebuildTracks();
@@ -180,6 +181,14 @@ void EditView::visibilityChanged()
 
 void EditView::timerCallback()
 {
+    // Follow tempo changes (from the AI tools or undo): grid, ruler and clips are drawn in beats.
+    if (auto* session = app.getSession(); session != nullptr && ! juce::exactlyEqual (session->getTempo(), state.tempo))
+    {
+        state.tempo = session->getTempo();
+        state.sendChangeMessage();
+        repaint();
+    }
+
     const auto& transport = app.getEngine().getTransport();
     const auto position = transport.getPosition();
 
