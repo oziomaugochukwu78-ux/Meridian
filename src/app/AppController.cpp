@@ -215,7 +215,10 @@ void AppController::applyMasterSettings()
 
 void AppController::syncDeviceToSession()
 {
-    if (session == nullptr)
+    // With no audio device open there is no rate to switch and nothing to warn
+    // about; the Playback Engine dialog, where a device gets chosen, flags any
+    // rate mismatch itself.
+    if (session == nullptr || deviceManager.getCurrentAudioDevice() == nullptr)
         return;
 
     auto setup = deviceManager.getAudioDeviceSetup();
