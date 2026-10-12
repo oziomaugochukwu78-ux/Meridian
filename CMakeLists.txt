@@ -25,6 +25,13 @@ option(MERIDIAN_ENABLE_ASAN          "Build with AddressSanitizer (plus UBSan on
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+# Windows: link the C++ runtime statically into every target, dependencies
+# included, so Meridian.exe runs on any PC without the Visual C++ Redistributable.
+option(MERIDIAN_STATIC_RUNTIME "Link the MSVC runtime statically (self-contained exe)" ON)
+if(MSVC AND MERIDIAN_STATIC_RUNTIME)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 # AddressSanitizer applies to every target, dependencies included, and must be set
 # before they are fetched: MSVC refuses to link instrumented and uninstrumented
 # standard-library containers together. On MSVC use RelWithDebInfo (ASan cannot
@@ -49,6 +56,7 @@ if(MERIDIAN_BUILD_APP)
         add_subdirectory(tests/plugin) # test VST3 for the self test; defined first so src/ can refer to it
     endif()
     add_subdirectory(src)
+    include(Packaging)
 endif()
 
 if(MERIDIAN_BUILD_TESTS)

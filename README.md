@@ -49,6 +49,18 @@ cmake -S . -B build/app -G "Visual Studio 17 2022" -A x64
 cmake --build build/app --config Release --target Meridian
 ```
 
+### Portable package
+
+This builds a self-contained ZIP: `Meridian.exe` with the C++ runtime linked in, a quick-start guide, the documentation and third-party licences. It runs on any 64-bit Windows 10/11 PC with nothing to install.
+
+```bash
+cmake -S . -B build/dist -A x64 -DMERIDIAN_BUILD_TESTS=OFF
+cmake --build build/dist --config Release
+cpack --config build/dist/CPackConfig.cmake -C Release -B build/dist/package
+```
+
+The output is `build/dist/package/Meridian-<version>-windows-x64.zip`.
+
 The core library and its tests build in seconds without JUCE:
 
 ```bash
@@ -67,6 +79,7 @@ ctest --test-dir build/core -C Debug
 | `MERIDIAN_ENABLE_ASIO` | ON | ASIO driver type on Windows |
 | `MERIDIAN_ENABLE_AVX2` | OFF | Compile with AVX2 (excludes pre-2013 CPUs) |
 | `MERIDIAN_WARNINGS_AS_ERRORS` | OFF | Treat warnings in Meridian's own code as errors |
+| `MERIDIAN_STATIC_RUNTIME` | ON | Windows: link the C++ runtime into the exe, so no Visual C++ Redistributable is needed |
 | `MERIDIAN_ENABLE_ASAN` | OFF | AddressSanitizer for every target (plus UBSan on GCC/Clang). On MSVC, build RelWithDebInfo; this needs Visual Studio's "C++ AddressSanitizer" component |
 
 ## Architecture
@@ -122,7 +135,7 @@ To be precise about the benefit: floating-point buses never clip internally, eve
 
 ## AI remote control
 
-While Meridian runs, port 47800 on 127.0.0.1 offers three interfaces to the same 24 tools:
+While Meridian runs, port 47800 on 127.0.0.1 offers three interfaces to the same 25 tools:
 
 | Interface | Address | For |
 |---|---|---|
@@ -140,7 +153,7 @@ claude mcp add --transport http meridian http://127.0.0.1:47800/mcp
 
 Claude Desktop and other stdio-only clients can use the `mcp-remote` bridge: add a server with command `npx` and arguments `mcp-remote http://127.0.0.1:47800/mcp` in the client's MCP settings.
 
-Tools: `get_status`, `transport`, `set_track`, `create_track`, `delete_track`, `set_output`, `set_send`, `remove_send`, `list_plugins`, `insert_plugin`, `remove_plugin`, `set_plugin_bypass`, `list_clips`, `split_clip`, `delete_clip`, `move_clip`, `set_clip`, `import_audio`, `set_master`, `bounce`, `undo`, `redo`, `save_session` and `show_window`. Each tool has a JSON schema and a description written for the model. Tracks are referenced by number or name. Every AI edit lands in the undo history, labelled "AI: ...".
+Tools: `get_status`, `transport`, `set_track`, `create_track`, `delete_track`, `set_output`, `set_send`, `remove_send`, `list_plugins`, `insert_plugin`, `remove_plugin`, `set_plugin_bypass`, `list_clips`, `split_clip`, `delete_clip`, `move_clip`, `set_clip`, `import_audio`, `set_volume_automation`, `set_master`, `bounce`, `undo`, `redo`, `save_session` and `show_window`. Each tool has a JSON schema and a description written for the model, and every call is checked against that schema before it runs. Tracks are referenced by number or name. Every AI edit lands in the undo history, labelled "AI: ...".
 
 ### Text commands
 
@@ -190,7 +203,7 @@ $ws.SendAsync([ArraySegment[byte]]$msg, 'Text', $true, [Threading.CancellationTo
 | Ctrl+Shift+T | Elastic Audio on the selected clip |
 | Ctrl+[ / Ctrl+] | zoom out / in (also Ctrl+wheel) |
 | F2 / F4 | Slip / Grid mode |
-| F6 / F7 / F8 / F9 | Trim / Selector / Grabber / Smart Tool |
+| F6 / F7 / F8 / F9 / F10 | Trim / Selector / Grabber / Smart Tool / Pencil (draw volume automation) |
 | Ctrl+Shift+N | new tracks |
 | Ctrl+Shift+I | import audio |
 | Ctrl+Alt+B | bounce mix to a file |

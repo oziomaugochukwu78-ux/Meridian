@@ -1,0 +1,78 @@
+MERIDIAN - QUICK START
+======================
+
+Meridian is a digital audio workstation (DAW): a program for recording,
+arranging and mixing audio. This is an early version (see ROADMAP.md).
+
+
+1. RUN IT
+---------
+Double-click Meridian.exe. Nothing needs installing: the program is
+self-contained, and you can keep this folder anywhere.
+
+The Dashboard opens. On the "Create" tab, name a new session (a project)
+and click Create; "Create From Template" starts with ready-made tracks.
+The "Recent" tab and "Open from Disk..." open sessions you made before.
+Sessions are saved in Documents\Meridian Sessions\ by default.
+(The Dashboard comes back with Ctrl+N; Ctrl+O opens a session.)
+
+
+2. THE TWO WINDOWS
+------------------
+Edit window   your tracks and audio clips laid out on a timeline
+Mix window    a mixing console: one channel strip per track, with faders,
+              pan, mute (M), solo (S) and record (R)
+
+Switch between them with Ctrl+=.
+
+
+3. THE ESSENTIALS
+-----------------
+Space            play / stop
+Home             back to the start
+Ctrl+Shift+I     import audio files (or drag them onto the Edit window)
+Ctrl+Shift+N     add new tracks
+F12              record on the tracks whose R button is on
+Ctrl+S           save
+Ctrl+Z           undo (everything can be undone, including AI edits)
+Ctrl+Alt+B       bounce: mix the whole session down to one audio file,
+                 saved in the session's "Bounced Files" folder
+
+Hover over a clip to use the Smart Tool:
+  top half      select a time range
+  bottom half   move the clip
+  edges         trim the clip
+  top corners   fade in / fade out
+
+
+4. SOUND SETTINGS
+-----------------
+Setup > Playback Engine chooses the audio device and buffer size.
+If playback crackles, choose a larger buffer size.
+
+
+5. CONTROLLING MERIDIAN WITH AN AI
+----------------------------------
+While Meridian runs, it accepts commands on this computer only, at
+http://127.0.0.1:47800/mcp. This uses MCP (Model Context Protocol), the
+standard way for AI apps to use tools.
+
+Any MCP-capable AI app on this computer can connect, for example:
+
+  Claude Code:     claude mcp add --transport http meridian http://127.0.0.1:47800/mcp
+  Claude Desktop:  add an MCP server with command "npx" and the arguments
+                   "mcp-remote http://127.0.0.1:47800/mcp"
+
+Then ask in plain words, for example: "turn the drums down 3 dB",
+"mute track 2", "bounce the mix". Every AI edit appears in the undo history
+as "AI: ...".
+
+Turn the AI port off by unticking Setup > Enable AI Remote Control if you
+do not use it. Setup > AI Remote Control Info... shows the connection details.
+
+
+6. WHAT IS NOT THERE YET
+------------------------
+There are no built-in instruments or MIDI yet, and no built-in effects:
+use VST3 plug-ins (Setup > Plug-in Manager to scan them). See ROADMAP.md
+for what comes next.
