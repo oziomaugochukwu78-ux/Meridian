@@ -1,0 +1,14 @@
+# Normalise line endings in the repository; check out with the platform's native endings.
+* text=auto
+
+*.cpp text diff=cpp
+*.h   text diff=cpp
+*.cmake text
+CMakeLists.txt text
+*.json text
+*.md  text
+*.ps1 text eol=crlf
+
+*.wav binary
+*.aif binary
+*.png binary

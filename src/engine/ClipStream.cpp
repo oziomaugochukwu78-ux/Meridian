@@ -1,0 +1,164 @@
+#include "ClipStream.h"
+
+namespace meridian
+{
+
+ClipStream::ClipStream (std::unique_ptr<juce::AudioFormatReader> r, int framesPerHalf)
+    : reader (std::move (r)),
+      numChannels (juce::jlimit (1, 2, (int) reader->numChannels)),
+      length (reader->lengthInSamples),
+      fileSampleRate (reader->sampleRate),
+      halfSize (juce::jmax (1024, framesPerHalf))
+{
+    for (auto& h : halves)
+        h.data.setSize (numChannels, halfSize);
+}
+
+int ClipStream::findReadyHalf (juce::int64 cell) const noexcept
+{
+    for (int h = 0; h < 2; ++h)
+    {
+        const auto w = halves[h].word.load (std::memory_order_acquire);
+        if (stateOf (w) == HalfState::ready && cellOf (w) == cell)
+            return h;
+    }
+    return -1;
+}
+
+void ClipStream::cue (juce::int64 sourcePosition) noexcept
+{
+    const juce::int64 current = juce::jmax<juce::int64> (0, sourcePosition) / halfSize;
+    const juce::int64 lastCell = length > 0 ? (length - 1) / halfSize : -1;
+
+    juce::uint64 words[2] = { halves[0].word.load (std::memory_order_acquire),
+                              halves[1].word.load (std::memory_order_acquire) };
+
+    // Cells past the end of the file need no loading: treat them as covered.
+    bool haveCurrent = current > lastCell;
+    bool haveNext = current + 1 > lastCell;
+
+    for (const auto w : words)
+    {
+        if (stateOf (w) == HalfState::idle)
+            continue;
+        if (cellOf (w) == current)      haveCurrent = true;
+        if (cellOf (w) == current + 1)  haveNext = true;
+    }
+
+    for (int h = 0; h < 2 && ! (haveCurrent && haveNext); ++h)
+    {
+        const auto state = stateOf (words[h]);
+        const auto cell = cellOf (words[h]);
+
+        if (state == HalfState::filling)
+            continue; // the disk thread owns it; re-evaluated once it is Ready
+        if (state != HalfState::idle && (cell == current || cell == current + 1))
+            continue; // already holds a cell we want
+
+        const juce::int64 wanted = haveCurrent ? current + 1 : current;
+        const auto request = pack (HalfState::empty, wanted);
+
+        if (state == HalfState::ready)
+        {
+            // Only this thread moves a half out of Ready, so a plain store is safe.
+            halves[h].word.store (request, std::memory_order_release);
+        }
+        else if (! halves[h].word.compare_exchange_strong (words[h], request, std::memory_order_acq_rel))
+        {
+            continue; // the disk thread just claimed it
+        }
+
+        (wanted == current ? haveCurrent : haveNext) = true;
+    }
+}
+
+bool ClipStream::read (juce::int64 sourcePosition, float* const* dest, int numDestChannels, int numFrames) noexcept
+{
+    bool complete = true;
+    int done = 0;
+
+    while (done < numFrames)
+    {
+        const juce::int64 frame = sourcePosition + done;
+        int count = numFrames - done;
+        int half = -1;
+        int offsetInCell = 0;
+
+        if (frame >= 0 && frame < length)
+        {
+            const juce::int64 cell = frame / halfSize;
+            offsetInCell = (int) (frame - cell * halfSize);
+            count = (int) juce::jmin<juce::int64> (count, halfSize - offsetInCell, length - frame);
+            half = findReadyHalf (cell);
+            if (half < 0)
+                complete = false;
+        }
+        else if (frame < 0)
+        {
+            count = (int) juce::jmin<juce::int64> (count, -frame);
+        }
+
+        if (half < 0)
+        {
+            for (int ch = 0; ch < numDestChannels; ++ch)
+                juce::FloatVectorOperations::clear (dest[ch] + done, count);
+        }
+        else
+        {
+            const auto& data = halves[half].data;
+            const float* left = data.getReadPointer (0, offsetInCell);
+            const float* right = numChannels > 1 ? data.getReadPointer (1, offsetInCell) : left;
+
+            if (numDestChannels == 1 && numChannels == 2)
+            {
+                juce::FloatVectorOperations::copyWithMultiply (dest[0] + done, left, 0.5f, count);
+                juce::FloatVectorOperations::addWithMultiply (dest[0] + done, right, 0.5f, count);
+            }
+            else
+            {
+                juce::FloatVectorOperations::copy (dest[0] + done, left, count);
+                if (numDestChannels > 1)
+                    juce::FloatVectorOperations::copy (dest[1] + done, right, count);
+            }
+        }
+
+        done += count;
+    }
+
+    if (! complete)
+        underruns.fetch_add (1, std::memory_order_relaxed);
+
+    cue (sourcePosition + numFrames);
+    return complete;
+}
+
+bool ClipStream::service()
+{
+    bool didWork = false;
+
+    for (auto& h : halves)
+    {
+        auto w = h.word.load (std::memory_order_acquire);
+        if (stateOf (w) != HalfState::empty)
+            continue;
+
+        const auto cell = cellOf (w);
+        if (! h.word.compare_exchange_strong (w, pack (HalfState::filling, cell), std::memory_order_acq_rel))
+            continue;
+
+        const juce::int64 start = cell * halfSize;
+        const int frames = (int) juce::jlimit<juce::int64> (0, halfSize, length - start);
+
+        if (frames > 0)
+            reader->read (h.data.getArrayOfWritePointers(), numChannels, start, frames);
+        if (frames < halfSize)
+            h.data.clear (frames, halfSize - frames);
+
+        h.word.store (pack (HalfState::ready, cell), std::memory_order_release);
+        didWork = true;
+    }
+
+    return didWork;
+}
+
+} // namespace meridian

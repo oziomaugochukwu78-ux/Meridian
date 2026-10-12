@@ -1,0 +1,39 @@
+# meridian_core: dependency-free C++20 library holding everything that can be
+# tested without JUCE, audio hardware or a GUI: the mixing maths, the console
+# saturation curve, fader/meter scales, automation evaluation, and the remote
+# control protocol (WebSocket framing + command language).
+
+add_library(meridian_core STATIC
+    dsp/AutomationCurve.cpp
+    dsp/AutomationCurve.h
+    dsp/DcBlocker.h
+    dsp/FaderTaper.cpp
+    dsp/FaderTaper.h
+    dsp/LinearRamp.h
+    dsp/MeterScale.h
+    dsp/MixKernels.cpp
+    dsp/MixKernels.h
+    dsp/PanLaw.h
+    dsp/SaturationCurve.cpp
+    dsp/SaturationCurve.h
+    dsp/SimdConfig.h
+
+    remote/Base64.cpp
+    remote/Base64.h
+    remote/CommandDispatcher.cpp
+    remote/CommandDispatcher.h
+    remote/CommandParser.cpp
+    remote/CommandParser.h
+    remote/JsonWriter.h
+    remote/RemoteCommand.h
+    remote/Sha1.cpp
+    remote/Sha1.h
+    remote/WebSocketProtocol.cpp
+    remote/WebSocketProtocol.h
+)
+
+target_include_directories(meridian_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(meridian_core PUBLIC cxx_std_20)
+meridian_configure_target(meridian_core)
+set_target_properties(meridian_core PROPERTIES FOLDER "Meridian")
+add_library(Meridian::core ALIAS meridian_core)

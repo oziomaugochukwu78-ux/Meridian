@@ -1,0 +1,434 @@
+#include "AudioEngine.h"
+
+#include <dsp/MixKernels.h>
+#include <dsp/PanLaw.h>
+
+#include <cmath>
+
+namespace meridian
+{
+namespace
+{
+constexpr double faderRampSeconds = 0.030;  // fader moves and SET_VOLUME commands
+constexpr double muteRampSeconds = 0.005;   // mute/solo: fast, but never a click
+constexpr double panRampSeconds = 0.020;
+constexpr double silenceDb = -144.0;
+constexpr double halfPi = 1.57079632679489661923;
+
+double decibelsToGain (double db) noexcept
+{
+    return db <= silenceDb ? 0.0 : std::pow (10.0, db / 20.0);
+}
+
+int rampLength (double seconds, double sampleRate) noexcept
+{
+    return juce::jmax (1, (int) (seconds * sampleRate));
+}
+
+void storeMax (std::atomic<float>& slot, float value) noexcept
+{
+    auto current = slot.load (std::memory_order_relaxed);
+    while (value > current && ! slot.compare_exchange_weak (current, value))
+    {
+    }
+}
+} // namespace
+
+AudioEngine::AudioEngine()
+{
+    // Retired graphs are freed on the message thread in small batches.
+    startTimerHz (20);
+}
+
+AudioEngine::~AudioEngine()
+{
+    stopTimer();
+    deleteAllGraphs();
+}
+
+void AudioEngine::deleteAllGraphs()
+{
+    // Only valid once the device is detached (no audio callbacks).
+    delete pendingGraph.exchange (nullptr);
+    delete activeGraph;
+    activeGraph = nullptr;
+    RenderGraph* retired = nullptr;
+    while (retiredGraphs.pop (retired))
+        delete retired;
+}
+
+void AudioEngine::publishGraph (std::unique_ptr<RenderGraph> graph)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    // If the audio thread never picked up the previous pending graph, it is
+    // ours again and can be deleted right here.
+    delete pendingGraph.exchange (graph.release(), std::memory_order_acq_rel);
+}
+
+void AudioEngine::timerCallback()
+{
+    RenderGraph* retired = nullptr;
+    while (retiredGraphs.pop (retired))
+        delete retired;
+}
+
+std::pair<float, float> AudioEngine::collectMasterPeaks() noexcept
+{
+    return { masterPeakLeft.exchange (0.0f), masterPeakRight.exchange (0.0f) };
+}
+
+//==============================================================================
+void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
+{
+    const double sr = device->getCurrentSampleRate();
+    const int blockSize = juce::jmax (1, device->getCurrentBufferSizeSamples());
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        busSum[ch].assign ((size_t) blockSize, 0.0);
+        busComp[ch].assign ((size_t) blockSize, 0.0);
+        masterOut[ch].assign ((size_t) blockSize, 0.0);
+    }
+    for (auto* v : { &faderGains, &muteGains, &panLeft, &panRight, &coefLeft, &coefRight })
+        v->assign ((size_t) blockSize, 0.0);
+    silence.assign ((size_t) blockSize, 0.0f);
+
+    masterBus.prepare (sr, blockSize);
+    masterFader.reset (decibelsToGain (masterVolumeDb.load()));
+
+    sampleRate.store (sr);
+    maxBlockSize.store (blockSize);
+    deviceRunning.store (true);
+    transport.setAudioRunning (true);
+
+    if (listener != nullptr)
+        listener->engineAboutToStart (sr, blockSize);
+}
+
+void AudioEngine::audioDeviceStopped()
+{
+    deviceRunning.store (false);
+    transport.setAudioRunning (false);
+}
+
+//==============================================================================
+void AudioEngine::adoptPendingGraph() noexcept
+{
+    if (pendingGraph.load (std::memory_order_relaxed) == nullptr)
+        return;
+
+    // The old graph must be handed back before the new one is taken; if the
+    // return queue is full (the message thread is stalled) keep rendering the
+    // current graph and try again next block.
+    if (activeGraph != nullptr && ! retiredGraphs.push (activeGraph))
+        return;
+
+    activeGraph = pendingGraph.exchange (nullptr, std::memory_order_acq_rel);
+}
+
+void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, int numInputs,
+                                                    float* const* outputs, int numOutputs,
+                                                    int numSamples, const juce::AudioIODeviceCallbackContext&)
+{
+    juce::ScopedNoDenormals noDenormals;
+
+    adoptPendingGraph();
+
+    int chunkLimit = (int) masterOut[0].size();
+    if (activeGraph != nullptr && activeGraph->maxBlockSize > 0)
+        chunkLimit = juce::jmin (chunkLimit, activeGraph->maxBlockSize);
+
+    if (chunkLimit <= 0)
+    {
+        for (int ch = 0; ch < numOutputs; ++ch)
+            if (outputs[ch] != nullptr)
+                juce::FloatVectorOperations::clear (outputs[ch], numSamples);
+        return;
+    }
+
+    // Devices may deliver blocks larger than they announced; render in chunks
+    // that fit the preallocated scratch.
+    for (int done = 0; done < numSamples;)
+    {
+        const int chunk = juce::jmin (chunkLimit, numSamples - done);
+        processChunk (inputs, numInputs, outputs, numOutputs, done, chunk);
+        done += chunk;
+    }
+}
+
+void AudioEngine::processChunk (const float* const* inputs, int numInputs, float* const* outputs, int numOutputs,
+                                int offset, int numSamples) noexcept
+{
+    transport.applyPendingLocate();
+
+    BlockContext ctx { inputs, numInputs, offset, numSamples, transport.getPosition(), transport.getState(), false };
+    const bool rolling = ctx.state != Transport::State::stopped;
+
+    dsp::CompensatedChannel bus[2] = { { busSum[0].data(), busComp[0].data() },
+                                       { busSum[1].data(), busComp[1].data() } };
+    dsp::clear (bus[0], numSamples);
+    dsp::clear (bus[1], numSamples);
+
+    if (activeGraph != nullptr)
+    {
+        for (const auto& t : activeGraph->tracks)
+            ctx.anySolo = ctx.anySolo || t.state->soloed.load (std::memory_order_relaxed);
+
+        for (auto& t : activeGraph->tracks)
+            renderTrack (t, ctx);
+    }
+
+    // Master: collapse the double-double bus, console, fader, device.
+    dsp::resolve (bus[0], masterOut[0].data(), numSamples);
+    dsp::resolve (bus[1], masterOut[1].data(), numSamples);
+
+    masterBus.process (masterOut[0].data(), masterOut[1].data(), numSamples);
+
+    masterFader.setTarget (decibelsToGain (masterVolumeDb.load (std::memory_order_relaxed)),
+                           rampLength (faderRampSeconds, sampleRate.load (std::memory_order_relaxed)));
+    if (masterFader.isRamping())
+    {
+        masterFader.render (faderGains.data(), numSamples);
+        dsp::multiplyInPlace (masterOut[0].data(), faderGains.data(), numSamples);
+        dsp::multiplyInPlace (masterOut[1].data(), faderGains.data(), numSamples);
+    }
+    else if (masterFader.getCurrent() != 1.0)
+    {
+        dsp::multiplyInPlace (masterOut[0].data(), masterFader.getCurrent(), numSamples);
+        dsp::multiplyInPlace (masterOut[1].data(), masterFader.getCurrent(), numSamples);
+    }
+
+    storeMax (masterPeakLeft, (float) dsp::peakMagnitude (masterOut[0].data(), numSamples));
+    storeMax (masterPeakRight, (float) dsp::peakMagnitude (masterOut[1].data(), numSamples));
+
+    for (int ch = 0; ch < numOutputs; ++ch)
+    {
+        if (outputs[ch] == nullptr)
+            continue;
+        if (ch < 2)
+            dsp::convertToFloat (masterOut[ch].data(), outputs[ch] + offset, numSamples);
+        else
+            juce::FloatVectorOperations::clear (outputs[ch] + offset, numSamples);
+    }
+
+    if (rolling)
+        transport.advance (numSamples);
+}
+
+//==============================================================================
+void AudioEngine::renderTrack (TrackRender& t, const BlockContext& ctx) noexcept
+{
+    const int numChannels = t.numChannels;
+    for (int ch = 0; ch < numChannels; ++ch)
+        juce::FloatVectorOperations::clear (t.buffer.getWritePointer (ch), ctx.numSamples);
+
+    // Auto-input monitoring: an armed track listens to its input while
+    // stopped or recording, and plays back its clips while just playing.
+    const bool armed = t.state->recordArmed.load (std::memory_order_relaxed);
+    const bool monitorInput = armed && ctx.state != Transport::State::playing && t.inputChannel >= 0;
+
+    if (monitorInput)
+    {
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            int source = t.inputChannel + ch;
+            if (source >= ctx.numInputs)
+                source = t.inputChannel; // mono input feeding a stereo track
+            if (source < ctx.numInputs && ctx.inputs[source] != nullptr)
+                juce::FloatVectorOperations::copy (t.buffer.getWritePointer (ch), ctx.inputs[source] + ctx.inputOffset, ctx.numSamples);
+        }
+    }
+
+    renderSegments (t, ctx);
+
+    if (ctx.state == Transport::State::recording && t.take != nullptr)
+        writeTake (*t.take, ctx);
+
+    if (! t.inserts.empty())
+    {
+        juce::AudioBuffer<float> view (t.buffer.getArrayOfWritePointers(), numChannels, 0, ctx.numSamples);
+        for (auto& slot : t.inserts)
+        {
+            if (slot != nullptr && slot->plugin != nullptr && ! slot->bypassed.load (std::memory_order_relaxed))
+            {
+                t.midi.clear();
+                slot->plugin->processBlock (view, t.midi);
+            }
+        }
+    }
+
+    mixTrackIntoBus (t, ctx);
+}
+
+void AudioEngine::renderSegments (TrackRender& t, const BlockContext& ctx) noexcept
+{
+    const auto pos = ctx.position;
+    const auto blockEnd = pos + ctx.numSamples;
+    const bool rolling = ctx.state != Transport::State::stopped;
+    const bool monitoringInput = t.state->recordArmed.load (std::memory_order_relaxed)
+                                 && ctx.state != Transport::State::playing && t.inputChannel >= 0;
+
+    for (auto& seg : t.segments)
+    {
+        const auto segEnd = seg.start + seg.length;
+        if (segEnd <= pos)
+            continue;
+
+        if (! rolling || monitoringInput || seg.start >= blockEnd)
+        {
+            // Not audible this block: keep its disk buffers positioned where
+            // playback will need them, so starting the transport is instant.
+            seg.stream->cue (seg.sourceOffset + juce::jlimit<juce::int64> (0, seg.length, pos - seg.start));
+            continue;
+        }
+
+        const auto s = juce::jmax (pos, seg.start);
+        const auto e = juce::jmin (blockEnd, segEnd);
+        const int count = (int) (e - s);
+        const int destOffset = (int) (s - pos);
+
+        float* scratch[2] = { t.clipScratch.getWritePointer (0), t.clipScratch.getWritePointer (1) };
+        if (! seg.stream->read (seg.sourceOffset + (s - seg.start), scratch, t.numChannels, count))
+            diskUnderruns.fetch_add (1, std::memory_order_relaxed);
+
+        // Equal-power fades, evaluated per sample only inside fade regions.
+        const bool inFadeIn = seg.fadeIn > 0 && s < seg.clipStart + seg.fadeIn;
+        const bool inFadeOut = seg.fadeOut > 0 && e > seg.clipEnd - seg.fadeOut;
+        if (inFadeIn || inFadeOut)
+        {
+            for (int i = 0; i < count; ++i)
+            {
+                const auto time = s + i;
+                double g = 1.0;
+                const auto sinceStart = time - seg.clipStart;
+                if (seg.fadeIn > 0 && sinceStart < seg.fadeIn)
+                    g *= std::sin (halfPi * ((double) sinceStart + 0.5) / (double) seg.fadeIn);
+                const auto untilEnd = seg.clipEnd - time;
+                if (seg.fadeOut > 0 && untilEnd <= seg.fadeOut)
+                    g *= std::sin (halfPi * ((double) untilEnd - 0.5) / (double) seg.fadeOut);
+
+                for (int ch = 0; ch < t.numChannels; ++ch)
+                    scratch[ch][i] *= (float) g;
+            }
+        }
+
+        for (int ch = 0; ch < t.numChannels; ++ch)
+            juce::FloatVectorOperations::addWithMultiply (t.buffer.getWritePointer (ch, destOffset), scratch[ch], seg.gain, count);
+    }
+}
+
+void AudioEngine::writeTake (RecordTake& take, const BlockContext& ctx) noexcept
+{
+    const float* channels[2] = { silence.data(), silence.data() };
+    for (int ch = 0; ch < take.numChannels; ++ch)
+    {
+        const int source = take.inputChannel + ch;
+        if (source < ctx.numInputs && ctx.inputs[source] != nullptr)
+            channels[ch] = ctx.inputs[source] + ctx.inputOffset;
+    }
+
+    juce::int64 expected = -1;
+    take.startSample.compare_exchange_strong (expected, ctx.position);
+
+    if (! take.writer->write (channels, ctx.numSamples))
+        take.overflowed.store (true, std::memory_order_relaxed);
+    take.samplesWritten.fetch_add (ctx.numSamples, std::memory_order_relaxed);
+}
+
+void AudioEngine::mixTrackIntoBus (TrackRender& t, const BlockContext& ctx) noexcept
+{
+    auto& s = *t.state;
+    const int n = ctx.numSamples;
+    const double sr = sampleRate.load (std::memory_order_relaxed);
+    const bool rolling = ctx.state != Transport::State::stopped;
+
+    const bool silencedBySolo = ctx.anySolo && ! s.soloed.load (std::memory_order_relaxed);
+    const double muteTarget = (s.muted.load (std::memory_order_relaxed) || silencedBySolo) ? 0.0 : 1.0;
+    const double faderTarget = decibelsToGain (s.volumeDb.load (std::memory_order_relaxed));
+    const double pan = s.pan.load (std::memory_order_relaxed);
+    const auto panGains = t.numChannels == 1 ? dsp::monoPan (pan) : dsp::stereoBalance (pan);
+    const bool useAutomation = rolling && s.automationRead.load (std::memory_order_relaxed) && ! t.volumeAutomation.isEmpty();
+
+    if (! s.rampsInitialised)
+    {
+        s.faderRamp.reset (faderTarget);
+        s.muteRamp.reset (muteTarget);
+        s.panLeftRamp.reset (panGains.left);
+        s.panRightRamp.reset (panGains.right);
+        s.rampsInitialised = true;
+    }
+
+    s.muteRamp.setTarget (muteTarget, rampLength (muteRampSeconds, sr));
+    s.panLeftRamp.setTarget (panGains.left, rampLength (panRampSeconds, sr));
+    s.panRightRamp.setTarget (panGains.right, rampLength (panRampSeconds, sr));
+
+    if (useAutomation)
+    {
+        t.volumeAutomation.render (ctx.position, faderGains.data(), n);
+        s.faderRamp.reset (faderGains[(size_t) (n - 1)]); // leaving Read mode ramps from here
+    }
+    else
+    {
+        s.faderRamp.setTarget (faderTarget, rampLength (faderRampSeconds, sr));
+    }
+
+    const float* left = t.buffer.getReadPointer (0);
+    const float* right = t.numChannels > 1 ? t.buffer.getReadPointer (1) : left;
+    dsp::CompensatedChannel bus[2] = { { busSum[0].data(), busComp[0].data() },
+                                       { busSum[1].data(), busComp[1].data() } };
+
+    const bool steady = ! useAutomation && ! s.faderRamp.isRamping() && ! s.muteRamp.isRamping()
+                        && ! s.panLeftRamp.isRamping() && ! s.panRightRamp.isRamping();
+
+    if (steady)
+    {
+        const double gain = s.faderRamp.getCurrent() * s.muteRamp.getCurrent();
+        if (gain == 0.0)
+            return; // muted or fader off: nothing to add, meters read silence
+
+        const double gl = gain * s.panLeftRamp.getCurrent();
+        const double gr = gain * s.panRightRamp.getCurrent();
+        dsp::accumulateScaled (left, gl, bus[0], n);
+        dsp::accumulateScaled (right, gr, bus[1], n);
+
+        if (t.numChannels == 1)
+        {
+            const auto peak = (float) (dsp::peakMagnitude (left, n) * gain);
+            s.publishPeaks (peak, peak);
+        }
+        else
+        {
+            s.publishPeaks ((float) (dsp::peakMagnitude (left, n) * gl), (float) (dsp::peakMagnitude (right, n) * gr));
+        }
+        return;
+    }
+
+    // Something is moving: build per-sample coefficients.
+    if (! useAutomation)
+        s.faderRamp.render (faderGains.data(), n);
+    s.muteRamp.render (muteGains.data(), n);
+    dsp::multiplyInPlace (faderGains.data(), muteGains.data(), n); // faderGains = total pre-pan gain
+
+    s.panLeftRamp.render (panLeft.data(), n);
+    s.panRightRamp.render (panRight.data(), n);
+    std::copy (faderGains.begin(), faderGains.begin() + n, coefLeft.begin());
+    std::copy (faderGains.begin(), faderGains.begin() + n, coefRight.begin());
+    dsp::multiplyInPlace (coefLeft.data(), panLeft.data(), n);
+    dsp::multiplyInPlace (coefRight.data(), panRight.data(), n);
+
+    dsp::accumulateScaled (left, coefLeft.data(), bus[0], n);
+    dsp::accumulateScaled (right, coefRight.data(), bus[1], n);
+
+    if (t.numChannels == 1)
+    {
+        const auto peak = (float) dsp::peakMagnitudeScaled (left, faderGains.data(), n);
+        s.publishPeaks (peak, peak);
+    }
+    else
+    {
+        s.publishPeaks ((float) dsp::peakMagnitudeScaled (left, coefLeft.data(), n),
+                        (float) dsp::peakMagnitudeScaled (right, coefRight.data(), n));
+    }
+}
+
+} // namespace meridian
