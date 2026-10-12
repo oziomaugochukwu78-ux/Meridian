@@ -176,7 +176,7 @@ void ChannelStrip::populateInputs()
     inputSelector.clear (juce::dontSendNotification);
     if (track::isInstrument (trackNode))
     {
-        inputSelector.addItem ("synth", 1);
+        inputSelector.addItem (track::isDrumKit (trackNode) ? "drum machine" : "synth", 1);
         inputSelector.setSelectedId (1, juce::dontSendNotification);
         return;
     }

@@ -86,6 +86,7 @@ void TrackHeader::refresh()
     const bool aux = track::isAux (trackNode), instrument = track::isInstrument (trackNode);
     const int input = track::inputChannel (trackNode);
     const auto inputText = aux ? juce::String ("Aux Input")
+                           : track::isDrumKit (trackNode) ? juce::String ("Drums (built-in drum machine)")
                            : instrument ? juce::String ("Instrument (built-in synth)")
                            : input < 0 ? juce::String ("no input")
                            : track::channels (trackNode) == 2 ? "In " + juce::String (input + 1) + "-" + juce::String (input + 2)

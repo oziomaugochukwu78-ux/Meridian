@@ -379,20 +379,16 @@ void AudioEngine::renderSegments (TrackRender& t, const BlockContext& ctx) noexc
 void AudioEngine::renderInstrument (TrackRender& t, const BlockContext& ctx) noexcept
 {
     auto& inst = *t.instrument;
-    auto& synth = inst.synth;
 
     // prepare() and setParams() allocate nothing, so the audio thread applies them.
+    // Both engines are always prepared, so switching a track's engine is immediate.
     const double rate = activeGraph->sampleRate > 0.0 ? activeGraph->sampleRate : sampleRate.load (std::memory_order_relaxed);
     if (! juce::exactlyEqual (inst.preparedRate, rate))
     {
-        synth.prepare (rate);
+        inst.synth.prepare (rate);
+        inst.drums.prepare (rate);
         inst.preparedRate = rate;
         inst.appliedParamsVersion = 0;
-    }
-    if (inst.appliedParamsVersion != t.synthParamsVersion)
-    {
-        synth.setParams (t.synthParams);
-        inst.appliedParamsVersion = t.synthParamsVersion;
     }
 
     float* left = t.buffer.getWritePointer (0);
@@ -400,44 +396,59 @@ void AudioEngine::renderInstrument (TrackRender& t, const BlockContext& ctx) noe
     float* right = t.numChannels > 1 ? t.buffer.getWritePointer (1) : t.clipScratch.getWritePointer (1);
     const int n = ctx.numSamples;
 
-    if (ctx.state == Transport::State::stopped)
+    // The same playback logic drives either engine (they share an interface).
+    auto play = [&] (auto& engineObject, const auto& params)
     {
-        // Stopped: let sounding notes release naturally, start nothing new.
-        if (inst.nextPosition >= 0)
+        if (inst.appliedParamsVersion != t.synthParamsVersion)
         {
-            synth.allNotesOff();
-            inst.nextPosition = -1;
+            engineObject.setParams (params);
+            inst.appliedParamsVersion = t.synthParamsVersion;
         }
-        synth.render (left, right, n);
-        return;
-    }
 
-    // Started, or jumped (locate, loop): notes from before the jump must not hang.
-    if (inst.nextPosition != ctx.position)
-        synth.allNotesOff();
-
-    // Render between events, applying each on its exact sample.
-    const auto pos = ctx.position, end = pos + n;
-    auto it = std::lower_bound (t.events.begin(), t.events.end(), pos,
-                                [] (const MidiEvent& e, juce::int64 time) { return e.time < time; });
-    int done = 0;
-    for (; it != t.events.end() && it->time < end; ++it)
-    {
-        const int at = (int) (it->time - pos);
-        if (at > done)
+        if (ctx.state == Transport::State::stopped)
         {
-            synth.render (left + done, right + done, at - done);
-            done = at;
+            // Stopped: let sounding notes release naturally, start nothing new.
+            if (inst.nextPosition >= 0)
+            {
+                engineObject.allNotesOff();
+                inst.nextPosition = -1;
+            }
+            engineObject.render (left, right, n);
+            return;
         }
-        if (it->on)
-            synth.noteOn (it->pitch, it->velocity);
-        else
-            synth.noteOff (it->pitch);
-    }
-    if (done < n)
-        synth.render (left + done, right + done, n - done);
 
-    inst.nextPosition = end;
+        // Started, or jumped (locate, loop): notes from before the jump must not hang.
+        if (inst.nextPosition != ctx.position)
+            engineObject.allNotesOff();
+
+        // Render between events, applying each on its exact sample.
+        const auto pos = ctx.position, end = pos + n;
+        auto it = std::lower_bound (t.events.begin(), t.events.end(), pos,
+                                    [] (const MidiEvent& e, juce::int64 time) { return e.time < time; });
+        int done = 0;
+        for (; it != t.events.end() && it->time < end; ++it)
+        {
+            const int at = (int) (it->time - pos);
+            if (at > done)
+            {
+                engineObject.render (left + done, right + done, at - done);
+                done = at;
+            }
+            if (it->on)
+                engineObject.noteOn (it->pitch, it->velocity);
+            else
+                engineObject.noteOff (it->pitch);
+        }
+        if (done < n)
+            engineObject.render (left + done, right + done, n - done);
+
+        inst.nextPosition = end;
+    };
+
+    if (t.drumKit)
+        play (inst.drums, t.drumParams);
+    else
+        play (inst.synth, t.synthParams);
 }
 
 void AudioEngine::writeTake (RecordTake& take, const BlockContext& ctx) noexcept

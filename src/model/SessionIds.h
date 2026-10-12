@@ -29,8 +29,9 @@
           AUTOMATION
             LANE  parameter
               POINT  time value
-          SYNTH  waveform detune attack decay sustain release cutoff resonance filterEnv gainDb
-                 (instrument tracks only)
+          SYNTH  engine ("synth" or "drums") gainDb
+                 synth: waveform detune attack decay sustain release cutoff resonance filterEnv
+                 drums: tune decayScale tone        (instrument tracks only)
 
     MIDI clips are CLIP nodes with kind="midi" on instrument tracks. They have
     no file; start/length/offset are timeline samples as for audio clips, and
@@ -134,6 +135,10 @@ MERIDIAN_ID (release)
 MERIDIAN_ID (cutoff)
 MERIDIAN_ID (resonance)
 MERIDIAN_ID (filterEnv)
+MERIDIAN_ID (engine)        // "synth" (PolySynth) or "drums" (DrumSynth)
+MERIDIAN_ID (tune)          // drums: semitones
+MERIDIAN_ID (decayScale)    // drums
+MERIDIAN_ID (tone)          // drums: 0 dark .. 1 bright
 
 #undef MERIDIAN_ID
 } // namespace meridian::ids

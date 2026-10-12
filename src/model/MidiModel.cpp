@@ -94,4 +94,14 @@ synth::PolySynth::Params readSynthParams (const juce::ValueTree& s)
     return p;
 }
 
+synth::DrumSynth::Params readDrumParams (const juce::ValueTree& s)
+{
+    synth::DrumSynth::Params p; // setParams clamps
+    p.tuneSemitones = s.getProperty (ids::tune, p.tuneSemitones);
+    p.decayScale = s.getProperty (ids::decayScale, p.decayScale);
+    p.tone = s.getProperty (ids::tone, p.tone);
+    p.gainDb = s.getProperty (ids::gainDb, p.gainDb);
+    return p;
+}
+
 } // namespace meridian::midimodel

@@ -18,6 +18,7 @@ add_executable(meridian_core_tests
     remote/HandshakeTests.cpp
     remote/HashingTests.cpp
     remote/WebSocketReaderTests.cpp
+    synth/DrumSynthTests.cpp
     synth/PolySynthTests.cpp
 )
 

@@ -27,6 +27,8 @@ add_library(meridian_core STATIC
     midi/TempoMap.cpp
     midi/TempoMap.h
 
+    synth/DrumSynth.cpp
+    synth/DrumSynth.h
     synth/PolySynth.cpp
     synth/PolySynth.h
 

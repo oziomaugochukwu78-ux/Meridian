@@ -4,6 +4,7 @@
 
 #include <midi/NoteSequence.h>
 #include <midi/TempoMap.h>
+#include <synth/DrumSynth.h>
 #include <synth/PolySynth.h>
 
 namespace meridian::midimodel
@@ -23,6 +24,9 @@ void writeNotes (juce::ValueTree clip, const midi::NoteSequence&, juce::UndoMana
 
 /** An instrument track's SYNTH node as synth parameters (defaults for missing values). */
 synth::PolySynth::Params readSynthParams (const juce::ValueTree& synthNode);
+
+/** A drum track's SYNTH node as drum-machine parameters. */
+synth::DrumSynth::Params readDrumParams (const juce::ValueTree& synthNode);
 
 /** Waveform names as stored in the session: "sine", "saw", "square". */
 juce::String waveformName (synth::PolySynth::Waveform);

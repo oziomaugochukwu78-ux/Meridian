@@ -172,9 +172,9 @@ const std::vector<ToolInfo>& toolTable()
                     { "input", "integer", "Audio input channel, 1-based (0 = no input)" } }) },
         { "create_track", "Create tracks",
           "Create audio tracks (play and record audio), aux tracks (buses that receive sends, e.g. for a shared "
-          "reverb) or instrument tracks (play MIDI notes through Meridian's built-in synthesiser; add notes with "
-          "add_midi_clip and add_notes, shape the sound with set_synth).",
-          schema ({ { "kind", "string", "Track type", false, { "audio", "aux", "instrument" } },
+          "reverb), instrument tracks (play MIDI notes through Meridian's built-in synthesiser) or drum tracks (the "
+          "built-in drum machine). Add notes with add_midi_clip and add_notes; shape the sound with set_synth.",
+          schema ({ { "kind", "string", "Track type", false, { "audio", "aux", "instrument", "drums" } },
                     { "channels", "integer", "1 = mono, 2 = stereo (aux and instrument tracks are always stereo)" },
                     { "name", "string", "Name (numbered automatically if creating several)" },
                     { "count", "integer", "How many to create (default 1)" } }) },
@@ -251,7 +251,9 @@ const std::vector<ToolInfo>& toolTable()
         { "add_notes", "Add notes",
           "Write notes into a MIDI clip. Positions and lengths are in beats from the clip start; pitch is a MIDI "
           "note number (60 = middle C, 62 = D, 64 = E, 65 = F, 67 = G, 69 = A, 71 = B, 72 = the next C). "
-          "Notes outside the clip are kept but not heard until the clip is lengthened.",
+          "On drum tracks the pitch picks the drum (General MIDI): 36 kick, 37 side stick, 38 snare, 39 clap, "
+          "42 closed hi-hat, 44 pedal hi-hat, 46 open hi-hat, 41 low tom, 45 mid tom, 48 high tom, 49 crash, "
+          "51 ride, 56 cowbell. Notes outside the clip are kept but not heard until the clip is lengthened.",
           schema ({ { "track", "track", "Instrument track number or name", true },
                     { "clip", "track", "Clip number (from list_clips) or name", true },
                     { "notes", "notes", "Notes to add, e.g. [{\"pitch\": 60, \"start_beats\": 0, \"length_beats\": 1}]", true },
@@ -260,8 +262,13 @@ const std::vector<ToolInfo>& toolTable()
           schema ({ { "track", "track", "Instrument track number or name", true },
                     { "clip", "track", "Clip number (from list_clips) or name", true } }) },
         { "set_synth", "Shape an instrument's sound",
-          "Change an instrument track's built-in synthesiser. Only the given settings change.",
-          schema ({ { "track", "track", "Instrument track number or name", true },
+          "Change an instrument track's sound: the synthesiser's settings, or (engine \"drums\") the drum machine's "
+          "tune, decay and tone. Only the given settings change.",
+          schema ({ { "track", "track", "Instrument or drum track number or name", true },
+                    { "engine", "string", "synth (melodic) or drums (General MIDI drum kit)", false, { "synth", "drums" } },
+                    { "tune_semitones", "number", "Drums: pitch of every drum, -12 to +12 semitones" },
+                    { "decay_scale", "number", "Drums: tail length, 0.25 (tight) to 4 (long)" },
+                    { "tone", "number", "Drums: 0 (dark) to 1 (bright)" },
                     { "waveform", "string", "Oscillator: sine (pure, soft), saw (bright, rich), square (hollow)", false,
                       { "sine", "saw", "square" } },
                     { "detune_cents", "number", "Second oscillator detune, 0-50 cents (0 = single, thinner; 7 = gentle width)" },
@@ -565,10 +572,16 @@ juce::var RemoteTools::describeTrack (const juce::ValueTree& t, int number) cons
                                 { "inserts", inserts },
                                 { "clips", track::clips (t).getNumChildren() } });
 
-    if (track::isInstrument (t))
+    if (track::isDrumKit (t))
+    {
+        const auto d = midimodel::readDrumParams (track::synth (t));
+        set (result, "synth", makeObject ({ { "engine", "drums" }, { "tune_semitones", d.tuneSemitones },
+                                            { "decay_scale", d.decayScale }, { "tone", d.tone }, { "gain_db", d.gainDb } }));
+    }
+    else if (track::isInstrument (t))
     {
         const auto p = midimodel::readSynthParams (track::synth (t));
-        set (result, "synth", makeObject ({ { "waveform", midimodel::waveformName (p.waveform) },
+        set (result, "synth", makeObject ({ { "engine", "synth" }, { "waveform", midimodel::waveformName (p.waveform) },
                                             { "detune_cents", p.detuneCents }, { "attack", p.attack }, { "decay", p.decay },
                                             { "sustain", p.sustain }, { "release", p.release }, { "cutoff_hz", p.cutoffHz },
                                             { "resonance", p.resonance }, { "filter_env_octaves", p.filterEnvOctaves },
@@ -690,7 +703,7 @@ RemoteTools::Result RemoteTools::createTrack (const juce::var& args)
 {
     auto* session = app.getSession();
     const auto kindName = args["kind"].toString();
-    const bool aux = kindName == "aux", instrument = kindName == "instrument";
+    const bool aux = kindName == "aux", drums = kindName == "drums", instrument = kindName == "instrument" || drums;
     const int channels = aux || instrument ? 2 : juce::jlimit (1, 2, args.hasProperty ("channels") ? (int) args["channels"] : 1);
     const int count = juce::jlimit (1, 64, args.hasProperty ("count") ? (int) args["count"] : 1);
     const auto requested = args["name"].toString().trim();
@@ -700,8 +713,10 @@ RemoteTools::Result RemoteTools::createTrack (const juce::var& args)
     for (int i = 0; i < count; ++i)
     {
         juce::String name = requested.isNotEmpty() ? (count == 1 ? requested : requested + " " + juce::String (i + 1))
-                                                   : juce::String (aux ? "Aux " : instrument ? "Synth " : "Audio ") + juce::String (session->getNumTracks() + 1);
+                                                   : juce::String (aux ? "Aux " : drums ? "Drums " : instrument ? "Synth " : "Audio ")
+                                                         + juce::String (session->getNumTracks() + 1);
         auto t = session->addTrack (name, channels, um, aux ? Session::TrackKind::aux
+                                                        : drums ? Session::TrackKind::drums
                                                         : instrument ? Session::TrackKind::instrument : Session::TrackKind::audio);
         created.add (describeTrack (t, session->indexOfTrack (t) + 1));
     }
@@ -1208,6 +1223,11 @@ RemoteTools::Result RemoteTools::setSynth (const juce::var& args)
         if (args.hasProperty (argument))
             synthNode.setProperty (property, juce::jlimit (lo, hi, (double) args[argument]), um);
     };
+    if (args.hasProperty ("engine"))
+        synthNode.setProperty (ids::engine, args["engine"].toString() == "drums" ? "drums" : "synth", um);
+    setClamped ("tune_semitones", ids::tune, -12.0, 12.0);
+    setClamped ("decay_scale", ids::decayScale, 0.25, 4.0);
+    setClamped ("tone", ids::tone, 0.0, 1.0);
     if (args.hasProperty ("waveform"))
         synthNode.setProperty (ids::waveform, midimodel::waveformName (midimodel::waveformFromName (args["waveform"].toString())), um);
     setClamped ("detune_cents", ids::detune, 0.0, 50.0);

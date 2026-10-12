@@ -38,6 +38,8 @@ juce::String noteName (int pitch)
 //==============================================================================
 PianoRollComponent::PianoRollComponent (AppController& a, juce::ValueTree c) : app (a), clipNode (std::move (c))
 {
+    drumKit = track::isDrumKit (clip::owningTrack (clipNode));
+    keyboardWidth = drumKit ? 104 : 64;
     clipNode.addListener (this);
     setWantsKeyboardFocus (true);
 
@@ -189,9 +191,10 @@ void PianoRollComponent::scrollToNotes()
         low = std::min (low, (int) n[ids::pitch]);
         high = std::max (high, (int) n[ids::pitch]);
     }
-    const int centre = high >= low ? (low + high) / 2 : 60;
+    const int centre = high >= low ? (low + high) / 2 : drumKit ? 44 : 60; // drums: kick to cymbals
     const int visibleRows = std::max (12, (getHeight() > 0 ? gridArea().getHeight() : 420) / noteRowHeight);
-    topPitch = juce::jlimit (visibleRows - 1, 127, centre + visibleRows / 2);
+    topPitch = drumKit ? 60 // the whole General MIDI kit (35-59) from the top
+                       : juce::jlimit (visibleRows - 1, 127, centre + visibleRows / 2);
 }
 
 PianoRollComponent::Hit PianoRollComponent::hitTest (juce::Point<float> p) const
@@ -300,12 +303,23 @@ void PianoRollComponent::paint (juce::Graphics& g)
         g.drawRoundedRectangle (r, 2.0f, isSelected (n) ? 2.0f : 1.0f);
     }
 
-    // Keyboard.
+    // Keyboard: piano keys, or for drum tracks the drum each row plays.
     for (int pitch = topPitch; pitch >= 0; --pitch)
     {
         const float y = yForPitch (pitch);
         if (y > (float) getHeight())
             break;
+        if (drumKit)
+        {
+            const char* drum = synth::DrumSynth::nameForNote (pitch);
+            g.setColour (drum != nullptr ? theme::panelRaised : theme::well);
+            g.fillRect (0.0f, y, (float) keyboardWidth - 1.0f, (float) noteRowHeight - 1.0f);
+            g.setColour (drum != nullptr ? theme::text : theme::textDim.withAlpha (0.4f));
+            g.setFont (theme::font (10.0f, drum != nullptr));
+            g.drawText (drum != nullptr ? juce::String (drum) : juce::String (pitch), 4, (int) y, keyboardWidth - 8, noteRowHeight,
+                        juce::Justification::centredLeft);
+            continue;
+        }
         const bool black = isBlackKey (pitch);
         g.setColour (black ? juce::Colour (0xff202020) : juce::Colour (0xffe9e9e9));
         g.fillRect (0.0f, y, (float) keyboardWidth - (black ? 20.0f : 1.0f), (float) noteRowHeight - 1.0f);

@@ -1084,6 +1084,72 @@ void SelfTest::testInstruments()
 
     expect ("session with instruments stays valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
 
+    // Drum tracks: the built-in drum machine on the General MIDI map.
+    clearTracks();
+    auto beat = session->addTrack ("Beat", 2, nullptr, Session::TrackKind::drums);
+    auto beatClip = session->addMidiClip (beat, clipStart, 4 * 24000, "Beat", nullptr);
+    for (const auto& n : std::initializer_list<midi::Note> { { 36, 1.0f, 0, 480 }, { 38, 1.0f, 960, 480 }, { 42, 1.0f, 1920, 240 } })
+        midimodel::addNote (beatClip, n, nullptr);
+    r = bounce ("drums_basic", 0, clipStart + 4 * 24000);
+    audio = readAudio (r.file);
+    if (audio.getNumSamples() >= (int) (clipStart + 4 * 24000))
+    {
+        const float* x = audio.getReadPointer (0);
+        int onset = -1;
+        for (int i = 0; i < audio.getNumSamples() && onset < 0; ++i)
+            if (std::abs (x[i]) > 1.0e-3f)
+                onset = i;
+        expect ("drum hits land exactly on their timeline position (kick on the clip start)",
+                onset >= (int) clipStart && onset <= (int) clipStart + 2,
+                "first sound at sample " + juce::String (onset) + ", clip starts at " + juce::String (clipStart));
+        expectNear ("note 36 is a kick: tuned to 50 Hz after its pitch drop",
+                    dsp::estimateFrequency (x + clipStart + 7200, 9600, sampleRate), 50.0, 3.0, "Hz");
+
+        auto crossingsPerSecond = [&] (int from, int count)
+        {
+            int n = 0;
+            for (int i = from + 1; i < from + count; ++i)
+                n += (x[i - 1] < 0.0f) != (x[i] < 0.0f) ? 1 : 0;
+            return n * sampleRate / count;
+        };
+        const double snareZcr = crossingsPerSecond ((int) clipStart + 24000 + 240, 2160);
+        const double hatZcr = crossingsPerSecond ((int) clipStart + 48000 + 48, 1200);
+        expect ("note 38 is a snare and note 42 a hi-hat (noise content rises: snare > 2 k, hat > 8 k crossings/s)",
+                snareZcr > 2000.0 && hatZcr > 8000.0, "snare " + fmt (snareZcr, 0) + ", hat " + fmt (hatZcr, 0) + " crossings/s");
+    }
+
+    // The AI builds a beat through the tools.
+    clearTracks();
+    const auto drumTrack = call (R"({"name":"create_track","arguments":{"kind":"drums","name":"Groove"}})");
+    const auto drumClip = call (R"({"name":"add_midi_clip","arguments":{"track":"Groove","start_beat":0,"length_beats":4}})");
+    const auto drumNotes = call (R"({"name":"add_notes","arguments":{"track":"Groove","clip":1,"notes":[{"pitch":36,"start_beats":0,"length_beats":0.5},{"pitch":42,"start_beats":0.5,"length_beats":0.25},{"pitch":38,"start_beats":1,"length_beats":0.5},{"pitch":46,"start_beats":1.5,"length_beats":0.5},{"pitch":42,"start_beats":2,"length_beats":0.25}]}})");
+    const auto tuned = call (R"({"name":"set_synth","arguments":{"track":"Groove","tune_semitones":-2,"decay_scale":1.5,"tone":0.7}})");
+    expect ("AI tools: create a drum track, write a beat, tune the kit",
+            ok (drumTrack) && ok (drumClip) && ok (drumNotes) && ok (tuned)
+                && juce::JSON::toString (tuned, true).contains ("\"drums\""),
+            juce::JSON::toString (tuned, true).substring (0, 200));
+    r = bounce ("drums_ai_groove", 0, 4 * 24000);
+    expect ("the AI's beat is audible", r.ok && db (juce::jmax (r.left.peak, r.right.peak)) > -30.0,
+            "peak " + fmt (db (juce::jmax (r.left.peak, r.right.peak)), 1) + " dBFS");
+    expect ("session with drum tracks stays valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+
+    // Reference render: a two-bar groove on every drum of the kit.
+    clearTracks();
+    auto kit = session->addTrack ("Kit", 2, nullptr, Session::TrackKind::drums);
+    auto groove = session->addMidiClip (kit, 0, 8 * 24000, "groove", nullptr);
+    for (int step = 0; step < 16; ++step)
+    {
+        const int64_t at = step * 480;
+        midimodel::addNote (groove, { step % 4 == 2 ? 46 : 42, step % 2 == 0 ? 0.8f : 0.5f, at, 240 }, nullptr);
+        if (step % 8 == 0 || step == 11) midimodel::addNote (groove, { 36, 1.0f, at, 240 }, nullptr);
+        if (step % 8 == 4)               midimodel::addNote (groove, { 38, 0.9f, at, 240 }, nullptr);
+    }
+    for (const auto& n : std::initializer_list<midi::Note> { { 39, 0.8f, 7680, 240 }, { 37, 0.7f, 7920, 240 }, { 41, 0.9f, 8640, 240 },
+                                                             { 45, 0.9f, 9120, 240 }, { 48, 0.9f, 9600, 240 }, { 49, 0.9f, 11520, 240 },
+                                                             { 51, 0.7f, 12480, 240 }, { 56, 0.6f, 13440, 240 }, { 44, 0.6f, 14400, 240 } })
+        midimodel::addNote (groove, n, nullptr);
+    compareWithReference ("golden_mix_drums", bounce ("golden_mix_drums", 0, 8 * 24000 + 24000));
+
     // Reference render: the default instrument sound (detuned saws, filter
     // envelope, resonance) playing two chords and a bass note. Any change to
     // the synth's sound fails this null test.
@@ -1159,7 +1225,7 @@ juce::var junkValue (juce::Random& rng, const juce::Array<int>& someIds)
 {
     static const char* const pool[] = { "-1", "0", "1", "2", "5", "0.5", "nan", "inf", "-inf", "1e308", "-1e308", "1e999",
                                         "abc", "", ".", "..", "999999999999", "-999999999999", "aux", "audio", "read",
-                                        "instrument", "midi", "sine", "saw", "128", "60.5" };
+                                        "instrument", "midi", "sine", "saw", "128", "60.5", "drums", "synth" };
     if (rng.nextInt (5) == 0 && ! someIds.isEmpty())
         return someIds[rng.nextInt (someIds.size())];
     return juce::String (pool[rng.nextInt ((int) std::size (pool))]);
@@ -1175,7 +1241,8 @@ const juce::Identifier* randomSchemaProperty (juce::Random& rng)
         &ids::start, &ids::length, &ids::offset, &ids::sourceLength, &ids::gainDb, &ids::fadeIn, &ids::fadeOut,
         &ids::slot, &ids::description, &ids::bypass, &ids::parameter, &ids::time, &ids::value,
         &ids::tempo, &ids::pitch, &ids::velocity, &ids::waveform, &ids::detune, &ids::attack, &ids::decay,
-        &ids::sustain, &ids::release, &ids::cutoff, &ids::resonance, &ids::filterEnv
+        &ids::sustain, &ids::release, &ids::cutoff, &ids::resonance, &ids::filterEnv,
+        &ids::engine, &ids::tune, &ids::decayScale, &ids::tone
     };
     return properties[rng.nextInt ((int) std::size (properties))];
 }
@@ -1318,7 +1385,7 @@ void SelfTest::testDamagedSessions (const juce::File& originalSession)
            "<NOTE pitch=\"60\" velocity=\"nan\" start=\"480\" length=\"960\"/><BOGUS/></NOTES><NOTES/><JUNK/></CLIP>"
            "<CLIP id=\"22\" name=\"audio on instrument\" file=\"" << tonePath << "\" start=\"0\" length=\"100\" sourceLength=\"96000\"/>"
            "<CLIP id=\"24\" kind=\"strange\" name=\"odd kind\" start=\"0\" length=\"100\"/>"
-           "</CLIPS><SYNTH waveform=\"noise\" cutoff=\"nan\" release=\"-4\" gainDb=\"1e999\"/><SYNTH/></TRACK>"
+           "</CLIPS><SYNTH waveform=\"noise\" engine=\"orchestra\" tune=\"99\" decayScale=\"0\" tone=\"nan\" cutoff=\"nan\" release=\"-4\" gainDb=\"1e999\"/><SYNTH/></TRACK>"
            "</TRACKS></SESSION>";
     const auto hostileFolder = folder.getChildFile ("Hostile");
     hostileFolder.createDirectory();
@@ -1944,6 +2011,17 @@ void SelfTest::buildShowcaseSession()
         midimodel::addNote (synthClip, { 72 + (i % 3) * 4, 0.9f, i * 960, 480 }, nullptr);
     synth.setProperty (ids::volumeDb, -8.0, nullptr);
 
+    // A drum machine playing a simple groove (also exercises drums in live playback).
+    auto drumMachine = session->addTrack ("Drum Machine", 2, nullptr, Session::TrackKind::drums);
+    auto drumClip = session->addMidiClip (drumMachine, 0, 16 * 24000, "Groove", nullptr);
+    for (int step = 0; step < 32; ++step)
+    {
+        midimodel::addNote (drumClip, { 42, step % 2 == 0 ? 0.8f : 0.5f, step * 480, 240 }, nullptr);
+        if (step % 8 == 0 || step % 8 == 3) midimodel::addNote (drumClip, { 36, 1.0f, step * 480, 240 }, nullptr);
+        if (step % 8 == 4)                  midimodel::addNote (drumClip, { 38, 0.9f, step * 480, 240 }, nullptr);
+    }
+    drumMachine.setProperty (ids::volumeDb, -10.0, nullptr);
+
     vox.setProperty (ids::solo, false, nullptr);
     vox.setProperty (ids::pan, 0.25, nullptr);
     drums.setProperty (ids::mute, false, nullptr);
@@ -2363,6 +2441,14 @@ void SelfTest::captureScreens()
         snapshot (*pr, "07_piano_roll.png");
     else
         expect ("MIDI editor opens for the screenshot", false, {});
+
+    // On a drum track the rows are the kit's drums.
+    const auto drums = app.getSession()->getTracksNode().getChildWithProperty (ids::name, "Drum Machine");
+    main.getEditView().openPianoRoll (track::clips (drums).getChild (0));
+    if (auto* pr = main.getEditView().getPianoRoll())
+        snapshot (*pr, "08_drum_editor.png");
+    else
+        expect ("drum editor opens for the screenshot", false, {});
     main.getEditView().closePianoRoll();
 }
 

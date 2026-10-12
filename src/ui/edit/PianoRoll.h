@@ -88,7 +88,9 @@ private:
     juce::ValueTree clipNode;
 
     // View
-    static constexpr int keyboardWidth = 64, toolbarHeight = 36, rulerHeight = 20, noteRowHeight = 13;
+    static constexpr int toolbarHeight = 36, rulerHeight = 20, noteRowHeight = 13;
+    bool drumKit = false;          // rows are drums (General MIDI names) instead of piano keys
+    int keyboardWidth = 64;        // wider on drum tracks, for the drum names
     double pixelsPerTick = 0.08;   // 76.8 px per beat
     int64_t viewStartTick = 0;
     int topPitch = 84;             // pitch of the top row

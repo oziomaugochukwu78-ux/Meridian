@@ -205,7 +205,13 @@ private:
         const auto waveform = first.getProperty (ids::waveform, "saw").toString();
         if (waveform != "saw" && waveform != "square" && waveform != "sine")
             set (first, ids::waveform, "saw", where + " synth", "waveform");
+        const auto engine = first.getProperty (ids::engine, "synth").toString();
+        if (engine != "synth" && engine != "drums")
+            set (first, ids::engine, "synth", where + " synth", "engine");
         const auto synthWhere = where + " synth";
+        clampNumber (first, ids::tune, -12.0, 12.0, 0.0, synthWhere);
+        clampNumber (first, ids::decayScale, 0.25, 4.0, 1.0, synthWhere);
+        clampNumber (first, ids::tone, 0.0, 1.0, 0.5, synthWhere);
         clampNumber (first, ids::detune, 0.0, 50.0, 7.0, synthWhere);
         clampNumber (first, ids::attack, 0.0005, 10.0, 0.005, synthWhere);
         clampNumber (first, ids::decay, 0.001, 10.0, 0.25, synthWhere);
@@ -488,11 +494,15 @@ juce::String findSessionProblem (const Session& session)
             const auto wf = sy.getProperty (ids::waveform, "saw").toString();
             if (wf != "saw" && wf != "square" && wf != "sine")
                 return name + " synth waveform " + wf;
+            const auto engine = sy.getProperty (ids::engine, "synth").toString();
+            if (engine != "synth" && engine != "drums")
+                return name + " synth engine " + engine;
             for (const auto& [id, lo, hi] : { std::tuple { &ids::detune, 0.0, 50.0 }, { &ids::attack, 0.0005, 10.0 },
                                               { &ids::decay, 0.001, 10.0 }, { &ids::sustain, 0.0, 1.0 },
                                               { &ids::release, 0.001, 20.0 }, { &ids::cutoff, 20.0, 20000.0 },
                                               { &ids::resonance, 0.0, 1.0 }, { &ids::filterEnv, -8.0, 8.0 },
-                                              { &ids::gainDb, -60.0, 12.0 } })
+                                              { &ids::gainDb, -60.0, 12.0 }, { &ids::tune, -12.0, 12.0 },
+                                              { &ids::decayScale, 0.25, 4.0 }, { &ids::tone, 0.0, 1.0 } })
                 if (sy.hasProperty (*id) && ! finiteIn (sy[*id], lo, hi))
                     return name + " synth " + id->toString() + " " + sy[*id].toString();
         }

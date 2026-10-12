@@ -669,7 +669,9 @@ std::unique_ptr<RenderGraph> EngineBridge::buildGraph (double sampleRate, int ma
                 if (live == nullptr)
                     live = std::make_shared<InstrumentState>();
                 render.instrument = sharedStreams ? live : std::make_shared<InstrumentState>();
+                render.drumKit = track::isDrumKit (t);
                 render.synthParams = midimodel::readSynthParams (track::synth (t));
+                render.drumParams = midimodel::readDrumParams (track::synth (t));
                 render.synthParamsVersion = ++graphVersion;
                 buildMidiEvents (t, render);
             }
@@ -736,7 +738,8 @@ void EngineBridge::assignDelayCompensation (RenderGraph& graph, bool sharedDelay
     for (auto& t : graph.tracks)
     {
         // An instrument's own synth delays its output like a plug-in would.
-        int pluginLatency = t.instrument != nullptr ? synth::PolySynth::getLatencySamples() : 0;
+        int pluginLatency = t.instrument == nullptr ? 0
+                          : t.drumKit ? synth::DrumSynth::getLatencySamples() : synth::PolySynth::getLatencySamples();
         for (const auto& slot : t.inserts)
             if (! slot->bypassed.load())
                 pluginLatency += juce::jmax (0, slot->plugin->getLatencySamples());

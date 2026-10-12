@@ -158,8 +158,10 @@ juce::ValueTree Session::addTrack (const juce::String& name, int numChannels, ju
 {
     const int newId = allocateId();
     const bool aux = kind == TrackKind::aux;
-    const bool instrument = kind == TrackKind::instrument;
+    const bool drums = kind == TrackKind::drums;
+    const bool instrument = kind == TrackKind::instrument || drums;
     const auto colour = aux ? juce::Colour (0xff8f9aa6)          // aux tracks: neutral grey-blue
+                      : drums ? juce::Colour (0xffd07a3a)        // drum tracks: orange
                       : instrument ? juce::Colour (0xff3fbf9f)   // instrument tracks: teal
                                    : juce::Colour (trackPalette[(size_t) getNumTracks() % std::size (trackPalette)]);
 
@@ -184,8 +186,12 @@ juce::ValueTree Session::addTrack (const juce::String& name, int numChannels, ju
 
     if (instrument)
     {
-        // A soft, warm default: filtered saw with a gentle envelope.
+        // A soft, warm default: filtered saw with a gentle envelope (or the drum machine).
         juce::ValueTree synth (ids::SYNTH);
+        synth.setProperty (ids::engine, drums ? "drums" : "synth", nullptr);
+        synth.setProperty (ids::tune, 0.0, nullptr);
+        synth.setProperty (ids::decayScale, 1.0, nullptr);
+        synth.setProperty (ids::tone, 0.5, nullptr);
         synth.setProperty (ids::waveform, "saw", nullptr);
         synth.setProperty (ids::detune, 7.0, nullptr);
         synth.setProperty (ids::attack, 0.005, nullptr);
@@ -195,7 +201,7 @@ juce::ValueTree Session::addTrack (const juce::String& name, int numChannels, ju
         synth.setProperty (ids::cutoff, 1800.0, nullptr);
         synth.setProperty (ids::resonance, 0.15, nullptr);
         synth.setProperty (ids::filterEnv, 2.0, nullptr);
-        synth.setProperty (ids::gainDb, -12.0, nullptr);
+        synth.setProperty (ids::gainDb, drums ? -6.0 : -12.0, nullptr);
         t.appendChild (synth, nullptr);
     }
 

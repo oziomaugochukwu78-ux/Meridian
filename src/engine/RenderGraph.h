@@ -5,6 +5,7 @@
 
 #include <dsp/AutomationCurve.h>
 #include <dsp/DelayLine.h>
+#include <synth/DrumSynth.h>
 #include <synth/PolySynth.h>
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -97,6 +98,7 @@ struct MidiEvent
 struct InstrumentState
 {
     synth::PolySynth synth;
+    synth::DrumSynth drums;        // used instead of `synth` on drum tracks
     double preparedRate = 0.0;
     uint64_t appliedParamsVersion = 0;
     juce::int64 nextPosition = -1; ///< where playback continues if nothing jumps; -1 = not rolling
@@ -138,7 +140,9 @@ struct TrackRender
     // event sorted by time (note-offs before note-ons at the same sample, so a
     // repeated note retriggers cleanly).
     std::shared_ptr<InstrumentState> instrument;
+    bool drumKit = false;                          ///< play `drums` instead of `synth`
     synth::PolySynth::Params synthParams;
+    synth::DrumSynth::Params drumParams;
     uint64_t synthParamsVersion = 0;
     std::vector<MidiEvent> events;
 
