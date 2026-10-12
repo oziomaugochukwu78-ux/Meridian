@@ -62,8 +62,8 @@ What a home producer, songwriter or podcaster needs.
 - done: click with a count-in
 
 **MIDI and instruments**
-- VST3 instrument hosting and MIDI input recording
-- a piano-roll editor, quantise, and velocity editing
+- done: MIDI input recording (keyboard, live play-through, latency compensated); still to do: VST3 instrument hosting, sustain pedal
+- done: a piano-roll editor, quantise, and velocity editing
 - sample-accurate MIDI timing
 
 Acceptance: MIDI timing jitter of zero samples in offline renders, and at most one buffer live.

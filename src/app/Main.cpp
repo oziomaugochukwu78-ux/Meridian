@@ -102,6 +102,8 @@ public:
             return;
         }
 
+        controller->enableMidiInputs(); // a normal session: MIDI keyboards play and record
+
         // A session file passed on the command line (e.g. double-clicked) opens
         // directly; otherwise show the Dashboard, as a console DAW does.
         const auto argument = commandLine.trim().unquoted(); // trim first: Windows passes a leading space

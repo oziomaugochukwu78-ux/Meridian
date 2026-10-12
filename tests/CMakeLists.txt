@@ -13,6 +13,7 @@ add_executable(meridian_core_tests
     dsp/PanLawTests.cpp
     dsp/SaturationCurveTests.cpp
     dsp/SignalAnalysisTests.cpp
+    midi/MidiRecordingTests.cpp
     midi/NoteSequenceTests.cpp
     midi/TempoMapTests.cpp
     remote/CommandDispatcherTests.cpp

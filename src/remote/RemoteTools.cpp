@@ -188,7 +188,7 @@ const std::vector<ToolInfo>& toolTable()
                     { "pan", "number", "-1 (left) to +1 (right); 0 is centre" },
                     { "mute", "boolean", "Mute" },
                     { "solo", "boolean", "Solo" },
-                    { "record_arm", "boolean", "Record-enable (audio tracks)" },
+                    { "record_arm", "boolean", "Record-enable: audio tracks record their input, instrument tracks record MIDI from the keyboard (and play it live)" },
                     { "input", "integer", "Audio input channel, 1-based (0 = no input)" } }) },
         { "create_track", "Create tracks",
           "Create audio tracks (play and record audio), aux tracks (buses that receive sends, e.g. for a shared "
@@ -807,9 +807,8 @@ RemoteTools::Result RemoteTools::setTrack (const juce::var& args)
     if (args.hasProperty ("solo"))       t.setProperty (ids::solo, (bool) args["solo"], um);
     if (args.hasProperty ("record_arm"))
     {
-        if (! track::isAudio (t) && (bool) args["record_arm"])
-            return { false, {}, track::isAux (t) ? "Aux tracks cannot record."
-                                                 : "Instrument tracks cannot record audio (MIDI recording is not available yet)." };
+        if (track::isAux (t) && (bool) args["record_arm"])
+            return { false, {}, "Aux tracks cannot record." };
         t.setProperty (ids::recordArm, (bool) args["record_arm"], um);
     }
     if (args.hasProperty ("input"))

@@ -9,6 +9,7 @@
 
 #include <juce_audio_devices/juce_audio_devices.h>
 
+#include <array>
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -75,6 +76,32 @@ public:
     std::atomic<double> clickBpm { 120.0 };
     std::atomic<int> clickBeatsPerBar { 4 };
     std::atomic<double> clickLevelDb { -6.0 };
+
+    //==============================================================================
+    // Live MIDI input (a MIDI keyboard)
+
+    /** Any thread (MIDI device callbacks). timeSeconds is
+        juce::Time::getMillisecondCounterHiRes() / 1000 when the message
+        arrived. Record-armed instrument tracks play it; while recording it is
+        also captured. Each note sounds one block after it arrived, at its
+        exact relative position (constant latency, no jitter). */
+    void pushLiveMidi (int pitch, float velocity, bool noteOn, double timeSeconds) noexcept;
+
+    /** A note captured on a record-armed instrument track while recording, at
+        the timeline sample where it was played into the engine. */
+    struct RecordedMidi
+    {
+        int trackId = 0;
+        juce::int64 time = 0;
+        int pitch = 60;
+        float velocity = 0.0f;
+        bool on = false;
+    };
+
+    /** Message thread: the next captured note, if any. */
+    bool popRecordedMidi (RecordedMidi& out) noexcept { return recordedMidi.pop (out); }
+    /** Captured notes lost because the message thread fell behind (should stay 0). */
+    int collectRecordedMidiOverflows() noexcept { return recordedMidiOverflows.exchange (0); }
 
     /** UI: peaks of the master output since the last call. */
     std::pair<float, float> collectMasterPeaks() noexcept;
@@ -164,6 +191,17 @@ private:
     // Audio-thread scratch, sized in audioDeviceAboutToStart.
     std::vector<double> busSum[2], busComp[2], masterOut[2];
     std::vector<double> faderGains, muteGains, totalGains, sendGains, panLeft, panRight, coefLeft, coefRight, busScratch;
+    void drainLiveMidi (int numSamples) noexcept;
+
+    struct LiveNote { int pitch = 60; float velocity = 0.0f; bool on = false; double time = 0.0; };
+    struct BlockNote { int offset = 0; int pitch = 60; float velocity = 0.0f; bool on = false; };
+    juce::SpinLock liveMidiProducers;              // serialises MIDI device threads; never the audio thread
+    SpscQueue<LiveNote, 1024> liveMidiIn;          // MIDI threads -> audio thread
+    std::array<BlockNote, 256> blockNotes {};      // this block's live notes, offsets within the block
+    int numBlockNotes = 0;
+    SpscQueue<RecordedMidi, 8192> recordedMidi;    // audio thread -> message thread
+    std::atomic<int> recordedMidiOverflows { 0 };
+
     std::vector<float> silence, clickScratch;
     dsp::Metronome metronome;
     dsp::Metronome::Params appliedClick;

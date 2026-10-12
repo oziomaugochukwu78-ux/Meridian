@@ -4,6 +4,8 @@
 #include "DiskStreamer.h"
 
 #include "model/Session.h"
+
+#include <midi/MidiRecording.h>
 #include "plugins/PluginHost.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -57,12 +59,17 @@ public:
 
     // Recording --------------------------------------------------------------------
     /** hardwareLatency: the device's input + output latency in samples, used
-        (with the engine's own latency) to place takes where they were played. */
-    /** countInSamples > 0: the click counts in for that long before recording starts. */
-    juce::Result startRecording (int hardwareLatency, juce::int64 countInSamples = 0);
+        (with the engine's own latency) to place audio takes where they were
+        played; outputLatency alone places MIDI takes (a keyboard has no input
+        latency, only what the player hears is late). countInSamples > 0: the
+        click counts in for that long before recording starts.
+        Record-armed audio tracks record their input; record-armed instrument
+        tracks record MIDI from the keyboard into a new MIDI clip. */
+    juce::Result startRecording (int hardwareLatency, juce::int64 countInSamples = 0, int outputLatency = 0);
     void stopRecording();
-    bool isRecording() const noexcept { return ! activeTakes.empty(); }
+    bool isRecording() const noexcept { return ! activeTakes.empty() || ! midiTakeTracks.empty(); }
     juce::int64 getLastRecordingCompensation() const noexcept { return lastRecordingCompensation; }
+    juce::int64 getLastMidiCompensation() const noexcept { return midiCompensation; }
 
     // Plug-in delay compensation --------------------------------------------------------
     void setDelayCompensationEnabled (bool enabled);
@@ -149,6 +156,14 @@ private:
 
     std::map<int, std::shared_ptr<RecordTake>> activeTakes;
     std::vector<std::shared_ptr<RecordTake>> takesToFinalise;
+
+    // MIDI takes: the armed instrument tracks, and what the engine captured for them.
+    void drainRecordedMidi();
+    void finaliseMidiTakes (juce::int64 recordEnd);
+    std::vector<int> midiTakeTracks;
+    std::map<int, std::vector<midi::RecordedEvent>> capturedMidi;
+    juce::int64 midiRecordStart = 0;
+    juce::int64 midiCompensation = 0;
     juce::TimeSliceThread recordWriterThread { "Record Writer" };
 
     juce::CriticalSection pluginLock; // plugin (re)preparation vs. device restarts

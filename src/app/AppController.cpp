@@ -80,6 +80,8 @@ AppController::~AppController()
 
     remoteServer.stop();
     jobs.removeAllJobs (true, 10000);
+    if (midiInputsEnabled)
+        deviceManager.removeMidiInputDeviceCallback ({}, this);
 
     deviceManager.removeChangeListener (this);
     deviceManager.removeAudioCallback (&engine);
@@ -463,10 +465,53 @@ void AppController::togglePlay()
 
 juce::Result AppController::transportRecord()
 {
-    int hardwareLatency = 0;
+    int hardwareLatency = 0, outputLatency = 0;
     if (auto* device = deviceManager.getCurrentAudioDevice())
-        hardwareLatency = device->getInputLatencyInSamples() + device->getOutputLatencyInSamples();
-    return bridge->startRecording (hardwareLatency, getCountInSamples());
+    {
+        outputLatency = device->getOutputLatencyInSamples();
+        hardwareLatency = device->getInputLatencyInSamples() + outputLatency;
+    }
+    return bridge->startRecording (hardwareLatency, getCountInSamples(), outputLatency);
+}
+
+//==============================================================================
+// MIDI input
+
+void AppController::enableMidiInputs()
+{
+    if (midiInputsEnabled)
+        return;
+    midiInputsEnabled = true;
+    deviceManager.addMidiInputDeviceCallback ({}, this); // every enabled input
+    openAllMidiInputs();
+    // A keyboard plugged in later is opened too.
+    midiDeviceListConnection = juce::MidiDeviceListConnection::make ([this] { openAllMidiInputs(); });
+}
+
+void AppController::openAllMidiInputs()
+{
+    for (const auto& device : juce::MidiInput::getAvailableDevices())
+        if (! deviceManager.isMidiInputDeviceEnabled (device.identifier))
+            deviceManager.setMidiInputDeviceEnabled (device.identifier, true);
+}
+
+juce::StringArray AppController::getOpenMidiInputs() const
+{
+    juce::StringArray names;
+    for (const auto& device : juce::MidiInput::getAvailableDevices())
+        if (deviceManager.isMidiInputDeviceEnabled (device.identifier))
+            names.add (device.name);
+    return names;
+}
+
+void AppController::handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& message)
+{
+    // MIDI device thread. Note on/off only for now (no sustain pedal or controllers yet).
+    // JUCE stamps incoming messages in Time::getMillisecondCounter() seconds.
+    if (message.isNoteOn())
+        engine.pushLiveMidi (message.getNoteNumber(), message.getFloatVelocity(), true, message.getTimeStamp());
+    else if (message.isNoteOff())
+        engine.pushLiveMidi (message.getNoteNumber(), 0.0f, false, message.getTimeStamp());
 }
 
 void AppController::returnToZero()

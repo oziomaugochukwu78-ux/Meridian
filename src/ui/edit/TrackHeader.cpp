@@ -94,7 +94,7 @@ void TrackHeader::refresh()
     infoLabel.setText ("vol " + formatDb (track::volumeDb (trackNode)) + "   " + inputText
                            + (aux || instrument ? juce::String() : track::channels (trackNode) == 2 ? "   stereo" : "   mono"),
                        juce::dontSendNotification);
-    recordButton.setVisible (track::isAudio (trackNode)); // buses and instruments have no audio to record
+    recordButton.setVisible (! track::isAux (trackNode)); // instruments record MIDI from the keyboard; buses record nothing
 
     meter.setNumChannels (track::channels (trackNode));
     repaint();

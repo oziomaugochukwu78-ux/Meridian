@@ -73,6 +73,7 @@ void SelfTest::start()
         testInstruments();
         testBuiltinEffects();
         testLoopClickMarkers();
+        testMidiInput();
         testStress();
         testRobustness(); // before the remote tests: their BOUNCE runs in the background
         testMcpTools();
@@ -1530,6 +1531,154 @@ void SelfTest::testLoopClickMarkers()
             saved.wasOk() && reloaded != nullptr && reloaded->getMarkers().size() == 2 && findSessionProblem (*reloaded).isEmpty(), error);
     for (const auto& m : session->getMarkers())
         session->removeMarker (m, nullptr);
+}
+
+//==============================================================================
+// MIDI keyboard: live play on armed instrument tracks, capture while recording.
+
+void SelfTest::testMidiInput()
+{
+    beginGroup ("MIDI keyboard (live play, recording)");
+
+    // A bare engine with one armed instrument track built by hand: what the
+    // keyboard does is the only thing in the output.
+    AudioEngine engine;
+    engine.prepare (48000.0, 512);
+    engine.getMasterBus().consoleEnabled.store (false);
+    auto state = std::make_shared<TrackRealtimeState> (7);
+    state->recordArmed.store (true);
+    {
+        auto graph = std::make_unique<RenderGraph>();
+        graph->maxBlockSize = 512;
+        graph->sampleRate = 48000.0;
+        TrackRender t;
+        t.state = state;
+        t.numChannels = 2;
+        t.inputChannel = -1;
+        t.instrument = std::make_shared<InstrumentState>();
+        t.buffer.setSize (2, 512);
+        t.clipScratch.setSize (2, 512);
+        graph->tracks.push_back (std::move (t));
+        engine.publishGraph (std::move (graph));
+    }
+    auto firstSound = [] (const std::vector<float>& x)
+    {
+        for (int i = 0; i < (int) x.size(); ++i)
+            if (! juce::exactlyEqual (x[(size_t) i], 0.0f))
+                return i;
+        return -1;
+    };
+
+    auto x = renderEngine (engine, 2048, 512);
+    expect ("armed instrument track is silent until a key is played", firstSound (x) < 0, {});
+
+    engine.pushLiveMidi (69, 1.0f, true, 0.0); // arrived long ago: plays at the start of the next block
+    x = renderEngine (engine, 512, 512);
+    const int atBlockStart = firstSound (x); // the synth's own latency (2x oversampling filter) after sample 0
+    expect ("a key played while stopped sounds at the start of the next block (plus the synth's latency)",
+            atBlockStart >= 0 && atBlockStart <= synth::PolySynth::getLatencySamples() + 2,
+            "first sound at sample " + juce::String (atBlockStart));
+    engine.pushLiveMidi (69, 0.0f, false, 0.0);
+    renderEngine (engine, 48000, 512); // let the release finish
+
+    // Timing within a block: a note that arrived halfway through the previous
+    // block's time lands halfway through this one (constant one-block latency).
+    const double blockSeconds = 512.0 / 48000.0;
+    // Keys played a quarter, a half and three quarters of a block apart must sound
+    // exactly that far apart (128 samples each): constant latency, no jitter.
+    juce::StringArray placed;
+    std::vector<int> onsets;
+    for (const double fraction : { 0.25, 0.5, 0.75 })
+    {
+        engine.pushLiveMidi (72, 1.0f, true, juce::Time::getMillisecondCounterHiRes() * 0.001 - blockSeconds * (1.0 - fraction));
+        x = renderEngine (engine, 512, 512);
+        onsets.push_back (firstSound (x));
+        placed.add (juce::String (onsets.back()));
+        engine.pushLiveMidi (72, 0.0f, false, 0.0);
+        renderEngine (engine, 48000, 512);
+    }
+    expect ("keys keep their spacing within a block (no jitter): 1/4, 1/2, 3/4 of a block -> 128 samples apart",
+            onsets[0] > 0 && std::abs (onsets[1] - onsets[0] - 128) <= 3 && std::abs (onsets[2] - onsets[1] - 128) <= 3,
+            "first sound at samples " + placed.joinIntoString (", "));
+
+    state->recordArmed.store (false);
+    engine.pushLiveMidi (60, 1.0f, true, 0.0);
+    x = renderEngine (engine, 1024, 512);
+    expect ("a track that is not armed ignores the keyboard", firstSound (x) < 0, {});
+    engine.pushLiveMidi (60, 0.0f, false, 0.0);
+    renderEngine (engine, 512, 512); // consumed here, not by the recording below
+    state->recordArmed.store (true);
+
+    // Recording: notes are captured at the timeline sample they were played into.
+    auto& transport = engine.getTransport();
+    transport.locate (10000);
+    transport.play (Transport::State::recording);
+    renderEngine (engine, 1024, 512);                  // playhead now 11024
+    engine.pushLiveMidi (64, 0.75f, true, 0.0);
+    renderEngine (engine, 512, 512);                    // captured at 11024
+    renderEngine (engine, 1024, 512);
+    engine.pushLiveMidi (64, 0.0f, false, 0.0);
+    renderEngine (engine, 512, 512);                    // captured at 12560
+    transport.stop();
+
+    std::vector<AudioEngine::RecordedMidi> captured;
+    AudioEngine::RecordedMidi m;
+    while (engine.popRecordedMidi (m))
+        captured.push_back (m);
+    expect ("recording captures each key at its exact timeline sample, for the right track",
+            captured.size() == 2 && captured[0].trackId == 7 && captured[0].time == 11024 && captured[0].on && captured[0].pitch == 64
+                && std::abs (captured[0].velocity - 0.75f) < 1.0e-6f && captured[1].time == 12560 && ! captured[1].on,
+            juce::String ((int) captured.size()) + " events" + (captured.empty() ? juce::String() : ", first at " + juce::String (captured[0].time)));
+
+    engine.pushLiveMidi (65, 1.0f, true, 0.0);
+    renderEngine (engine, 512, 512);
+    expect ("nothing is captured while not recording", ! engine.popRecordedMidi (m), {});
+    engine.pushLiveMidi (65, 0.0f, false, 0.0);
+
+    // End to end in the application: arm, record, play keys, stop -> a MIDI clip.
+    if (! app.getEngine().isDeviceRunning())
+    {
+        skip ("record from the keyboard into a MIDI clip (whole application)", "needs a running audio device");
+        return;
+    }
+    clearTracks();
+    auto* session = app.getSession();
+    auto keys = session->addTrack ("Keys", 2, nullptr, Session::TrackKind::instrument);
+    keys.setProperty (ids::recordArm, true, nullptr);
+    app.locate (0);
+    juce::Thread::sleep (50);
+    const auto started = app.transportRecord();
+    juce::Thread::sleep (200);
+    for (const int pitch : { 60, 64, 67 })
+    {
+        app.getEngine().pushLiveMidi (pitch, 0.8f, true, juce::Time::getMillisecondCounterHiRes() * 0.001);
+        juce::Thread::sleep (150);
+        app.getEngine().pushLiveMidi (pitch, 0.0f, false, juce::Time::getMillisecondCounterHiRes() * 0.001);
+        juce::Thread::sleep (50);
+    }
+    app.transportStop();
+    const auto clips = track::clips (keys);
+    const auto notes = clips.getNumChildren() == 1 ? midimodel::readNotes (clips.getChild (0)) : midi::NoteSequence();
+    juce::String detail;
+    for (const auto& n : notes.getNotes())
+        detail << n.pitch << "@" << n.start << "+" << n.length << " ";
+    expect ("recording an armed instrument track makes a MIDI clip with the notes played, in order",
+            started.wasOk() && notes.size() == 3 && notes.getNotes()[0].pitch == 60 && notes.getNotes()[1].pitch == 64
+                && notes.getNotes()[2].pitch == 67,
+            started.getErrorMessage() + detail);
+    // Each key was held 150 ms and keys were 200 ms apart (at 120 BPM, 960 ticks = 500 ms).
+    // Wall-clock sleeps are not exact, so these are checked to within 30 ms (58 ticks).
+    bool spacing = notes.size() == 3;
+    for (size_t i = 0; spacing && i < 3; ++i)
+    {
+        spacing = spacing && std::abs ((double) notes.getNotes()[i].length - 288.0) < 58.0;
+        if (i > 0)
+            spacing = spacing && std::abs ((double) (notes.getNotes()[i].start - notes.getNotes()[i - 1].start) - 384.0) < 58.0;
+    }
+    expect ("recorded notes keep their lengths (150 ms) and spacing (200 ms)", spacing, detail);
+    expect ("the take is one undo step", session->getUndoManager().getUndoDescription() == "Record MIDI",
+            session->getUndoManager().getUndoDescription());
+    clearTracks();
 }
 
 //==============================================================================

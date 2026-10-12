@@ -1,0 +1,63 @@
+#include "MidiRecording.h"
+
+#include <algorithm>
+#include <array>
+
+namespace meridian::midi
+{
+
+RecordedTake buildTake (std::vector<RecordedEvent> events, int64_t recordStart, int64_t recordEnd,
+                        int64_t compensation, const TempoMap& tempo, double sampleRate)
+{
+    RecordedTake take;
+    take.clipStart = std::max<int64_t> (0, recordStart - compensation);
+    const auto clipEnd = std::max (take.clipStart + 1, recordEnd - compensation);
+    take.clipLength = clipEnd - take.clipStart;
+
+    std::stable_sort (events.begin(), events.end(), [] (const RecordedEvent& a, const RecordedEvent& b) { return a.time < b.time; });
+
+    // Ticks from the clip start, measured through the tempo map from the session
+    // start, so the conversion stays right once the tempo can change.
+    const auto originTicks = tempo.samplesToTicks (take.clipStart, sampleRate);
+    auto ticksAt = [&] (int64_t time) { return tempo.samplesToTicks (time, sampleRate) - originTicks; };
+
+    struct Held { int64_t since = -1; float velocity = 0.0f; };
+    std::array<Held, 128> held {};
+
+    auto close = [&] (int pitch, int64_t at)
+    {
+        auto& h = held[(size_t) pitch];
+        if (h.since < 0)
+            return;
+        const auto start = ticksAt (h.since);
+        take.notes.push_back ({ pitch, h.velocity, start, std::max<int64_t> (1, ticksAt (at) - start) });
+        h.since = -1;
+    };
+
+    for (const auto& e : events)
+    {
+        if (e.pitch < 0 || e.pitch > 127)
+            continue;
+        const auto at = std::clamp (e.time - compensation, take.clipStart, clipEnd);
+        if (e.on && e.velocity > 0.0f)
+        {
+            close (e.pitch, at); // retriggered without a note-off
+            held[(size_t) e.pitch] = { at, std::clamp (e.velocity, 0.0f, 1.0f) };
+        }
+        else
+        {
+            close (e.pitch, at);
+        }
+    }
+
+    for (int pitch = 0; pitch < 128; ++pitch)
+        close (pitch, clipEnd); // still held when recording stopped
+
+    std::sort (take.notes.begin(), take.notes.end(), [] (const Note& a, const Note& b)
+    {
+        return a.start != b.start ? a.start < b.start : a.pitch < b.pitch;
+    });
+    return take;
+}
+
+} // namespace meridian::midi

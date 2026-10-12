@@ -164,10 +164,37 @@ void AudioEngine::renderOffline (float* const* outputs, int numOutputs, int numS
     renderBlock (nullptr, 0, outputs, numOutputs, numSamples);
 }
 
+void AudioEngine::pushLiveMidi (int pitch, float velocity, bool noteOn, double timeSeconds) noexcept
+{
+    if (pitch < 0 || pitch > 127)
+        return;
+    const juce::SpinLock::ScopedLockType producers (liveMidiProducers); // only MIDI threads ever wait here
+    liveMidiIn.push ({ pitch, juce::jlimit (0.0f, 1.0f, velocity), noteOn && velocity > 0.0f, timeSeconds });
+}
+
+void AudioEngine::drainLiveMidi (int numSamples) noexcept
+{
+    // A note that arrived during the previous block's time is placed at the same
+    // point within this block: everything is one block late, evenly, never jittered.
+    const double rate = sampleRate.load (std::memory_order_relaxed);
+    const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    const double windowStart = now - numSamples / rate;
+
+    numBlockNotes = 0;
+    LiveNote note;
+    while (numBlockNotes < (int) blockNotes.size() && liveMidiIn.pop (note))
+    {
+        const auto offset = (int) juce::jlimit (0.0, (double) (numSamples - 1), std::floor ((note.time - windowStart) * rate));
+        blockNotes[(size_t) numBlockNotes++] = { offset, note.pitch, note.velocity, note.on };
+    }
+    // Arrival order is time order; offsets are clamped, so they stay non-decreasing.
+}
+
 void AudioEngine::renderBlock (const float* const* inputs, int numInputs,
                                float* const* outputs, int numOutputs, int numSamples) noexcept
 {
     adoptPendingGraph();
+    drainLiveMidi (numSamples);
 
     int chunkLimit = (int) masterOut[0].size();
     if (activeGraph != nullptr && activeGraph->maxBlockSize > 0)
@@ -465,44 +492,73 @@ void AudioEngine::renderInstrument (TrackRender& t, const BlockContext& ctx) noe
             inst.appliedParamsVersion = t.synthParamsVersion;
         }
 
-        if (ctx.state == Transport::State::stopped)
+        const bool rolling = ctx.state != Transport::State::stopped;
+        if (! rolling)
         {
-            // Stopped: let sounding notes release naturally, start nothing new.
+            // Stopped: let the clip's sounding notes release naturally, start no new ones.
             if (inst.nextPosition >= 0)
             {
                 engineObject.allNotesOff();
                 inst.nextPosition = -1;
             }
-            engineObject.render (left, right, n);
-            return;
+        }
+        else if (inst.nextPosition != ctx.position)
+        {
+            // Started, or jumped (locate, loop): notes from before the jump must not hang.
+            engineObject.allNotesOff();
         }
 
-        // Started, or jumped (locate, loop): notes from before the jump must not hang.
-        if (inst.nextPosition != ctx.position)
-            engineObject.allNotesOff();
-
-        // Render between events, applying each on its exact sample.
+        // Clip events (while rolling) and live notes (record-armed tracks), merged
+        // in time; the synth renders between them, so each acts on its exact sample.
         const auto pos = ctx.position, end = pos + n;
-        auto it = std::lower_bound (t.events.begin(), t.events.end(), pos,
-                                    [] (const MidiEvent& e, juce::int64 time) { return e.time < time; });
+        auto it = rolling ? std::lower_bound (t.events.begin(), t.events.end(), pos,
+                                              [] (const MidiEvent& e, juce::int64 time) { return e.time < time; })
+                          : t.events.end();
+        const bool live = t.state->recordArmed.load (std::memory_order_relaxed);
+        const bool capture = live && ctx.state == Transport::State::recording;
+        int liveIndex = 0;
+        while (live && liveIndex < numBlockNotes && blockNotes[(size_t) liveIndex].offset < ctx.inputOffset)
+            ++liveIndex;
+
         int done = 0;
-        for (; it != t.events.end() && it->time < end; ++it)
+        for (;;)
         {
-            const int at = (int) (it->time - pos);
+            const int clipAt = it != t.events.end() && it->time < end ? (int) (it->time - pos) : n;
+            const int liveAt = live && liveIndex < numBlockNotes && blockNotes[(size_t) liveIndex].offset < ctx.inputOffset + n
+                                   ? blockNotes[(size_t) liveIndex].offset - ctx.inputOffset
+                                   : n;
+            const int at = std::min (clipAt, liveAt);
+            if (at >= n)
+                break;
             if (at > done)
             {
                 engineObject.render (left + done, right + done, at - done);
                 done = at;
             }
-            if (it->on)
-                engineObject.noteOn (it->pitch, it->velocity);
+
+            if (clipAt <= liveAt)
+            {
+                if (it->on)
+                    engineObject.noteOn (it->pitch, it->velocity);
+                else
+                    engineObject.noteOff (it->pitch);
+                ++it;
+            }
             else
-                engineObject.noteOff (it->pitch);
+            {
+                const auto& note = blockNotes[(size_t) liveIndex++];
+                if (note.on)
+                    engineObject.noteOn (note.pitch, note.velocity);
+                else
+                    engineObject.noteOff (note.pitch);
+                if (capture && ! recordedMidi.push ({ t.state->trackId, pos + at, note.pitch, note.velocity, note.on }))
+                    recordedMidiOverflows.fetch_add (1, std::memory_order_relaxed);
+            }
         }
         if (done < n)
             engineObject.render (left + done, right + done, n - done);
 
-        inst.nextPosition = end;
+        inst.nextPosition = rolling ? end : -1;
     };
 
     if (t.drumKit)

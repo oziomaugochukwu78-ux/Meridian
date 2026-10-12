@@ -28,7 +28,8 @@ enum class WindowKind { edit, mix };
 class AppController final : public remote::RemoteActions,
                             public juce::ChangeBroadcaster,
                             private juce::ChangeListener,
-                            private juce::ValueTree::Listener
+                            private juce::ValueTree::Listener,
+                            private juce::MidiInputCallback
 {
 public:
     AppController();
@@ -128,6 +129,13 @@ public:
     double getBounceProgress() const noexcept  { return bounceProgress.load(); }
     const BounceResult& getLastBounce() const noexcept { return lastBounce; }
 
+    // MIDI input ------------------------------------------------------------------------------
+    /** Opens every MIDI input (and any plugged in later); their notes play the
+        record-armed instrument tracks and are recorded with them. Called for
+        normal runs only, not by the self test (which injects notes itself). */
+    void enableMidiInputs();
+    juce::StringArray getOpenMidiInputs() const;
+
     // Remote control ----------------------------------------------------------------------
     juce::Result startRemoteControl();
     void stopRemoteControl();
@@ -151,6 +159,8 @@ public:
 
 private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
+    void handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage&) override;
+    void openAllMidiInputs();
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
     void installSession (std::unique_ptr<Session>);
     void syncDeviceToSession();
@@ -198,6 +208,8 @@ private:
     juce::Time lastBackupTime;
     bool backupProblemReported = false;
     juce::TimedCallback backupTimer { [this] { autoBackup(); } };
+    bool midiInputsEnabled = false;
+    juce::MidiDeviceListConnection midiDeviceListConnection;
     std::shared_ptr<bool> lifetime = std::make_shared<bool> (true);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AppController)

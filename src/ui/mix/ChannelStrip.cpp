@@ -256,7 +256,7 @@ void ChannelStrip::refresh()
     panReadout.setText (formatPan (track::pan (trackNode)), juce::dontSendNotification);
 
     recordButton.setToggleState (track::recordArm (trackNode), juce::dontSendNotification);
-    recordButton.setEnabled (track::isAudio (trackNode)); // buses and instruments have no audio to record
+    recordButton.setEnabled (! track::isAux (trackNode)); // instruments record MIDI from the keyboard; buses record nothing
     refreshRouting();
     soloButton.setToggleState (track::solo (trackNode), juce::dontSendNotification);
     muteButton.setToggleState (track::mute (trackNode), juce::dontSendNotification);

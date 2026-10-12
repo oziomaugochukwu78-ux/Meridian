@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <set>
+#include <utility>
 
 namespace meridian
 {
@@ -835,7 +836,7 @@ void EngineBridge::setDiskCacheFrames (int frames)
 //==============================================================================
 // Recording
 
-juce::Result EngineBridge::startRecording (int hardwareLatency, juce::int64 countInSamples)
+juce::Result EngineBridge::startRecording (int hardwareLatency, juce::int64 countInSamples, int outputLatency)
 {
     if (session == nullptr)
         return juce::Result::fail ("No session is open.");
@@ -850,6 +851,7 @@ juce::Result EngineBridge::startRecording (int hardwareLatency, juce::int64 coun
                                    + juce::String (session->getSampleRate()) + " Hz. Change the sample rate in Setup > Playback Engine.");
 
     std::map<int, std::shared_ptr<RecordTake>> takes;
+    std::vector<int> midiTracks;
     const bool aiff = session->getFileFormat() == "aiff";
     const int bits = session->getBitDepth();
 
@@ -857,6 +859,11 @@ juce::Result EngineBridge::startRecording (int hardwareLatency, juce::int64 coun
     {
         if (! track::recordArm (t))
             continue;
+        if (track::isInstrument (t))
+        {
+            midiTracks.push_back (track::id (t)); // records the keyboard, not an audio input
+            continue;
+        }
         if (track::inputChannel (t) < 0)
             return juce::Result::fail ("Track \"" + track::name (t) + "\" is armed but has no input. Choose one in its I/O section.");
 
@@ -893,18 +900,68 @@ juce::Result EngineBridge::startRecording (int hardwareLatency, juce::int64 coun
         takes[take->trackId] = std::move (take);
     }
 
-    if (takes.empty())
+    if (takes.empty() && midiTracks.empty())
         return juce::Result::fail ("No tracks are record-armed.");
+
+    // MIDI: forget anything captured before this take; place notes as heard
+    // (output latency + the engine's latency + the one block live input waits).
+    AudioEngine::RecordedMidi stale;
+    while (engine.popRecordedMidi (stale)) {}
+    capturedMidi.clear();
+    midiTakeTracks = std::move (midiTracks);
+    midiRecordStart = engine.getTransport().getPosition();
+    midiCompensation = juce::jmax (0, outputLatency) + engine.getTotalLatencySamples() + engine.getMaxBlockSize();
 
     activeTakes = std::move (takes);
     rebuildNow();
     engine.getTransport().play (Transport::State::recording, countInSamples);
+    if (! midiTakeTracks.empty())
+        startTimer (50); // drains the captured notes while recording
     return juce::Result::ok();
+}
+
+void EngineBridge::drainRecordedMidi()
+{
+    AudioEngine::RecordedMidi m;
+    while (engine.popRecordedMidi (m))
+        capturedMidi[m.trackId].push_back ({ m.time, m.pitch, m.velocity, m.on });
+}
+
+void EngineBridge::finaliseMidiTakes (juce::int64 recordEnd)
+{
+    drainRecordedMidi();
+    const auto trackIds = std::exchange (midiTakeTracks, {});
+    auto captured = std::exchange (capturedMidi, {});
+    if (session == nullptr)
+        return;
+
+    auto& um = session->getUndoManager();
+    bool began = false;
+    for (const int id : trackIds)
+    {
+        auto t = session->getTrackById (id);
+        auto& events = captured[id];
+        if (! t.isValid() || events.empty())
+            continue;
+        const auto take = midi::buildTake (std::move (events), midiRecordStart, recordEnd, midiCompensation,
+                                           midimodel::tempoMap (*session), session->getSampleRate());
+        if (take.notes.empty())
+            continue;
+        if (! began)
+            um.beginNewTransaction ("Record MIDI");
+        began = true;
+        auto clip = session->addMidiClip (t, take.clipStart, take.clipLength, "MIDI Take", &um);
+        for (const auto& note : take.notes)
+            midimodel::addNote (clip, note, &um);
+    }
 }
 
 void EngineBridge::stopRecording()
 {
+    const auto recordEnd = engine.getTransport().getPosition();
     engine.getTransport().stop();
+    if (! midiTakeTracks.empty())
+        finaliseMidiTakes (recordEnd);
     if (activeTakes.empty())
         return;
 
@@ -918,6 +975,9 @@ void EngineBridge::stopRecording()
 
 void EngineBridge::timerCallback()
 {
+    if (! midiTakeTracks.empty())
+        drainRecordedMidi();
+
     for (auto it = takesToFinalise.begin(); it != takesToFinalise.end();)
     {
         // use_count() == 1: only this list still holds the take, so the graph
@@ -933,7 +993,7 @@ void EngineBridge::timerCallback()
         }
     }
 
-    if (takesToFinalise.empty())
+    if (takesToFinalise.empty() && midiTakeTracks.empty())
         stopTimer();
 }
 

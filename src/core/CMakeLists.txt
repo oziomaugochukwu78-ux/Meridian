@@ -34,6 +34,8 @@ add_library(meridian_core STATIC
     dsp/SignalAnalysis.h
     dsp/SimdConfig.h
 
+    midi/MidiRecording.cpp
+    midi/MidiRecording.h
     midi/NoteSequence.cpp
     midi/NoteSequence.h
     midi/TempoMap.cpp

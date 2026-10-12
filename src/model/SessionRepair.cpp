@@ -176,8 +176,8 @@ private:
             set (t, ids::inputChannel, -1, where, "input (aux and instrument tracks have no audio input)");
         else if (! aux && ! instrument && (track::inputChannel (t) < -1 || track::inputChannel (t) > 255))
             set (t, ids::inputChannel, 0, where, "input channel");
-        if ((aux || instrument) && track::recordArm (t))
-            set (t, ids::recordArm, false, where, "record-arm (this kind of track cannot record audio)");
+        if (aux && track::recordArm (t)) // (instrument tracks arm to record MIDI)
+            set (t, ids::recordArm, false, where, "record-arm (an aux track cannot record)");
 
         repairSynth (t, where, instrument);
 
@@ -535,8 +535,8 @@ juce::String findSessionProblem (const Session& session)
             return name + " channels " + juce::String (channels);
         if ((track::isAux (t) || instrument) && track::inputChannel (t) != -1)
             return name + " has an audio input but cannot record audio";
-        if ((track::isAux (t) || instrument) && track::recordArm (t))
-            return name + " is record-armed but cannot record audio";
+        if (track::isAux (t) && track::recordArm (t))
+            return name + " is record-armed but an aux track cannot record";
 
         int synths = 0;
         for (const auto& child : t)
