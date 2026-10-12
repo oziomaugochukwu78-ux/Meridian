@@ -1177,16 +1177,24 @@ void SelfTest::testBuiltinEffects()
     setConsole (false);
 
     const auto descriptions = BuiltinEffectFormat::getDescriptions();
-    const juce::PluginDescription* eqDesc = nullptr;
-    const juce::PluginDescription* reverbDesc = nullptr;
-    for (const auto& d : descriptions)
-        (d.name == "Meridian EQ" ? eqDesc : reverbDesc) = &d;
+    auto find = [&descriptions] (const juce::String& name) -> const juce::PluginDescription*
+    {
+        for (const auto& d : descriptions)
+            if (d.name == name)
+                return &d;
+        return nullptr;
+    };
+    const auto* eqDesc = find ("Meridian EQ");
+    const auto* compressorDesc = find ("Meridian Compressor");
+    const auto* limiterDesc = find ("Meridian Limiter");
+    const auto* reverbDesc = find ("Meridian Reverb");
     bool listed = true;
     for (const auto& d : descriptions)
         listed = listed && app.getPluginHost().getKnownPlugins().getTypeForIdentifierString (d.createIdentifierString()) != nullptr;
-    expect ("built-in effects are in the plug-in list without a scan", listed && eqDesc != nullptr && reverbDesc != nullptr,
+    expect ("built-in effects are in the plug-in list without a scan",
+            listed && eqDesc != nullptr && compressorDesc != nullptr && limiterDesc != nullptr && reverbDesc != nullptr,
             juce::String (descriptions.size()) + " built-in effects");
-    if (eqDesc == nullptr || reverbDesc == nullptr)
+    if (eqDesc == nullptr || compressorDesc == nullptr || limiterDesc == nullptr || reverbDesc == nullptr)
         return;
 
     auto& tools = app.getRemoteTools();
@@ -1220,6 +1228,42 @@ void SelfTest::testBuiltinEffects()
             saved.wasOk() && reopened.wasOk() && reread.ok && juce::JSON::toString (reread.data).contains ("6.00 dB")
                 && std::abs (db (r.left.peak) - (toneDb + panCentreDb + 6.0)) < 0.05,
             saved.getErrorMessage() + reopened.getErrorMessage() + fmt (db (r.left.peak)) + " dB");
+
+    // Compressor: -18 dB threshold, 4:1, hard knee. The -6.02 dB tone is 11.98 dB
+    // over, so it must come out 3.00 dB over: -15.00 dB, before the pan law.
+    clearTracks();
+    t = addToneTrack ("Comp Test", 1, tone, clipStart);
+    expect ("insert Meridian Compressor", app.getBridge().insertPlugin (t, 0, *compressorDesc, error), error);
+    call ("set_plugin_parameter", R"({"track":"Comp Test","slot":"A","parameter":"threshold","value":-18})");
+    call ("set_plugin_parameter", R"({"track":"Comp Test","slot":"A","parameter":"ratio","value":4})");
+    call ("set_plugin_parameter", R"({"track":"Comp Test","slot":"A","parameter":"knee","value":0})");
+    r = bounce ("compressor_4to1", 0, end);
+    {
+        // Steady state, from 0.5 s into the tone (the onset passes before the 10 ms attack acts).
+        const auto audio = readAudio (r.file);
+        const auto from = (int) clipStart + 24000;
+        const auto steady = audio.getNumSamples() > from + 24000 ? dsp::measureLevels (audio.getReadPointer (0, from), 24000).peak : 0.0f;
+        expectNear ("compressor follows its static curve (4:1, 12 dB over -> 3 dB over)", db (steady),
+                    -18.0 + (toneDb + 18.0) / 4.0 + panCentreDb, 0.1, "dB");
+    }
+
+    // Limiter: the tone driven +12 dB into a -1 dB ceiling comes out at -1 dB.
+    clearTracks();
+    t = addToneTrack ("Limit Test", 1, tone, clipStart);
+    expect ("insert Meridian Limiter", app.getBridge().insertPlugin (t, 0, *limiterDesc, error), error);
+    call ("set_plugin_parameter", R"({"track":"Limit Test","slot":"A","parameter":"input","value":12})");
+    call ("set_plugin_parameter", R"({"track":"Limit Test","slot":"A","parameter":"ceiling","value":-1})");
+    r = bounce ("limiter_ceiling", 0, end);
+    expectNear ("limiter holds the ceiling (+12 dB drive into -1 dB)", db (r.left.peak), -1.0 + panCentreDb, 0.03, "dB");
+
+    // Its look-ahead latency is compensated: an unlimited copy of the same tone
+    // on another track must still add up coherently (+6.02 dB), not comb.
+    call ("set_plugin_parameter", R"({"track":"Limit Test","slot":"A","parameter":"input","value":0})");
+    call ("set_plugin_parameter", R"({"track":"Limit Test","slot":"A","parameter":"ceiling","value":0})");
+    addToneTrack ("Plain Copy", 1, tone, clipStart);
+    r = bounce ("limiter_pdc", 0, end);
+    expectNear ("limiter latency is compensated (limited + plain copy sum coherently)", db (r.left.peak),
+                toneDb + panCentreDb + 6.0206, 0.02, "dB");
 
     // Reverb on an aux bus, fed by a send: a tail that decays in the set time.
     // Excited with broadband noise, as in ISO 3382's interrupted-noise method
@@ -1265,7 +1309,7 @@ void SelfTest::testBuiltinEffects()
                 "correlation " + fmt (correlation, 3));
     }
 
-    // Reference render: a pad through EQ into the reverb bus.
+    // Reference render: a pad through EQ, compressor and limiter, into the reverb bus.
     clearTracks();
     auto pad = session->addTrack ("Pad", 2, nullptr, Session::TrackKind::instrument);
     auto padClip = session->addMidiClip (pad, 0, 4 * 24000, "pad", nullptr);
@@ -1279,6 +1323,12 @@ void SelfTest::testBuiltinEffects()
     call ("set_plugin_parameter", R"({"track":"Pad","slot":"A","parameter":"hpFreq","value":200})");
     call ("set_plugin_parameter", R"({"track":"Pad","slot":"A","parameter":"p3Gain","value":-5})");
     call ("set_plugin_parameter", R"({"track":"Room","slot":"A","parameter":"mix","value":1})");
+    app.getBridge().insertPlugin (pad, 1, *compressorDesc, error);
+    app.getBridge().insertPlugin (pad, 2, *limiterDesc, error);
+    call ("set_plugin_parameter", R"({"track":"Pad","slot":"B","parameter":"threshold","value":-24})");
+    call ("set_plugin_parameter", R"({"track":"Pad","slot":"B","parameter":"makeup","value":6})");
+    call ("set_plugin_parameter", R"({"track":"Pad","slot":"C","parameter":"input","value":6})");
+    call ("set_plugin_parameter", R"({"track":"Pad","slot":"C","parameter":"ceiling","value":-3})");
     compareWithReference ("golden_mix_effects", bounce ("golden_mix_effects", 0, 4 * 24000 + 48000));
 
     expect ("session with built-in effects stays valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));

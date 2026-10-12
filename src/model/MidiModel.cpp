@@ -14,7 +14,9 @@ midi::NoteSequence readNotes (const juce::ValueTree& clip)
     for (const auto& n : clip::notes (clip))
         if (n.hasType (ids::NOTE))
             sequence.add ({ (int) n[ids::pitch], (float) (double) n.getProperty (ids::velocity, 0.8),
-                            (int64_t) n[ids::start], (int64_t) n.getProperty (ids::length, (int64_t) midi::ticksPerQuarter) });
+                            // via juce::int64: on Linux int64_t is long, which juce::var does not convert to directly
+                            (int64_t) (juce::int64) n[ids::start],
+                            (int64_t) (juce::int64) n.getProperty (ids::length, (juce::int64) midi::ticksPerQuarter) });
     return sequence;
 }
 

@@ -1209,7 +1209,8 @@ RemoteTools::Result RemoteTools::addMidiClip (const juce::var& args)
     const auto end = tempo.ticksToSamples (beatsToTicks (startBeat + lengthBeats), rate);
     const auto name = args["name"].toString().trim();
 
-    auto c = session->addMidiClip (t, start, juce::jmax ((juce::int64) 1, end - start), name.isNotEmpty() ? name : juce::String ("MIDI"),
+    auto c = session->addMidiClip (t, (juce::int64) start, std::max<juce::int64> (1, (juce::int64) (end - start)),
+                                   name.isNotEmpty() ? name : juce::String ("MIDI"),
                                    beginEdit ("MIDI Clip"));
     return { true, makeObject ({ { "track", track::name (t) }, { "clip", track::clips (t).indexOf (c) + 1 },
                                  { "name", clip::name (c) }, { "start_seconds", samplesToSeconds (clip::start (c)) },

@@ -1,6 +1,8 @@
 #include "BuiltinEffects.h"
 
+#include <dsp/Compressor.h>
 #include <dsp/FdnReverb.h>
+#include <dsp/Limiter.h>
 #include <dsp/ParametricEq.h>
 
 namespace meridian
@@ -9,6 +11,9 @@ namespace
 {
 constexpr const char* eqId = "meridian:eq";
 constexpr const char* reverbId = "meridian:reverb";
+constexpr const char* compressorId = "meridian:compressor";
+constexpr const char* limiterId = "meridian:limiter";
+constexpr const char* allIds[] = { eqId, compressorId, limiterId, reverbId };
 
 juce::NormalisableRange<float> frequencyRange (float lo, float hi, float centre)
 {
@@ -107,6 +112,14 @@ public:
         return in == out && (in == juce::AudioChannelSet::mono() || in == juce::AudioChannelSet::stereo());
     }
 
+    using juce::AudioPluginInstance::processBlock; // keep the double-precision overload visible
+
+    void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) final
+    {
+        juce::ScopedNoDenormals noDenormals;
+        processAudio (buffer);
+    }
+
     void releaseResources() override {}
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
@@ -142,6 +155,9 @@ public:
     }
 
 protected:
+    /** The effect's processing, in place, with denormals already flushed. */
+    virtual void processAudio (juce::AudioBuffer<float>&) = 0;
+
     EffectParameter* add (juce::String id, juce::String displayName, juce::NormalisableRange<float> range,
                           float defaultValue, juce::String unit, bool toggle = false)
     {
@@ -190,9 +206,8 @@ public:
         applyParameters (true);
     }
 
-    void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+    void processAudio (juce::AudioBuffer<float>& buffer) override
     {
-        juce::ScopedNoDenormals noDenormals;
         applyParameters (false);
         eq.process (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), buffer.getNumSamples());
     }
@@ -271,9 +286,8 @@ public:
         applyParameters (true);
     }
 
-    void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+    void processAudio (juce::AudioBuffer<float>& buffer) override
     {
-        juce::ScopedNoDenormals noDenormals;
         applyParameters (false);
         reverb.process (buffer.getWritePointer (0), buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr,
                         buffer.getNumSamples());
@@ -311,10 +325,130 @@ private:
     EffectParameter* width = nullptr;
 };
 
+//==============================================================================
+class MeridianCompressor final : public BuiltinEffect
+{
+public:
+    MeridianCompressor() : BuiltinEffect ("Meridian Compressor", "Dynamics", compressorId)
+    {
+        threshold = add ("threshold", "Threshold", { -60.0f, 0.0f }, -18.0f, "dB");
+        ratio = add ("ratio", "Ratio", frequencyRange (1.0f, 20.0f, 4.0f), 4.0f, {});
+        attack = add ("attack", "Attack", frequencyRange (0.05f, 200.0f, 10.0f), 10.0f, "ms");
+        release = add ("release", "Release", frequencyRange (5.0f, 3000.0f, 150.0f), 150.0f, "ms");
+        knee = add ("knee", "Knee", { 0.0f, 24.0f }, 6.0f, "dB");
+        makeup = add ("makeup", "Makeup", { 0.0f, 24.0f }, 0.0f, "dB");
+        mix = add ("mix", "Mix", { 0.0f, 1.0f }, 1.0f, {});
+    }
+
+    void prepareToPlay (double sampleRate, int) override
+    {
+        compressor.prepare (sampleRate);
+        applied = {};
+        applyParameters (true);
+    }
+
+    void processAudio (juce::AudioBuffer<float>& buffer) override
+    {
+        applyParameters (false);
+        compressor.process (buffer.getWritePointer (0), buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr,
+                            buffer.getNumSamples());
+    }
+
+    double getTailLengthSeconds() const override { return 0.0; }
+
+private:
+    void applyParameters (bool force)
+    {
+        dsp::Compressor::Params p;
+        p.thresholdDb = value (threshold);
+        p.ratio = value (ratio);
+        p.attackMs = value (attack);
+        p.releaseMs = value (release);
+        p.kneeDb = value (knee);
+        p.makeupDb = value (makeup);
+        p.mix = value (mix);
+        const bool changed = ! juce::exactlyEqual (p.thresholdDb, applied.thresholdDb) || ! juce::exactlyEqual (p.ratio, applied.ratio)
+                          || ! juce::exactlyEqual (p.attackMs, applied.attackMs) || ! juce::exactlyEqual (p.releaseMs, applied.releaseMs)
+                          || ! juce::exactlyEqual (p.kneeDb, applied.kneeDb) || ! juce::exactlyEqual (p.makeupDb, applied.makeupDb)
+                          || ! juce::exactlyEqual (p.mix, applied.mix);
+        if (force || changed)
+        {
+            compressor.setParams (p);
+            applied = p;
+        }
+    }
+
+    dsp::Compressor compressor;
+    dsp::Compressor::Params applied;
+    EffectParameter* threshold = nullptr;
+    EffectParameter* ratio = nullptr;
+    EffectParameter* attack = nullptr;
+    EffectParameter* release = nullptr;
+    EffectParameter* knee = nullptr;
+    EffectParameter* makeup = nullptr;
+    EffectParameter* mix = nullptr;
+};
+
+//==============================================================================
+class MeridianLimiter final : public BuiltinEffect
+{
+public:
+    MeridianLimiter() : BuiltinEffect ("Meridian Limiter", "Dynamics", limiterId)
+    {
+        input = add ("input", "Input Gain", { 0.0f, 24.0f }, 0.0f, "dB");
+        ceiling = add ("ceiling", "Ceiling", { -24.0f, 0.0f }, -1.0f, "dB");
+        release = add ("release", "Release", frequencyRange (1.0f, 1000.0f, 60.0f), 60.0f, "ms");
+        truePeak = add ("truePeak", "True Peak", { 0.0f, 1.0f, 1.0f }, 1.0f, {}, true);
+    }
+
+    void prepareToPlay (double sampleRate, int) override
+    {
+        limiter.prepare (sampleRate); // allocates: prepareToPlay runs off the audio thread
+        setLatencySamples (limiter.getLatencySamples()); // constant for a given sample rate
+        applied = {};
+        applyParameters (true);
+    }
+
+    void processAudio (juce::AudioBuffer<float>& buffer) override
+    {
+        applyParameters (false);
+        limiter.process (buffer.getWritePointer (0), buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr,
+                         buffer.getNumSamples());
+    }
+
+    double getTailLengthSeconds() const override { return 0.0; }
+
+private:
+    void applyParameters (bool force)
+    {
+        dsp::Limiter::Params p;
+        p.inputGainDb = value (input);
+        p.ceilingDb = value (ceiling);
+        p.releaseMs = value (release);
+        p.truePeak = truePeak->isOn();
+        const bool changed = ! juce::exactlyEqual (p.inputGainDb, applied.inputGainDb) || ! juce::exactlyEqual (p.ceilingDb, applied.ceilingDb)
+                          || ! juce::exactlyEqual (p.releaseMs, applied.releaseMs) || p.truePeak != applied.truePeak;
+        if (force || changed)
+        {
+            limiter.setParams (p);
+            applied = p;
+        }
+    }
+
+    dsp::Limiter limiter;
+    dsp::Limiter::Params applied;
+    EffectParameter* input = nullptr;
+    EffectParameter* ceiling = nullptr;
+    EffectParameter* release = nullptr;
+    EffectParameter* truePeak = nullptr;
+};
+
 std::unique_ptr<juce::AudioPluginInstance> createEffect (const juce::String& identifier)
 {
-    if (identifier == eqId)     return std::make_unique<MeridianEq>();
-    if (identifier == reverbId) return std::make_unique<MeridianReverb>();
+    if (identifier == eqId)         return std::make_unique<MeridianEq>();
+    if (identifier == compressorId) return std::make_unique<MeridianCompressor>();
+    if (identifier == limiterId)    return std::make_unique<MeridianLimiter>();
+    if (identifier == reverbId)     return std::make_unique<MeridianReverb>();
     return nullptr;
 }
 } // namespace
@@ -323,7 +457,7 @@ std::unique_ptr<juce::AudioPluginInstance> createEffect (const juce::String& ide
 juce::Array<juce::PluginDescription> BuiltinEffectFormat::getDescriptions()
 {
     juce::Array<juce::PluginDescription> result;
-    for (const auto* id : { eqId, reverbId })
+    for (const auto* id : allIds)
     {
         juce::PluginDescription d;
         createEffect (id)->fillInPluginDescription (d);
@@ -350,7 +484,10 @@ juce::String BuiltinEffectFormat::getNameOfPluginFromIdentifier (const juce::Str
 
 juce::StringArray BuiltinEffectFormat::searchPathsForPlugins (const juce::FileSearchPath&, bool, bool)
 {
-    return { eqId, reverbId };
+    juce::StringArray ids;
+    for (const auto* id : allIds)
+        ids.add (id);
+    return ids;
 }
 
 void BuiltinEffectFormat::createPluginInstance (const juce::PluginDescription& description, double sampleRate,

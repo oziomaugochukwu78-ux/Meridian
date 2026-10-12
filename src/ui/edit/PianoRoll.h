@@ -71,7 +71,7 @@ private:
     float xForTick (int64_t tick) const noexcept;
     float yForPitch (int pitch) const noexcept;
     juce::Rectangle<float> noteRect (const juce::ValueTree& note) const;
-    Hit hitTest (juce::Point<float>) const;
+    Hit noteAt (juce::Point<float>) const;
     int64_t snap (int64_t tick) const noexcept;
     bool isSelected (const juce::ValueTree&) const;
     std::vector<juce::ValueTree> targets() const; ///< the selection, or every note if none

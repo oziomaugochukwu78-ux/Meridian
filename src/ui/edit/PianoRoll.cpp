@@ -22,6 +22,11 @@ const GridChoice gridChoices[] = {
     { "Grid: off", 1 },
 };
 
+// Tick values in the document. Through juce::int64 because on Linux int64_t is
+// long, which juce::var neither converts to nor from without ambiguity.
+int64_t ticksOf (const juce::var& v) { return (int64_t) (juce::int64) v; }
+juce::var tickVar (int64_t ticks) { return juce::var ((juce::int64) ticks); }
+
 bool isBlackKey (int pitch) noexcept
 {
     const int pc = pitch % 12;
@@ -140,8 +145,8 @@ juce::Point<float> PianoRollComponent::positionFor (int64_t tick, int pitch) con
 
 juce::Rectangle<float> PianoRollComponent::noteRect (const juce::ValueTree& n) const
 {
-    const auto start = (int64_t) n[ids::start];
-    const auto length = std::max<int64_t> (1, (int64_t) n[ids::length]);
+    const auto start = ticksOf (n[ids::start]);
+    const auto length = std::max<int64_t> (1, ticksOf (n[ids::length]));
     const float x0 = xForTick (start), x1 = xForTick (start + length);
     return { x0, yForPitch ((int) n[ids::pitch]) + 1.0f, std::max (3.0f, x1 - x0), (float) noteRowHeight - 2.0f };
 }
@@ -197,7 +202,7 @@ void PianoRollComponent::scrollToNotes()
                        : juce::jlimit (visibleRows - 1, 127, centre + visibleRows / 2);
 }
 
-PianoRollComponent::Hit PianoRollComponent::hitTest (juce::Point<float> p) const
+PianoRollComponent::Hit PianoRollComponent::noteAt (juce::Point<float> p) const
 {
     // Topmost (last drawn) first.
     const auto notes = clip::notes (clipNode);
@@ -291,7 +296,7 @@ void PianoRollComponent::paint (juce::Graphics& g)
         const auto r = noteRect (n);
         if (r.getRight() < (float) grid.getX() || r.getX() > (float) grid.getRight())
             continue;
-        const auto start = (int64_t) n[ids::start];
+        const auto start = ticksOf (n[ids::start]);
         const bool plays = start >= rangeStart && start < rangeEnd;
         const float vel = (float) (double) n.getProperty (ids::velocity, 0.8);
         auto colour = juce::Colour (0xff3fbf9f).withMultipliedBrightness (0.55f + 0.45f * vel);
@@ -359,7 +364,7 @@ void PianoRollComponent::mouseMove (const juce::MouseEvent& e)
         setMouseCursor (juce::MouseCursor::NormalCursor);
         return;
     }
-    const auto hit = hitTest (e.position);
+    const auto hit = noteAt (e.position);
     setMouseCursor (! hit.note.isValid() ? juce::MouseCursor::CrosshairCursor
                     : hit.onRightEdge   ? juce::MouseCursor::RightEdgeResizeCursor
                                         : juce::MouseCursor::DraggingHandCursor);
@@ -376,7 +381,7 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
     if (um == nullptr)
         return;
 
-    auto hit = hitTest (e.position);
+    auto hit = noteAt (e.position);
     if (! hit.note.isValid())
     {
         // Empty space: create a note one grid step long, then drag sets its length.
@@ -409,7 +414,7 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
     dragStart = e.position;
     originals.clear();
     for (const auto& n : (drag == Drag::resize ? std::vector<juce::ValueTree> { hit.note } : selection))
-        originals.push_back ({ n, (int64_t) n[ids::start], (int64_t) n[ids::length], (int) n[ids::pitch] });
+        originals.push_back ({ n, ticksOf (n[ids::start]), ticksOf (n[ids::length]), (int) n[ids::pitch] });
     repaint();
 }
 
@@ -427,7 +432,7 @@ void PianoRollComponent::mouseDrag (const juce::MouseEvent& e)
         auto& o = originals.front();
         const auto minimum = std::max<int64_t> (1, grid > 1 ? grid : beatTicks / 16);
         const auto newEnd = std::max (o.start + minimum, snap (o.start + o.length + deltaTicks));
-        o.note.setProperty (ids::length, newEnd - o.start, um);
+        o.note.setProperty (ids::length, tickVar (newEnd - o.start), um);
         return;
     }
 
@@ -437,7 +442,7 @@ void PianoRollComponent::mouseDrag (const juce::MouseEvent& e)
     const int semis = (int) std::lround ((dragStart.y - e.position.y) / (float) noteRowHeight);
     for (auto& o : originals)
     {
-        o.note.setProperty (ids::start, std::max<int64_t> (0, o.start + shift), um);
+        o.note.setProperty (ids::start, tickVar (std::max<int64_t> (0, o.start + shift)), um);
         o.note.setProperty (ids::pitch, juce::jlimit (0, 127, o.pitch + semis), um);
     }
 }
@@ -457,7 +462,7 @@ void PianoRollComponent::mouseUp (const juce::MouseEvent& e)
 
 void PianoRollComponent::mouseDoubleClick (const juce::MouseEvent& e)
 {
-    const auto hit = hitTest (e.position);
+    const auto hit = noteAt (e.position);
     if (! hit.note.isValid())
         return;
     if (auto* um = undoManager())
@@ -487,7 +492,7 @@ void PianoRollComponent::quantizeSelection()
         return;
     um->beginNewTransaction ("Quantize Notes");
     for (auto& n : targets())
-        n.setProperty (ids::start, std::max<int64_t> (0, snap ((int64_t) n[ids::start])), um);
+        n.setProperty (ids::start, tickVar (std::max<int64_t> (0, snap (ticksOf (n[ids::start])))), um);
 }
 
 void PianoRollComponent::transposeSelection (int semitones)

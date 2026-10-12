@@ -5,15 +5,15 @@
 namespace meridian
 {
 
-/** Meridian's own effects (Meridian EQ, Meridian Reverb), hosted through the
-    normal plug-in path: they appear in the plug-in list, go in insert slots,
-    bypass, save their settings in the session, compensate latency and open a
-    window exactly like third-party plug-ins. The signal processing lives in
-    the core library (dsp::ParametricEq, dsp::FdnReverb), where it is measured
-    by unit tests.
+/** Meridian's own effects (EQ, Compressor, Limiter, Reverb), hosted through
+    the normal plug-in path: they appear in the plug-in list, go in insert
+    slots, bypass, save their settings in the session, compensate latency and
+    open a window exactly like third-party plug-ins. The signal processing
+    lives in the core library (dsp::ParametricEq, dsp::Compressor,
+    dsp::Limiter, dsp::FdnReverb), where it is measured by unit tests.
 
-    Identifiers are "meridian:eq" and "meridian:reverb"; the format is named
-    "Built-in". */
+    Identifiers are "meridian:eq", "meridian:compressor", "meridian:limiter"
+    and "meridian:reverb"; the format is named "Built-in". */
 class BuiltinEffectFormat final : public juce::AudioPluginFormat
 {
 public:
