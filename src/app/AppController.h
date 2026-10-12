@@ -69,7 +69,8 @@ public:
     bool isRecording() const noexcept;
 
     // Editing -------------------------------------------------------------------------------
-    void addTracks (int count, int numChannels, const juce::String& baseName);
+    void addTracks (int count, int numChannels, const juce::String& baseName,
+                    Session::TrackKind kind = Session::TrackKind::audio);
     void deleteTrack (juce::ValueTree track);
 
     /** Copies (and converts) files into the session on a background thread,

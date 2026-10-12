@@ -119,6 +119,14 @@ void TrackLane::paint (juce::Graphics& g)
         }
     }
 
+    if (track::isAux (trackNode))
+    {
+        g.setColour (theme::textDim.withAlpha (0.5f));
+        g.setFont (theme::font (12.0f));
+        g.drawText ("Aux Input: plays what is sent or routed to it (see the Mix window)",
+                    getLocalBounds().reduced (12, 0), juce::Justification::centredLeft);
+    }
+
     g.setColour (theme::divider);
     g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
 }

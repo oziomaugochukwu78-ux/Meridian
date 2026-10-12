@@ -102,9 +102,14 @@ void MixView::timerCallback()
         s->updateMeter();
     master.updateMeter();
 
-    // Master settings can change without this view (undo, session load): resync at 5 Hz.
+    // Master settings and bus names can change without this view (undo, other
+    // strips, session load): resync at 5 Hz.
     if (++refreshCounter % 6 == 0)
+    {
         master.refresh();
+        for (auto* s : strips)
+            s->refreshRouting();
+    }
 }
 
 void MixView::paint (juce::Graphics& g)

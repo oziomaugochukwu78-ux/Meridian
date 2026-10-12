@@ -35,6 +35,8 @@ target_sources(Meridian PRIVATE
     engine/TrackRealtimeState.h
     engine/Transport.h
 
+    model/Routing.cpp
+    model/Routing.h
     model/Session.cpp
     model/Session.h
     model/SessionIds.h
@@ -94,6 +96,8 @@ target_sources(Meridian PRIVATE
     ui/mix/MasterStrip.h
     ui/mix/MixView.cpp
     ui/mix/MixView.h
+    ui/mix/SendSlotButton.cpp
+    ui/mix/SendSlotButton.h
 )
 
 target_include_directories(Meridian PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

@@ -135,7 +135,7 @@ private:
 
     // Audio-thread scratch, sized in audioDeviceAboutToStart.
     std::vector<double> busSum[2], busComp[2], masterOut[2];
-    std::vector<double> faderGains, muteGains, panLeft, panRight, coefLeft, coefRight;
+    std::vector<double> faderGains, muteGains, totalGains, sendGains, panLeft, panRight, coefLeft, coefRight, busScratch;
     std::vector<float> silence;
     dsp::LinearRamp masterFader;
 

@@ -1,7 +1,10 @@
 #include "EngineBridge.h"
 
+#include "model/Routing.h"
+
 #include <algorithm>
 #include <cmath>
+#include <set>
 
 namespace meridian
 {
@@ -68,6 +71,7 @@ void EngineBridge::attachSession (Session* newSession)
         insertSlots.clear();
     }
     trackStates.clear();
+    sendStates.clear();
     reportedMissingFiles.clear();
 
     session = newSession;
@@ -120,9 +124,33 @@ void EngineBridge::addTrackResources (const juce::ValueTree& t)
         instantiateInsert (insert);
 }
 
+std::shared_ptr<SendRealtimeState> EngineBridge::ensureSendState (const juce::ValueTree& s)
+{
+    auto& state = sendStates[{ track::id (send::owningTrack (s)), send::slot (s) }];
+    if (state == nullptr)
+        state = std::make_shared<SendRealtimeState>();
+    syncSendState (s);
+    return state;
+}
+
+void EngineBridge::syncSendState (const juce::ValueTree& s)
+{
+    const auto it = sendStates.find ({ track::id (send::owningTrack (s)), send::slot (s) });
+    if (it == sendStates.end())
+        return;
+
+    auto& state = *it->second;
+    state.levelDb.store (send::levelDb (s));
+    state.pan.store (send::pan (s));
+    state.muted.store (send::mute (s));
+    state.preFader.store (send::preFader (s));
+}
+
 void EngineBridge::removeTrackResources (int trackId)
 {
     trackStates.erase (trackId);
+    for (auto it = sendStates.begin(); it != sendStates.end();)
+        it = it->first.first == trackId ? sendStates.erase (it) : std::next (it);
 
     const juce::ScopedLock sl (pluginLock);
     for (auto it = insertSlots.begin(); it != insertSlots.end();)
@@ -313,9 +341,9 @@ void EngineBridge::valueTreePropertyChanged (juce::ValueTree& tree, const juce::
             addTrackResources (tree);
             triggerAsyncUpdate();
         }
-        else if (property == ids::inputChannel)
+        else if (property == ids::inputChannel || property == ids::outputBus || property == ids::kind)
         {
-            triggerAsyncUpdate();
+            triggerAsyncUpdate(); // routing changed: new render order
         }
         else
         {
@@ -329,6 +357,15 @@ void EngineBridge::valueTreePropertyChanged (juce::ValueTree& tree, const juce::
         if (property == ids::bypass)
             if (auto slot = getInsert (trackIdOfInsert (tree), tree[ids::slot]))
                 slot->bypassed.store ((bool) tree[ids::bypass]);
+        return;
+    }
+
+    if (tree.hasType (ids::SEND))
+    {
+        if (property == ids::target || property == ids::slot)
+            triggerAsyncUpdate();
+        else
+            syncSendState (tree); // level, pan, mute, pre/post: no rebuild
         return;
     }
 
@@ -480,14 +517,92 @@ std::unique_ptr<RenderGraph> EngineBridge::buildGraph (double sampleRate, int ma
 
     if (session != nullptr)
     {
+        // Render order: audio tracks first, then aux tracks sorted so that every
+        // aux comes after all auxes feeding it (Kahn's algorithm). The model
+        // refuses cycles; if a hand-edited file contains one anyway, the auxes
+        // involved are appended and their backward routes ignored below.
+        std::vector<juce::ValueTree> order, auxes;
         for (const auto& t : session->getTracksNode())
+            (track::isAux (t) ? auxes : order).push_back (t);
+
+        std::map<int, int> pendingInputs; // aux id -> number of aux tracks feeding it
+        for (const auto& a : auxes)
+            pendingInputs[track::id (a)] = 0;
+        for (const auto& a : auxes)
+            for (const int target : routing::directDestinations (*session, a))
+                ++pendingInputs[target];
+
+        std::vector<juce::ValueTree> sortedAux;
+        std::set<int> placed;
+        for (bool progress = true; progress && sortedAux.size() < auxes.size();)
+        {
+            progress = false;
+            for (const auto& a : auxes)
+            {
+                const int id = track::id (a);
+                if (placed.count (id) != 0 || pendingInputs[id] != 0)
+                    continue;
+                sortedAux.push_back (a);
+                placed.insert (id);
+                for (const int target : routing::directDestinations (*session, a))
+                    --pendingInputs[target];
+                progress = true;
+            }
+        }
+        if (sortedAux.size() < auxes.size())
+        {
+            for (const auto& a : auxes)
+                if (placed.count (track::id (a)) == 0)
+                    sortedAux.push_back (a);
+            if (onProblem)
+                onProblem ("The session's bus routing contains a loop. The looping routes are ignored.");
+        }
+
+        std::map<int, int> busOfAux, positionOf;
+        for (size_t i = 0; i < sortedAux.size(); ++i)
+            busOfAux[track::id (sortedAux[i])] = (int) i;
+        order.insert (order.end(), sortedAux.begin(), sortedAux.end());
+        for (size_t i = 0; i < order.size(); ++i)
+            positionOf[track::id (order[i])] = (int) i;
+
+        graph->buses.resize (sortedAux.size());
+        for (auto& b : graph->buses)
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                b.sum[ch].assign ((size_t) maxBlockSize, 0.0);
+                b.comp[ch].assign ((size_t) maxBlockSize, 0.0);
+            }
+
+        // A route is usable if it targets an existing aux rendered later than its source.
+        auto busFor = [&] (const juce::ValueTree& source, int targetId) -> int
+        {
+            const auto bus = busOfAux.find (targetId);
+            if (targetId == 0 || bus == busOfAux.end() || positionOf[targetId] <= positionOf[track::id (source)])
+                return -1;
+            return bus->second;
+        };
+
+        for (const auto& t : order)
         {
             TrackRender render;
             render.state = ensureTrackState (t);
             render.numChannels = track::channels (t);
             render.inputChannel = track::inputChannel (t);
+            render.isAux = track::isAux (t);
+            render.ownBus = render.isAux ? busOfAux[track::id (t)] : -1;
+            render.outputBus = busFor (t, track::outputBus (t));
 
-            buildSegments (t, render, sharedStreams, usedStreams, keep);
+            for (const auto& s : track::sends (t))
+                if (const int bus = busFor (t, send::target (s)); bus >= 0)
+                    render.sends.push_back ({ ensureSendState (s), bus });
+
+            if (render.isAux)
+                for (const auto& other : order)
+                    if (other != t && routing::feeds (*session, track::id (other), track::id (t)))
+                        render.upstream.push_back (ensureTrackState (other));
+
+            if (! render.isAux)
+                buildSegments (t, render, sharedStreams, usedStreams, keep);
 
             for (int slot = 0; slot < Session::maxInserts; ++slot)
                 if (auto s = getInsert (track::id (t), slot); s != nullptr && s->plugin != nullptr)

@@ -30,11 +30,19 @@ NewTracksComponent::NewTracksComponent (AppController& a) : app (a)
     format.setSelectedId (1, juce::dontSendNotification);
 
     kind.addItem ("Audio Track", 1);
-    kind.addItem ("Aux Input (planned)", 2);
+    kind.addItem ("Aux Input (bus)", 2);
     kind.addItem ("Instrument Track (planned)", 3);
-    kind.setItemEnabled (2, false);
     kind.setItemEnabled (3, false);
     kind.setSelectedId (1, juce::dontSendNotification);
+    kind.onChange = [this]
+    {
+        // Aux inputs are stereo buses.
+        const bool aux = kind.getSelectedId() == 2;
+        format.setSelectedId (aux ? 2 : format.getSelectedId(), juce::dontSendNotification);
+        format.setEnabled (! aux);
+        if (baseName.getText() == "Audio" || baseName.getText() == "Aux")
+            baseName.setText (aux ? "Aux" : "Audio");
+    };
 
     baseName.setText ("Audio");
     baseName.setSelectAllWhenFocused (true);
@@ -56,7 +64,8 @@ NewTracksComponent::NewTracksComponent (AppController& a) : app (a)
 void NewTracksComponent::create()
 {
     const int n = juce::jlimit (1, 128, count.getText().getIntValue());
-    app.addTracks (n, format.getSelectedId() == 2 ? 2 : 1, baseName.getText().trim());
+    app.addTracks (n, format.getSelectedId() == 2 ? 2 : 1, baseName.getText().trim(),
+                   kind.getSelectedId() == 2 ? Session::TrackKind::aux : Session::TrackKind::audio);
     dialogs::close (*this);
 }
 

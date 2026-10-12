@@ -15,7 +15,7 @@ This is an early foundation, not a finished DAW. Everything listed as working co
 |---|---|---|
 | Sessions | Dashboard (create from template or blank, recent, open), save/load, full undo/redo | Save As, session import |
 | Edit window | Tracks, clips with waveforms, Smart Tool (select/move/trim/fade zones), Slip and Grid modes, separate, delete, zoom, page-scroll, drag-and-drop import | Shuffle and Spot modes, Zoomer and Pencil tools, automation lane drawing, playlists |
-| Mix window | Channel strips: 10 inserts, I/O, automation mode, pan, R/S/M, console-taper fader, segmented meters; master strip with console controls | Sends, aux/bus tracks, routing matrix, VCAs |
+| Mix window | Channel strips: 10 inserts, 5 sends (level, pan, pre/post, mute), output routing to master or any bus, I/O, automation mode, pan, R/S/M, console-taper fader, segmented meters; Aux Input (bus) tracks, bus-to-bus chains with loop protection, implicit solo; master strip with console controls | VCAs, mono buses, surround |
 | Audio engine | Lock-free render graph, double-buffered disk streaming, record to disk, input monitoring, sample-accurate volume automation, ramped gain/mute/pan, offline bounce to WAV/AIFF (File > Bounce Mix) | Plug-in delay compensation, multi-core track rendering, dither options |
 | Mixing maths | 64-bit compensated summing bus, SIMD (SSE2/AVX/NEON) mix kernels, constant-power pan, 4x-oversampled tanh/cubic console saturation | Per-track console channels |
 | Plug-ins | VST3 and LV2 hosting (plus AU on macOS), scanning with crash protection, editors, bypass, state saved in the session | CLAP hosting (needs a CLAP-SDK format adapter), sidechains, instruments |
@@ -100,6 +100,8 @@ tests/             Catch2 tests for src/core
 | Media jobs | import conversion, Elastic Audio renders | touch the session |
 
 **Graph hand-off.** The message thread builds an immutable `RenderGraph` snapshot and publishes it with one atomic exchange. At the start of a block the audio thread adopts the newest graph and returns the previous one through a wait-free queue, and a timer on the message thread deletes it. Plug-in instances, file readers and buffers are therefore always freed off the audio thread.
+
+**Buses and sends.** Aux tracks are stereo buses. Each bus input is a compensated double-double sum, like the master bus. The render graph orders tracks so every bus is processed after everything feeding it (a topological sort), and the model refuses any route that would form a loop. Post-fader sends follow the track's fader and mute; pre-fader sends follow only mute and solo. Soloing a track keeps the buses it feeds audible ("implicit solo").
 
 **Mixer controls.** Volume, pan, mute, solo and arm are atomics in a per-track `TrackRealtimeState`. Every change, from the UI or a remote command, is ramped on the audio thread: 30 ms for faders, 5 ms for mute and solo, 20 ms for pan. Nothing ever clicks.
 

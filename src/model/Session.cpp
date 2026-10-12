@@ -43,7 +43,7 @@ void Session::ensureStructure (juce::ValueTree& s)
         s.appendChild (juce::ValueTree (ids::TRACKS), nullptr);
 
     for (auto t : s.getChildWithName (ids::TRACKS))
-        for (const auto* childType : { &ids::CLIPS, &ids::INSERTS, &ids::AUTOMATION })
+        for (const auto* childType : { &ids::CLIPS, &ids::INSERTS, &ids::SENDS, &ids::AUTOMATION })
             if (! t.getChildWithName (*childType).isValid())
                 t.appendChild (juce::ValueTree (*childType), nullptr);
 }
@@ -148,25 +148,30 @@ int Session::indexOfTrack (const juce::ValueTree& t) const
     return getTracksNode().indexOf (t);
 }
 
-juce::ValueTree Session::addTrack (const juce::String& name, int numChannels, juce::UndoManager* um)
+juce::ValueTree Session::addTrack (const juce::String& name, int numChannels, juce::UndoManager* um, TrackKind kind)
 {
     const int newId = allocateId();
-    const auto colour = juce::Colour (trackPalette[(size_t) getNumTracks() % std::size (trackPalette)]);
+    const bool aux = kind == TrackKind::aux;
+    const auto colour = aux ? juce::Colour (0xff8f9aa6)  // aux tracks: neutral grey-blue
+                            : juce::Colour (trackPalette[(size_t) getNumTracks() % std::size (trackPalette)]);
 
     juce::ValueTree t (ids::TRACK);
     t.setProperty (ids::id, newId, nullptr);
     t.setProperty (ids::name, name, nullptr);
-    t.setProperty (ids::channels, juce::jlimit (1, 2, numChannels), nullptr);
+    t.setProperty (ids::kind, aux ? "aux" : "audio", nullptr);
+    t.setProperty (ids::channels, aux ? 2 : juce::jlimit (1, 2, numChannels), nullptr);
     t.setProperty (ids::colour, colour.toString(), nullptr);
     t.setProperty (ids::volumeDb, 0.0, nullptr);
     t.setProperty (ids::pan, 0.0, nullptr);
     t.setProperty (ids::mute, false, nullptr);
     t.setProperty (ids::solo, false, nullptr);
     t.setProperty (ids::recordArm, false, nullptr);
-    t.setProperty (ids::inputChannel, 0, nullptr);
+    t.setProperty (ids::inputChannel, aux ? -1 : 0, nullptr);
     t.setProperty (ids::automationMode, "read", nullptr);
+    t.setProperty (ids::outputBus, 0, nullptr);
     t.appendChild (juce::ValueTree (ids::CLIPS), nullptr);
     t.appendChild (juce::ValueTree (ids::INSERTS), nullptr);
+    t.appendChild (juce::ValueTree (ids::SENDS), nullptr);
     t.appendChild (juce::ValueTree (ids::AUTOMATION), nullptr);
 
     getTracksNode().appendChild (t, um);

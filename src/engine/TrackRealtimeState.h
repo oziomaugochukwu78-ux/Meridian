@@ -68,4 +68,20 @@ private:
     }
 };
 
+/** Controls of one send, shared like TrackRealtimeState: written by the
+    message thread, ramped by the audio thread, alive across graph rebuilds. */
+struct SendRealtimeState
+{
+    std::atomic<double> levelDb { 0.0 };   ///< -144 or below = off
+    std::atomic<double> pan { 0.0 };
+    std::atomic<bool> muted { false };
+    std::atomic<bool> preFader { false };
+
+    // Audio thread only
+    dsp::LinearRamp levelRamp;
+    dsp::LinearRamp panLeftRamp;
+    dsp::LinearRamp panRightRamp;
+    bool rampsInitialised = false;
+};
+
 } // namespace meridian

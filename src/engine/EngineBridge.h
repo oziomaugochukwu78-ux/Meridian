@@ -105,6 +105,8 @@ private:
 
     std::shared_ptr<TrackRealtimeState> ensureTrackState (const juce::ValueTree& track);
     void syncTrackState (const juce::ValueTree& track);
+    std::shared_ptr<SendRealtimeState> ensureSendState (const juce::ValueTree& sendNode);
+    void syncSendState (const juce::ValueTree& sendNode);
     void addTrackResources (const juce::ValueTree& track);
     void removeTrackResources (int trackId);
     void instantiateInsert (const juce::ValueTree& insertNode);
@@ -117,6 +119,7 @@ private:
     Session* session = nullptr;
 
     std::map<int, std::shared_ptr<TrackRealtimeState>> trackStates;
+    std::map<std::pair<int, int>, std::shared_ptr<SendRealtimeState>> sendStates; // (trackId, slot)
     std::map<std::pair<int, int>, std::shared_ptr<InsertSlot>> insertSlots;  // (trackId, slot)
     std::map<juce::String, std::shared_ptr<ClipStream>> streams;
     juce::StringArray reportedMissingFiles;

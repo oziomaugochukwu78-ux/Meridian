@@ -1,5 +1,6 @@
 #include "ChannelStrip.h"
 
+#include "model/Routing.h"
 #include "ui/Theme.h"
 
 #include <dsp/FaderTaper.h>
@@ -46,17 +47,30 @@ ChannelStrip::ChannelStrip (AppController& a, juce::ValueTree t)
 {
     for (int i = 0; i < Session::maxInserts; ++i)
         addAndMakeVisible (insertSlots.add (new InsertSlotButton (app, trackNode, i)));
+    for (int i = 0; i < Session::maxSends; ++i)
+        addAndMakeVisible (sendSlots.add (new SendSlotButton (app, trackNode, i)));
 
+    const bool aux = track::isAux (trackNode);
     populateInputs();
-    inputSelector.setTooltip ("Track input");
+    inputSelector.setTooltip (aux ? "An aux track's input is everything sent or routed to it" : "Track input");
+    inputSelector.setEnabled (! aux);
     inputSelector.onChange = [this] { setProperty (ids::inputChannel, inputSelector.getSelectedId() - 2, "Track Input"); };
     addAndMakeVisible (inputSelector);
 
-    outputLabel.setText ("Main Out", juce::dontSendNotification);
-    outputLabel.setFont (theme::font (11.0f));
-    outputLabel.setColour (juce::Label::backgroundColourId, theme::well);
-    outputLabel.setTooltip ("Output: the master bus");
-    addAndMakeVisible (outputLabel);
+    outputButton.setColour (juce::TextButton::buttonColourId, theme::well);
+    outputButton.setTooltip ("Output: the master bus, or a bus (aux track)");
+    outputButton.onClick = [this]
+    {
+        showBusMenu (app, outputButton, trackNode, true, [safe = juce::Component::SafePointer<ChannelStrip> (this)] (int target)
+        {
+            if (safe == nullptr)
+                return;
+            auto* session = safe->app.getSession();
+            session->getUndoManager().beginNewTransaction ("Track Output");
+            routing::setOutput (*session, safe->trackNode, target, &session->getUndoManager());
+        });
+    };
+    addAndMakeVisible (outputButton);
 
     automationSelector.addItem ("auto off", 1);
     automationSelector.addItem ("auto read", 2);
@@ -145,9 +159,24 @@ ChannelStrip::~ChannelStrip()
     trackNode.removeListener (this);
 }
 
+void ChannelStrip::refreshRouting()
+{
+    const auto* session = app.getSession();
+    const int out = track::outputBus (trackNode);
+    const auto target = session != nullptr && out != 0 ? session->getTrackById (out) : juce::ValueTree();
+    outputButton.setButtonText (target.isValid() ? "> " + track::name (target) : juce::String ("Main Out"));
+    for (auto* s : sendSlots)
+        s->repaint();
+}
+
 void ChannelStrip::populateInputs()
 {
     inputSelector.clear (juce::dontSendNotification);
+    if (track::isAux (trackNode))
+    {
+        inputSelector.addItem ("bus input", 1);
+        return;
+    }
     inputSelector.addItem ("no input", 1);
 
     int numInputs = 8;
@@ -182,7 +211,7 @@ void ChannelStrip::valueTreePropertyChanged (juce::ValueTree& tree, const juce::
         }
         refresh();
     }
-    else if (tree.hasType (ids::INSERT))
+    else if (tree.hasType (ids::INSERT) || tree.hasType (ids::SEND))
     {
         triggerAsyncUpdate();
     }
@@ -192,13 +221,13 @@ void ChannelStrip::valueTreePropertyChanged (juce::ValueTree& tree, const juce::
 // before the session-level EngineBridge has (de)instantiated the plug-in.
 void ChannelStrip::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree&)
 {
-    if (parent.hasType (ids::INSERTS))
+    if (parent.hasType (ids::INSERTS) || parent.hasType (ids::SENDS))
         triggerAsyncUpdate();
 }
 
 void ChannelStrip::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree&, int)
 {
-    if (parent.hasType (ids::INSERTS))
+    if (parent.hasType (ids::INSERTS) || parent.hasType (ids::SENDS))
         triggerAsyncUpdate();
 }
 
@@ -219,6 +248,8 @@ void ChannelStrip::refresh()
     panReadout.setText (formatPan (track::pan (trackNode)), juce::dontSendNotification);
 
     recordButton.setToggleState (track::recordArm (trackNode), juce::dontSendNotification);
+    recordButton.setEnabled (! track::isAux (trackNode)); // nothing to record on a bus
+    refreshRouting();
     soloButton.setToggleState (track::solo (trackNode), juce::dontSendNotification);
     muteButton.setToggleState (track::mute (trackNode), juce::dontSendNotification);
 
@@ -252,15 +283,11 @@ void ChannelStrip::paint (juce::Graphics& g)
     drawSectionHeader (g, sendsHeader, "SENDS A-E");
     drawSectionHeader (g, ioHeader, "I/O");
 
-    // Sends: not implemented yet, drawn as disabled slots so the layout matches.
-    auto sends = sendsArea;
-    for (int i = 0; i < 5; ++i)
+    if (track::isAux (trackNode))
     {
-        const auto r = sends.removeFromTop (slotHeight).toFloat().reduced (1.0f, 0.5f);
-        g.setColour (theme::well.withAlpha (0.5f));
-        g.fillRect (r);
-        g.setColour (theme::divider);
-        g.drawRect (r, 1.0f);
+        // Aux tracks are marked by a stripe above the name plate.
+        g.setColour (theme::automation.withAlpha (0.6f));
+        g.fillRect (namePlate.getBounds().translated (0, -4).withHeight (3));
     }
 
     // dB scale between fader and meter.
@@ -290,12 +317,13 @@ void ChannelStrip::resized()
         insertSlots[i]->setBounds (area.removeFromTop (slotHeight));
 
     sendsHeader = area.removeFromTop (sectionHeader);
-    sendsArea = area.removeFromTop (slotHeight * 5);
+    for (auto* s : sendSlots)
+        s->setBounds (area.removeFromTop (slotHeight));
 
     ioHeader = area.removeFromTop (sectionHeader);
     inputSelector.setBounds (area.removeFromTop (20));
     area.removeFromTop (2);
-    outputLabel.setBounds (area.removeFromTop (18));
+    outputButton.setBounds (area.removeFromTop (18));
     area.removeFromTop (4);
     automationSelector.setBounds (area.removeFromTop (20));
     area.removeFromTop (4);

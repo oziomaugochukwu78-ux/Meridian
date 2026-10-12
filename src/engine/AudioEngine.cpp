@@ -101,7 +101,7 @@ void AudioEngine::prepare (double sr, int blockSize)
         busComp[ch].assign ((size_t) blockSize, 0.0);
         masterOut[ch].assign ((size_t) blockSize, 0.0);
     }
-    for (auto* v : { &faderGains, &muteGains, &panLeft, &panRight, &coefLeft, &coefRight })
+    for (auto* v : { &faderGains, &muteGains, &totalGains, &sendGains, &panLeft, &panRight, &coefLeft, &coefRight, &busScratch })
         v->assign ((size_t) blockSize, 0.0);
     silence.assign ((size_t) blockSize, 0.0f);
 
@@ -189,9 +189,14 @@ void AudioEngine::processChunk (const float* const* inputs, int numInputs, float
 
     if (activeGraph != nullptr)
     {
+        for (auto& b : activeGraph->buses)
+            for (int ch = 0; ch < 2; ++ch)
+                dsp::clear ({ b.sum[ch].data(), b.comp[ch].data() }, numSamples);
+
         for (const auto& t : activeGraph->tracks)
             ctx.anySolo = ctx.anySolo || t.state->soloed.load (std::memory_order_relaxed);
 
+        // Tracks are ordered so that every bus's inputs are rendered before the bus.
         for (auto& t : activeGraph->tracks)
             renderTrack (t, ctx);
     }
@@ -237,30 +242,44 @@ void AudioEngine::processChunk (const float* const* inputs, int numInputs, float
 void AudioEngine::renderTrack (TrackRender& t, const BlockContext& ctx) noexcept
 {
     const int numChannels = t.numChannels;
-    for (int ch = 0; ch < numChannels; ++ch)
-        juce::FloatVectorOperations::clear (t.buffer.getWritePointer (ch), ctx.numSamples);
 
-    // Auto-input monitoring: an armed track listens to its input while
-    // stopped or recording, and plays back its clips while just playing.
-    const bool armed = t.state->recordArmed.load (std::memory_order_relaxed);
-    const bool monitorInput = armed && ctx.state != Transport::State::playing && t.inputChannel >= 0;
-
-    if (monitorInput)
+    if (t.isAux)
     {
+        // An aux track's source is its bus: the sum of everything routed or sent to it.
+        auto& input = activeGraph->buses[(size_t) t.ownBus];
         for (int ch = 0; ch < numChannels; ++ch)
         {
-            int source = t.inputChannel + ch;
-            if (source >= ctx.numInputs)
-                source = t.inputChannel; // mono input feeding a stereo track
-            if (source < ctx.numInputs && ctx.inputs[source] != nullptr)
-                juce::FloatVectorOperations::copy (t.buffer.getWritePointer (ch), ctx.inputs[source] + ctx.inputOffset, ctx.numSamples);
+            dsp::resolve ({ input.sum[ch].data(), input.comp[ch].data() }, busScratch.data(), ctx.numSamples);
+            dsp::convertToFloat (busScratch.data(), t.buffer.getWritePointer (ch), ctx.numSamples);
         }
     }
+    else
+    {
+        for (int ch = 0; ch < numChannels; ++ch)
+            juce::FloatVectorOperations::clear (t.buffer.getWritePointer (ch), ctx.numSamples);
 
-    renderSegments (t, ctx);
+        // Auto-input monitoring: an armed track listens to its input while
+        // stopped or recording, and plays back its clips while just playing.
+        const bool armed = t.state->recordArmed.load (std::memory_order_relaxed);
+        const bool monitorInput = armed && ctx.state != Transport::State::playing && t.inputChannel >= 0;
 
-    if (ctx.state == Transport::State::recording && t.take != nullptr)
-        writeTake (*t.take, ctx);
+        if (monitorInput)
+        {
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                int source = t.inputChannel + ch;
+                if (source >= ctx.numInputs)
+                    source = t.inputChannel; // mono input feeding a stereo track
+                if (source < ctx.numInputs && ctx.inputs[source] != nullptr)
+                    juce::FloatVectorOperations::copy (t.buffer.getWritePointer (ch), ctx.inputs[source] + ctx.inputOffset, ctx.numSamples);
+            }
+        }
+
+        renderSegments (t, ctx);
+
+        if (ctx.state == Transport::State::recording && t.take != nullptr)
+            writeTake (*t.take, ctx);
+    }
 
     if (! t.inserts.empty())
     {
@@ -363,7 +382,13 @@ void AudioEngine::mixTrackIntoBus (TrackRender& t, const BlockContext& ctx) noex
     const double sr = sampleRate.load (std::memory_order_relaxed);
     const bool rolling = ctx.state != Transport::State::stopped;
 
-    const bool silencedBySolo = ctx.anySolo && ! s.soloed.load (std::memory_order_relaxed);
+    // Solo: an aux stays audible while anything feeding it is soloed ("implicit solo"),
+    // otherwise soloing a vocal would also silence its reverb return.
+    bool soloedHere = s.soloed.load (std::memory_order_relaxed);
+    for (size_t i = 0; ! soloedHere && i < t.upstream.size(); ++i)
+        soloedHere = t.upstream[i]->soloed.load (std::memory_order_relaxed);
+
+    const bool silencedBySolo = ctx.anySolo && ! soloedHere;
     const double muteTarget = (s.muted.load (std::memory_order_relaxed) || silencedBySolo) ? 0.0 : 1.0;
     const double faderTarget = decibelsToGain (s.volumeDb.load (std::memory_order_relaxed));
     const double pan = s.pan.load (std::memory_order_relaxed);
@@ -395,13 +420,21 @@ void AudioEngine::mixTrackIntoBus (TrackRender& t, const BlockContext& ctx) noex
 
     const float* left = t.buffer.getReadPointer (0);
     const float* right = t.numChannels > 1 ? t.buffer.getReadPointer (1) : left;
+
+    // Destination: the master bus, or the input of the aux this track is routed to.
     dsp::CompensatedChannel bus[2] = { { busSum[0].data(), busComp[0].data() },
                                        { busSum[1].data(), busComp[1].data() } };
+    if (t.outputBus >= 0)
+    {
+        auto& target = activeGraph->buses[(size_t) t.outputBus];
+        bus[0] = { target.sum[0].data(), target.comp[0].data() };
+        bus[1] = { target.sum[1].data(), target.comp[1].data() };
+    }
 
     const bool steady = ! useAutomation && ! s.faderRamp.isRamping() && ! s.muteRamp.isRamping()
                         && ! s.panLeftRamp.isRamping() && ! s.panRightRamp.isRamping();
 
-    if (steady)
+    if (steady && t.sends.empty())
     {
         const double gain = s.faderRamp.getCurrent() * s.muteRamp.getCurrent();
         if (gain == 0.0)
@@ -424,16 +457,17 @@ void AudioEngine::mixTrackIntoBus (TrackRender& t, const BlockContext& ctx) noex
         return;
     }
 
-    // Something is moving: build per-sample coefficients.
+    // General path (something is moving, or there are sends): per-sample coefficients.
     if (! useAutomation)
         s.faderRamp.render (faderGains.data(), n);
     s.muteRamp.render (muteGains.data(), n);
-    dsp::multiplyInPlace (faderGains.data(), muteGains.data(), n); // faderGains = total pre-pan gain
+    std::copy (faderGains.begin(), faderGains.begin() + n, totalGains.begin());
+    dsp::multiplyInPlace (totalGains.data(), muteGains.data(), n); // fader x mute/solo: post-fader gain
 
     s.panLeftRamp.render (panLeft.data(), n);
     s.panRightRamp.render (panRight.data(), n);
-    std::copy (faderGains.begin(), faderGains.begin() + n, coefLeft.begin());
-    std::copy (faderGains.begin(), faderGains.begin() + n, coefRight.begin());
+    std::copy (totalGains.begin(), totalGains.begin() + n, coefLeft.begin());
+    std::copy (totalGains.begin(), totalGains.begin() + n, coefRight.begin());
     dsp::multiplyInPlace (coefLeft.data(), panLeft.data(), n);
     dsp::multiplyInPlace (coefRight.data(), panRight.data(), n);
 
@@ -442,13 +476,50 @@ void AudioEngine::mixTrackIntoBus (TrackRender& t, const BlockContext& ctx) noex
 
     if (t.numChannels == 1)
     {
-        const auto peak = (float) dsp::peakMagnitudeScaled (left, faderGains.data(), n);
+        const auto peak = (float) dsp::peakMagnitudeScaled (left, totalGains.data(), n);
         s.publishPeaks (peak, peak);
     }
     else
     {
         s.publishPeaks ((float) dsp::peakMagnitudeScaled (left, coefLeft.data(), n),
                         (float) dsp::peakMagnitudeScaled (right, coefRight.data(), n));
+    }
+
+    // Sends: post-fader sends follow fader and mute; pre-fader sends follow only
+    // mute/solo. Each has its own ramped level and constant-power pan.
+    for (auto& send : t.sends)
+    {
+        auto& ss = *send.state;
+        const double level = ss.muted.load (std::memory_order_relaxed)
+                                 ? 0.0
+                                 : decibelsToGain (ss.levelDb.load (std::memory_order_relaxed));
+        const double sendPan = ss.pan.load (std::memory_order_relaxed);
+        const auto sendPanGains = t.numChannels == 1 ? dsp::monoPan (sendPan) : dsp::stereoBalance (sendPan);
+
+        if (! ss.rampsInitialised)
+        {
+            ss.levelRamp.reset (level);
+            ss.panLeftRamp.reset (sendPanGains.left);
+            ss.panRightRamp.reset (sendPanGains.right);
+            ss.rampsInitialised = true;
+        }
+        ss.levelRamp.setTarget (level, rampLength (faderRampSeconds, sr));
+        ss.panLeftRamp.setTarget (sendPanGains.left, rampLength (panRampSeconds, sr));
+        ss.panRightRamp.setTarget (sendPanGains.right, rampLength (panRampSeconds, sr));
+
+        ss.levelRamp.render (sendGains.data(), n);
+        dsp::multiplyInPlace (sendGains.data(), ss.preFader.load (std::memory_order_relaxed) ? muteGains.data()
+                                                                                             : totalGains.data(), n);
+        ss.panLeftRamp.render (panLeft.data(), n);
+        ss.panRightRamp.render (panRight.data(), n);
+        std::copy (sendGains.begin(), sendGains.begin() + n, coefLeft.begin());
+        std::copy (sendGains.begin(), sendGains.begin() + n, coefRight.begin());
+        dsp::multiplyInPlace (coefLeft.data(), panLeft.data(), n);
+        dsp::multiplyInPlace (coefRight.data(), panRight.data(), n);
+
+        auto& target = activeGraph->buses[(size_t) send.targetBus];
+        dsp::accumulateScaled (left, coefLeft.data(), { target.sum[0].data(), target.comp[0].data() }, n);
+        dsp::accumulateScaled (right, coefRight.data(), { target.sum[1].data(), target.comp[1].data() }, n);
     }
 }
 

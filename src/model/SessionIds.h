@@ -12,12 +12,19 @@
     SESSION  name sampleRate bitDepth fileFormat formatVersion nextId
              masterVolumeDb consoleEnabled consoleDrive consoleCharacter consoleCurve
       TRACKS
-        TRACK  id name channels colour volumeDb pan mute solo recordArm
-               inputChannel automationMode
+        TRACK  id name kind channels colour volumeDb pan mute solo recordArm
+               inputChannel automationMode outputBus
           CLIPS
             CLIP  id name file start length offset sourceLength gainDb fadeIn fadeOut
           INSERTS
             INSERT  slot description state bypass
+          SENDS
+            SEND  slot target levelDb pan preFader mute
+
+    kind is "audio" (plays clips, records) or "aux" (an Aux Input: a stereo bus
+    fed by sends and by tracks whose outputBus names it). outputBus is the id
+    of the aux track this track feeds, or 0 for the master bus. A SEND's target
+    is an aux track id. Routing never forms a cycle (see model/Routing.h).
           AUTOMATION
             LANE  parameter
               POINT  time value
@@ -37,6 +44,8 @@ MERIDIAN_ID (CLIPS)
 MERIDIAN_ID (CLIP)
 MERIDIAN_ID (INSERTS)
 MERIDIAN_ID (INSERT)
+MERIDIAN_ID (SENDS)
+MERIDIAN_ID (SEND)
 MERIDIAN_ID (AUTOMATION)
 MERIDIAN_ID (LANE)
 MERIDIAN_ID (POINT)
@@ -65,6 +74,13 @@ MERIDIAN_ID (solo)
 MERIDIAN_ID (recordArm)
 MERIDIAN_ID (inputChannel)
 MERIDIAN_ID (automationMode)
+MERIDIAN_ID (kind)
+MERIDIAN_ID (outputBus)
+
+// SEND
+MERIDIAN_ID (target)
+MERIDIAN_ID (levelDb)
+MERIDIAN_ID (preFader)
 
 // CLIP
 MERIDIAN_ID (file)

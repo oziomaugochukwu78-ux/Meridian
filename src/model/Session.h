@@ -19,6 +19,7 @@ public:
     static constexpr const char* audioFolderName = "Audio Files";
     static constexpr int formatVersion = 1;
     static constexpr int maxInserts = 10;
+    static constexpr int maxSends = 5;   // A..E
 
     struct Settings
     {
@@ -61,7 +62,10 @@ public:
     juce::ValueTree getTrackById (int trackId) const;
     int indexOfTrack (const juce::ValueTree& track) const;
 
-    juce::ValueTree addTrack (const juce::String& name, int numChannels, juce::UndoManager*);
+    enum class TrackKind { audio, aux };
+
+    /** Aux tracks are always stereo and have no input. */
+    juce::ValueTree addTrack (const juce::String& name, int numChannels, juce::UndoManager*, TrackKind = TrackKind::audio);
     void removeTrack (const juce::ValueTree& track, juce::UndoManager*);
 
     juce::ValueTree addClip (juce::ValueTree track, const juce::File& audioFile, juce::int64 timelineStart,
@@ -105,6 +109,9 @@ namespace track
 {
     inline int id (const juce::ValueTree& t)                  { return t[ids::id]; }
     inline juce::String name (const juce::ValueTree& t)       { return t[ids::name].toString(); }
+    inline bool isAux (const juce::ValueTree& t)              { return t.getProperty (ids::kind, "audio").toString() == "aux"; }
+    inline int outputBus (const juce::ValueTree& t)           { return t.getProperty (ids::outputBus, 0); } ///< aux track id, 0 = master
+    inline juce::ValueTree sends (const juce::ValueTree& t)   { return t.getChildWithName (ids::SENDS); }
     inline int channels (const juce::ValueTree& t)            { return juce::jlimit (1, 2, (int) t.getProperty (ids::channels, 1)); }
     inline juce::Colour colour (const juce::ValueTree& t)     { return juce::Colour::fromString (t.getProperty (ids::colour, "ff5a8dd6").toString()); }
     inline double volumeDb (const juce::ValueTree& t)         { return t.getProperty (ids::volumeDb, 0.0); }
@@ -118,6 +125,17 @@ namespace track
     inline juce::ValueTree inserts (const juce::ValueTree& t) { return t.getChildWithName (ids::INSERTS); }
     inline juce::ValueTree automation (const juce::ValueTree& t) { return t.getChildWithName (ids::AUTOMATION); }
 } // namespace track
+
+namespace send
+{
+    inline int slot (const juce::ValueTree& s)                { return s[ids::slot]; }
+    inline int target (const juce::ValueTree& s)              { return s[ids::target]; }  ///< aux track id
+    inline double levelDb (const juce::ValueTree& s)          { return s.getProperty (ids::levelDb, 0.0); }
+    inline double pan (const juce::ValueTree& s)              { return s.getProperty (ids::pan, 0.0); }
+    inline bool preFader (const juce::ValueTree& s)           { return s.getProperty (ids::preFader, false); }
+    inline bool mute (const juce::ValueTree& s)               { return s.getProperty (ids::mute, false); }
+    inline juce::ValueTree owningTrack (const juce::ValueTree& s) { return s.getParent().getParent(); }
+} // namespace send
 
 namespace clip
 {

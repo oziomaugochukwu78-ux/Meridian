@@ -82,13 +82,16 @@ void TrackHeader::refresh()
     soloButton.setToggleState (track::solo (trackNode), juce::dontSendNotification);
     muteButton.setToggleState (track::mute (trackNode), juce::dontSendNotification);
 
+    const bool aux = track::isAux (trackNode);
     const int input = track::inputChannel (trackNode);
-    const auto inputText = input < 0 ? juce::String ("no input")
+    const auto inputText = aux ? juce::String ("Aux Input")
+                           : input < 0 ? juce::String ("no input")
                            : track::channels (trackNode) == 2 ? "In " + juce::String (input + 1) + "-" + juce::String (input + 2)
                                                               : "In " + juce::String (input + 1);
     infoLabel.setText ("vol " + formatDb (track::volumeDb (trackNode)) + "   " + inputText
-                           + (track::channels (trackNode) == 2 ? "   stereo" : "   mono"),
+                           + (aux ? juce::String() : track::channels (trackNode) == 2 ? "   stereo" : "   mono"),
                        juce::dontSendNotification);
+    recordButton.setVisible (! aux); // nothing to record on a bus
 
     meter.setNumChannels (track::channels (trackNode));
     repaint();

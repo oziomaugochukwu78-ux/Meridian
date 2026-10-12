@@ -2,6 +2,7 @@
 
 #include "CommandIds.h"
 #include "media/AudioImporter.h"
+#include "model/Routing.h"
 #include "media/TimeStretchEngine.h"
 #include "ui/dialogs/DashboardComponent.h"
 #include "ui/dialogs/NewTracksComponent.h"
@@ -59,6 +60,7 @@ void SelfTest::start()
         testImportAndResampling();
         testElasticAudio();
         testPluginHosting();
+        testBusesAndSends();
         testRemoteCommands();
     }
 
@@ -601,6 +603,123 @@ void SelfTest::testPluginHosting()
 #endif
 }
 
+void SelfTest::testBusesAndSends()
+{
+    beginGroup ("Buses, sends and routing");
+    auto* session = app.getSession();
+    auto* um = &session->getUndoManager();
+    const auto tone = media.getChildFile ("tone1k_mono.wav");
+    const auto end = clipStart + (juce::int64) (2.0 * sampleRate) + 4800;
+    const double dry = toneDb + panCentreDb; // mono track at centre into a stereo bus
+
+    clearTracks();
+    auto t = addToneTrack ("Source", 1, tone, clipStart);
+    auto bus = session->addTrack ("Bus 1", 2, nullptr, Session::TrackKind::aux);
+    const int busId = track::id (bus);
+
+    // Output routing: track -> bus -> master.
+    expect ("route a track's output to a bus", routing::setOutput (*session, t, busId, um), {});
+    auto r = bounce ("route_to_bus", 0, end);
+    expectNear ("signal passes through the bus at unity", db (r.left.peak), dry, 0.02, "dB");
+
+    bus.setProperty (ids::volumeDb, -6.0, nullptr);
+    r = bounce ("bus_fader", 0, end);
+    expectNear ("the bus fader controls everything routed to it", db (r.left.peak), dry - 6.0, 0.02, "dB");
+
+    bus.setProperty (ids::mute, true, nullptr);
+    r = bounce ("bus_muted", 0, end);
+    expect ("muting the bus silences its sources", db (r.left.peak) < silentDb, fmt (db (r.left.peak)) + " dB");
+    bus.setProperty (ids::mute, false, nullptr);
+    bus.setProperty (ids::volumeDb, 0.0, nullptr);
+
+    // Post-fader send: the dry track still goes to the master, a copy goes to the bus.
+    routing::setOutput (*session, t, 0, um);
+    expect ("create a send to the bus", routing::setSend (*session, t, 0, busId, um), {});
+    auto s = routing::findSend (t, 0);
+    r = bounce ("send_0db", 0, end);
+    expectNear ("0 dB send doubles the signal (+6.02 dB, coherent sum)", db (r.left.peak), dry + 6.0206, 0.02, "dB");
+
+    s.setProperty (ids::levelDb, -6.0, nullptr);
+    r = bounce ("send_minus6", 0, end);
+    expectNear ("-6 dB send adds exactly its share", db (r.left.peak), dry + db (1.0 + std::pow (10.0, -6.0 / 20.0)), 0.02, "dB");
+
+    s.setProperty (ids::mute, true, nullptr);
+    r = bounce ("send_muted", 0, end);
+    expectNear ("muted send contributes nothing", db (r.left.peak), dry, 0.02, "dB");
+    s.setProperty (ids::mute, false, nullptr);
+    s.setProperty (ids::levelDb, 0.0, nullptr);
+
+    t.setProperty (ids::volumeDb, -6.0, nullptr);
+    r = bounce ("post_fader_follows", 0, end);
+    expectNear ("post-fader send follows the track fader", db (r.left.peak), dry + 6.0206 - 6.0, 0.02, "dB");
+
+    // Pre-fader send: independent of the fader (headphone-mix style).
+    s.setProperty (ids::preFader, true, nullptr);
+    t.setProperty (ids::volumeDb, -144.0, nullptr);
+    r = bounce ("pre_fader_send", 0, end);
+    expectNear ("pre-fader send ignores the fader (fader fully down)", db (r.left.peak), dry, 0.02, "dB");
+
+    t.setProperty (ids::mute, true, nullptr);
+    r = bounce ("pre_fader_send_muted_track", 0, end);
+    expect ("muting the track also mutes its pre-fader sends", db (r.left.peak) < silentDb, fmt (db (r.left.peak)) + " dB");
+    t.setProperty (ids::mute, false, nullptr);
+
+    s.setProperty (ids::pan, -1.0, nullptr);
+    r = bounce ("send_pan_left", 0, end);
+    expectNear ("send pan: hard left reaches the left side at full level", db (r.left.peak), toneDb, 0.02, "dB");
+    expect ("send pan: right side silent", db (r.right.peak) < silentDb, fmt (db (r.right.peak)) + " dB");
+    s.setProperty (ids::pan, 0.0, nullptr);
+    s.setProperty (ids::preFader, false, nullptr);
+    t.setProperty (ids::volumeDb, 0.0, nullptr);
+
+    // Implicit solo: soloing the source keeps its bus audible; other tracks go quiet.
+    auto other = addToneTrack ("Other", 1, media.getChildFile ("tone500_mono.wav"), clipStart);
+    t.setProperty (ids::solo, true, nullptr);
+    r = bounce ("solo_keeps_bus", 0, end);
+    {
+        const auto audio = readAudio (r.file);
+        const float* x = audio.getReadPointer (0, (int) clipStart + 4800);
+        expectNear ("soloed track is heard directly and through its bus", dsp::toneAmplitude (x, (int) sampleRate, 1000.0, sampleRate),
+                    2.0 * 0.5 * std::sqrt (0.5), 0.003, "");
+        expect ("unrelated track is silenced by the solo", db (dsp::toneAmplitude (x, (int) sampleRate, 500.0, sampleRate)) < silentDb,
+                fmt (db (dsp::toneAmplitude (x, (int) sampleRate, 500.0, sampleRate))) + " dB");
+    }
+    t.setProperty (ids::solo, false, nullptr);
+    session->removeTrack (other, nullptr);
+    routing::removeSend (t, 0, nullptr);
+
+    // Bus into bus, and loop protection.
+    auto bus2 = session->addTrack ("Bus 2", 2, nullptr, Session::TrackKind::aux);
+    routing::setOutput (*session, t, busId, um);
+    routing::setOutput (*session, bus, track::id (bus2), um);
+    r = bounce ("bus_chain", 0, end);
+    expectNear ("track -> bus -> bus -> master arrives intact", db (r.left.peak), dry, 0.02, "dB");
+    expect ("a loop (Bus 2 back into Bus 1) is refused",
+            ! routing::setOutput (*session, bus2, busId, um) && ! routing::setSend (*session, bus2, 0, busId, um)
+                && routing::wouldCreateCycle (*session, bus2, busId),
+            "Bus 2 output: " + juce::String (track::outputBus (bus2)));
+    expect ("a track cannot send to itself", ! routing::setSend (*session, bus, 0, busId, um), {});
+
+    // Persistence.
+    routing::setSend (*session, t, 2, track::id (bus2), um);
+    routing::findSend (t, 2).setProperty (ids::levelDb, -9.5, nullptr);
+    app.saveSession();
+    juce::String error;
+    if (const auto loaded = Session::load (session->getSessionFile(), error))
+    {
+        const auto lt = loaded->getTrack (0);
+        const auto ls = routing::findSend (lt, 2);
+        expect ("routing and sends are saved with the session",
+                track::outputBus (lt) == busId && ls.isValid() && send::target (ls) == track::id (bus2) && send::levelDb (ls) == -9.5,
+                "output " + juce::String (track::outputBus (lt)) + ", send level " + fmt (send::levelDb (ls)));
+    }
+    else
+    {
+        expect ("reload routed session", false, error);
+    }
+    clearTracks();
+}
+
 void SelfTest::testRemoteCommands()
 {
     beginGroup ("AI remote commands (in-process)");
@@ -733,8 +852,12 @@ void SelfTest::buildShowcaseSession()
     auto drums = addToneTrack ("Drums", 2, stereoTone, 0);
     auto bass = addToneTrack ("Bass", 1, tone, 48000);
     auto vox = addToneTrack ("Lead Vox", 1, media.getChildFile ("tone500_mono.wav"), 96000);
-    addToneTrack ("Keys", 2, stereoTone, 24000);
+    auto keys = addToneTrack ("Keys", 2, stereoTone, 24000);
     session->addTrack ("Guitar", 1, nullptr);
+    auto verb = session->addTrack ("Reverb Bus", 2, nullptr, Session::TrackKind::aux);
+    routing::setSend (*session, vox, 0, track::id (verb), nullptr);
+    routing::setSend (*session, keys, 0, track::id (verb), nullptr);
+    routing::findSend (keys, 0).setProperty (ids::levelDb, -12.0, nullptr);
     bass.setProperty (ids::volumeDb, -4.5, nullptr);
     bass.setProperty (ids::pan, -0.3, nullptr);
     vox.setProperty (ids::solo, false, nullptr);

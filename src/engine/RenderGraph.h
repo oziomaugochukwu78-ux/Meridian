@@ -57,11 +57,33 @@ struct ClipSegment
     std::shared_ptr<ClipStream> stream;
 };
 
+struct SendRender
+{
+    std::shared_ptr<SendRealtimeState> state;
+    int targetBus = -1;                            ///< index into RenderGraph::buses
+};
+
+/** The input of an aux track: a stereo compensated (double-double) sum,
+    exactly like the master bus, cleared every block. */
+struct BusInput
+{
+    std::vector<double> sum[2], comp[2];
+};
+
 struct TrackRender
 {
     std::shared_ptr<TrackRealtimeState> state;
     int numChannels = 1;
     int inputChannel = 0;                          ///< -1 = no input
+
+    // Routing
+    bool isAux = false;
+    int ownBus = -1;                               ///< aux tracks: the BusInput they read
+    int outputBus = -1;                            ///< -1 = master, else a BusInput index
+    std::vector<SendRender> sends;
+    /** Aux tracks: every track that feeds this bus (directly or through other
+        buses). If one of them is soloed, the aux stays audible ("implicit solo"). */
+    std::vector<std::shared_ptr<TrackRealtimeState>> upstream;
     std::vector<ClipSegment> segments;             ///< sorted by start
     std::vector<std::shared_ptr<InsertSlot>> inserts;
     std::shared_ptr<RecordTake> take;
@@ -80,7 +102,10 @@ struct TrackRender
     deletion. The audio thread never allocates, frees or locks because of it. */
 struct RenderGraph
 {
+    /** Render order: every track comes before any aux it feeds, so a bus's
+        input is complete by the time the bus itself is processed. */
     std::vector<TrackRender> tracks;
+    std::vector<BusInput> buses;
     int maxBlockSize = 0;
     double sampleRate = 0.0;
 };

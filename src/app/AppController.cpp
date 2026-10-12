@@ -286,15 +286,16 @@ juce::String AppController::nextTrackName (const juce::String& baseName) const
     }
 }
 
-void AppController::addTracks (int count, int numChannels, const juce::String& baseName)
+void AppController::addTracks (int count, int numChannels, const juce::String& baseName, Session::TrackKind kind)
 {
     if (session == nullptr)
         return;
 
+    const auto fallback = kind == Session::TrackKind::aux ? "Aux" : "Audio";
     auto& um = session->getUndoManager();
     um.beginNewTransaction (count == 1 ? "New Track" : "New Tracks");
     for (int i = 0; i < count; ++i)
-        session->addTrack (nextTrackName (baseName.isNotEmpty() ? baseName : "Audio"), numChannels, &um);
+        session->addTrack (nextTrackName (baseName.isNotEmpty() ? baseName : juce::String (fallback)), numChannels, &um, kind);
 }
 
 void AppController::deleteTrack (juce::ValueTree t)
@@ -317,7 +318,7 @@ void AppController::importAudioFiles (const juce::Array<juce::File>& files, juce
     const int bitDepth = session->getBitDepth();
     const bool aiff = session->getFileFormat() == "aiff";
     const int generation = sessionGeneration;
-    const bool useTarget = targetTrack.isValid() && files.size() == 1;
+    const bool useTarget = targetTrack.isValid() && files.size() == 1 && ! track::isAux (targetTrack); // auxes hold no clips
 
     for (const auto& source : files)
     {
@@ -702,8 +703,13 @@ std::string AppController::statusJson()
         const auto t = session->getTrack (i);
         const double db = track::volumeDb (t);
         remote::JsonObject entry;
+        const int output = track::outputBus (t);
+        const auto outputTrack = output != 0 ? session->getTrackById (output) : juce::ValueTree();
         entry.addInt ("number", i + 1)
             .addString ("name", track::name (t).toStdString())
+            .addString ("kind", track::isAux (t) ? "aux" : "audio")
+            .addString ("output", outputTrack.isValid() ? track::name (outputTrack).toStdString() : std::string ("master"))
+            .addInt ("sends", track::sends (t).getNumChildren())
             .addInt ("channels", track::channels (t))
             .addNumber ("pan", track::pan (t), 2)
             .addBool ("muted", track::mute (t))

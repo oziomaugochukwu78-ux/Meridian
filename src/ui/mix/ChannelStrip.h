@@ -1,6 +1,7 @@
 #pragma once
 
 #include "InsertSlotButton.h"
+#include "SendSlotButton.h"
 
 #include "app/AppController.h"
 #include "ui/LevelMeter.h"
@@ -13,8 +14,8 @@ namespace meridian
 /** Vertical console strip for one track, top to bottom:
 
       INSERTS A-E / F-J   ten plug-in slots
-      SENDS A-E           (planned; drawn disabled)
-      I/O                 input selector, output
+      SENDS A-E           five sends to aux buses
+      I/O                 input selector (audio tracks), output: master or a bus
       AUTO                automation mode (off / read)
       PAN                 knob + readout ("<50", "0", "50>")
       R  S  M             record, solo, mute
@@ -33,6 +34,9 @@ public:
 
     void updateMeter();
 
+    /** Re-reads routing labels (bus names can change from other strips). */
+    void refreshRouting();
+
     // For the self test, which drives the strip's real controls.
     juce::Slider& getFader() noexcept          { return fader; }
     juce::Slider& getPanKnob() noexcept        { return panKnob; }
@@ -46,7 +50,7 @@ private:
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
     void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;
     void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override;
-    void handleAsyncUpdate() override { refreshInsertSlots(); }
+    void handleAsyncUpdate() override { refreshInsertSlots(); refreshRouting(); }
     void refresh();
     void refreshInsertSlots();
     void populateInputs();
@@ -56,8 +60,9 @@ private:
     juce::ValueTree trackNode;
 
     juce::OwnedArray<InsertSlotButton> insertSlots;
+    juce::OwnedArray<SendSlotButton> sendSlots;
     juce::ComboBox inputSelector, automationSelector;
-    juce::Label outputLabel;
+    juce::TextButton outputButton;
     juce::Slider panKnob { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
     juce::Label panReadout;
     juce::TextButton recordButton { "R" }, soloButton { "S" }, muteButton { "M" };
@@ -65,7 +70,7 @@ private:
     LevelMeter meter;
     juce::Label volumeReadout, namePlate;
 
-    juce::Rectangle<int> insertsHeaderA, insertsHeaderB, sendsHeader, sendsArea, ioHeader, scaleArea;
+    juce::Rectangle<int> insertsHeaderA, insertsHeaderB, sendsHeader, ioHeader, scaleArea;
     bool draggingFader = false;
 };
 

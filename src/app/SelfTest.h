@@ -55,6 +55,7 @@ private:
     void testImportAndResampling();
     void testElasticAudio();
     void testPluginHosting();
+    void testBusesAndSends();
     void testRemoteCommands();
 
     // Phase 2
