@@ -55,7 +55,7 @@ int signChanges (const std::vector<float>& x, int64_t from, int length)
 
 TEST_CASE ("Metronome: every click starts on its exact beat sample, silence between", "[metronome]")
 {
-    for (const auto [rate, bpm] : { std::pair { 48000.0, 120.0 }, std::pair { 44100.0, 97.0 }, std::pair { 96000.0, 133.3 } })
+    for (const auto& [rate, bpm] : { std::pair { 48000.0, 120.0 }, std::pair { 44100.0, 97.0 }, std::pair { 96000.0, 133.3 } })
     {
         auto m = make (rate, bpm);
         const int total = (int) (rate * 6.0);

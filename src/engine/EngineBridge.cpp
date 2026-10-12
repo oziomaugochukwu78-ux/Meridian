@@ -656,7 +656,7 @@ std::unique_ptr<RenderGraph> EngineBridge::buildGraph (double sampleRate, int ma
 
             for (const auto& s : track::sends (t))
                 if (const int bus = busFor (t, send::target (s)); bus >= 0)
-                    render.sends.push_back ({ ensureSendState (s), bus, send::slot (s), {} });
+                    render.sends.push_back ({ ensureSendState (s), bus, send::slot (s), {}, {} });
 
             if (render.isAux)
                 for (const auto& other : order)
