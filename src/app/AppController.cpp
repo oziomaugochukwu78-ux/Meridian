@@ -237,6 +237,7 @@ void AppController::valueTreePropertyChanged (juce::ValueTree& tree, const juce:
 
     if (tree.hasType (ids::SESSION)
         && (property == ids::loopEnabled || property == ids::loopStart || property == ids::loopEnd || property == ids::tempo
+            || property == ids::punchEnabled || property == ids::punchIn || property == ids::punchOut
             || property == ids::clickEnabled || property == ids::clickLevelDb))
         applyTransportSettings();
 }
@@ -252,6 +253,8 @@ void AppController::applyTransportSettings()
     const auto& s = session->getState();
     engine.getTransport().setLoop (s.getProperty (ids::loopEnabled, false), (juce::int64) s.getProperty (ids::loopStart, 0),
                                    (juce::int64) s.getProperty (ids::loopEnd, 0));
+    engine.getTransport().setPunch (s.getProperty (ids::punchEnabled, false), (juce::int64) s.getProperty (ids::punchIn, 0),
+                                    (juce::int64) s.getProperty (ids::punchOut, 0));
     engine.clickEnabled.store (s.getProperty (ids::clickEnabled, false));
     engine.clickLevelDb.store (s.getProperty (ids::clickLevelDb, -6.0));
     engine.clickBpm.store (session->getTempo());
@@ -267,6 +270,17 @@ void AppController::setLoop (bool enabled, juce::int64 start, juce::int64 end)
     s.setProperty (ids::loopStart, start, nullptr);
     s.setProperty (ids::loopEnd, std::max (start, end), nullptr);
     s.setProperty (ids::loopEnabled, enabled && end > start, nullptr);
+}
+
+void AppController::setPunch (bool enabled, juce::int64 in, juce::int64 out)
+{
+    if (session == nullptr)
+        return;
+    auto s = session->getState();
+    in = std::max<juce::int64> (0, in);
+    s.setProperty (ids::punchIn, in, nullptr);
+    s.setProperty (ids::punchOut, std::max (in, out), nullptr);
+    s.setProperty (ids::punchEnabled, enabled && out > in, nullptr);
 }
 
 void AppController::setClick (bool enabled, double levelDb)

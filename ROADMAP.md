@@ -55,7 +55,7 @@ What a home producer, songwriter or podcaster needs.
 **Editing and workflow**
 - clip gain line and handles
 - done: track reorder and duplicate
-- done: markers, loop playback; still to do: a punch-in/punch-out window
+- done: markers, loop playback, punch-in/punch-out recording
 - playlists with comping
 - bars|beats grid and ruler
 - tempo and meter map

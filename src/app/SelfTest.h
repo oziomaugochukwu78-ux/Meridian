@@ -105,6 +105,7 @@ private:
     void testAutomation();
     void testLoudnessAndExport();
     void testTrackEditing();
+    void testPunchRecording();
     void testStress();
     void testRobustness();
     void testDamagedSessions (const juce::File& originalSession);

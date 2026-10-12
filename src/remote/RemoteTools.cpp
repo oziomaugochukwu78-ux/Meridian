@@ -167,6 +167,12 @@ const std::vector<ToolInfo>& toolTable()
           schema ({ { "enabled", "boolean", "Loop playback on/off", true },
                     { "start_seconds", "number", "Loop start in seconds (default: the current range)" },
                     { "end_seconds", "number", "Loop end in seconds" } }) },
+        { "set_punch", "Punch recording",
+          "Record only between start and end: recording plays from wherever it starts (a pre-roll), writes takes "
+          "only within the range, then keeps playing. Useful to fix one phrase without touching the rest.",
+          schema ({ { "enabled", "boolean", "Punch recording on/off", true },
+                    { "start_seconds", "number", "Punch-in (default: the current range)" },
+                    { "end_seconds", "number", "Punch-out" } }) },
         { "set_click", "Click and count-in",
           "The metronome click (accented on beat 1 of each bar, at the session tempo) and the count-in before recording.",
           schema ({ { "enabled", "boolean", "Click on/off while playing and recording" },
@@ -489,6 +495,7 @@ RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var
     if (name == "transport")          return transport (args);
     if (name == "set_loop")           return setLoop (args);
     if (name == "set_click")          return setClick (args);
+    if (name == "set_punch")          return setPunch (args);
     if (name == "add_marker")         return addMarker (args);
     if (name == "list_markers")       return listMarkers();
     if (name == "delete_marker")      return deleteMarker (args);
@@ -788,6 +795,9 @@ juce::var RemoteTools::describeTransportSettings() const
     return makeObject ({ { "loop_enabled", (bool) s.getProperty (ids::loopEnabled, false) },
                          { "loop_start_seconds", samplesToSeconds (s.getProperty (ids::loopStart, 0)) },
                          { "loop_end_seconds", samplesToSeconds (s.getProperty (ids::loopEnd, 0)) },
+                         { "punch_enabled", (bool) s.getProperty (ids::punchEnabled, false) },
+                         { "punch_in_seconds", samplesToSeconds (s.getProperty (ids::punchIn, 0)) },
+                         { "punch_out_seconds", samplesToSeconds (s.getProperty (ids::punchOut, 0)) },
                          { "click_enabled", (bool) s.getProperty (ids::clickEnabled, false) },
                          { "click_level_db", (double) s.getProperty (ids::clickLevelDb, -6.0) },
                          { "count_in_bars", (int) s.getProperty (ids::countInBars, 0) } });
@@ -802,6 +812,18 @@ RemoteTools::Result RemoteTools::setLoop (const juce::var& args)
     if (enabled && end <= start)
         return { false, {}, "The loop range is empty: give start_seconds and end_seconds with end after start." };
     app.setLoop (enabled, start, end);
+    return { true, describeTransportSettings(), {} };
+}
+
+RemoteTools::Result RemoteTools::setPunch (const juce::var& args)
+{
+    const auto& s = app.getSession()->getState();
+    const auto in = args.hasProperty ("start_seconds") ? secondsToSamples (args["start_seconds"]) : (juce::int64) s.getProperty (ids::punchIn, 0);
+    const auto out = args.hasProperty ("end_seconds") ? secondsToSamples (args["end_seconds"]) : (juce::int64) s.getProperty (ids::punchOut, 0);
+    const bool enabled = args["enabled"];
+    if (enabled && out <= in)
+        return { false, {}, "The punch range is empty: give start_seconds and end_seconds with end after start." };
+    app.setPunch (enabled, in, out);
     return { true, describeTransportSettings(), {} };
 }
 

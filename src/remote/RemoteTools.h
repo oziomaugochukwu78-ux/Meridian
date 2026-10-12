@@ -55,6 +55,7 @@ private:
     Result moveTrack (const juce::var&);
     Result setLoop (const juce::var&);
     Result setClick (const juce::var&);
+    Result setPunch (const juce::var&);
     Result addMarker (const juce::var&);
     Result listMarkers();
     Result deleteMarker (const juce::var&);

@@ -132,6 +132,17 @@ void TimelineRuler::paint (juce::Graphics& g)
         g.fillRect (juce::Rectangle<float> (x1, (float) rowHeight - 4.0f, x2 - x1, 4.0f));
     }
 
+    // Punch range: a red strip just above the loop strip.
+    if (const juce::int64 punchOut = session.getProperty (ids::punchOut, 0), punchIn = session.getProperty (ids::punchIn, 0);
+        punchOut > punchIn)
+    {
+        const auto x1 = (float) (trackHeaderWidth + state.sampleToX (punchIn));
+        const auto x2 = (float) (trackHeaderWidth + state.sampleToX (punchOut));
+        const bool on = session.getProperty (ids::punchEnabled, false);
+        g.setColour (theme::record.withAlpha (on ? 0.9f : 0.3f));
+        g.fillRect (juce::Rectangle<float> (x1, (float) rowHeight - 8.0f, x2 - x1, 3.0f));
+    }
+
     paintMarkers (g, area.removeFromTop (rowHeight));
     paintBarsBeats (g, area.removeFromTop (rowHeight));
     paintMinSecs (g, area.removeFromTop (rowHeight));

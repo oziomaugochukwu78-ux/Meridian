@@ -233,7 +233,21 @@ void AudioEngine::renderBlock (const float* const* inputs, int numInputs,
         else if (looping && position < loopEnd)
             chunk = (int) std::min<juce::int64> (chunk, loopEnd - position);
 
-        processChunk (inputs, numInputs, outputs, numOutputs, done, chunk, state, countIn > 0);
+        // Punch recording: chunks end exactly at the punch points; outside them the
+        // transport only plays.
+        auto effectiveState = state;
+        if (state == Transport::State::recording && countIn == 0 && transport.isPunchEnabled())
+        {
+            const auto in = transport.getPunchIn(), out = transport.getPunchOut();
+            if (position < in)
+                chunk = (int) std::min<juce::int64> (chunk, in - position);
+            else if (position < out)
+                chunk = (int) std::min<juce::int64> (chunk, out - position);
+            if (position < in || position >= out)
+                effectiveState = Transport::State::playing;
+        }
+
+        processChunk (inputs, numInputs, outputs, numOutputs, done, chunk, effectiveState, countIn > 0);
 
         if (countIn > 0)
             transport.consumeCountIn (chunk);

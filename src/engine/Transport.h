@@ -52,6 +52,20 @@ public:
         loopEnabled.store (enabled && end > start, std::memory_order_release);
     }
 
+    /** Message thread. Punch recording: while recording, takes are written only
+        between `in` and `out`; before and after, the transport just plays (so
+        the performer hears a pre-roll and a post-roll). */
+    void setPunch (bool enabled, int64_t in, int64_t out) noexcept
+    {
+        punchIn.store (in < 0 ? 0 : in, std::memory_order_relaxed);
+        punchOut.store (out, std::memory_order_relaxed);
+        punchEnabled.store (enabled && out > in, std::memory_order_release);
+    }
+
+    bool isPunchEnabled() const noexcept { return punchEnabled.load (std::memory_order_acquire); }
+    int64_t getPunchIn() const noexcept  { return punchIn.load (std::memory_order_relaxed); }
+    int64_t getPunchOut() const noexcept { return punchOut.load (std::memory_order_relaxed); }
+
     bool isLoopEnabled() const noexcept   { return loopEnabled.load (std::memory_order_acquire); }
     int64_t getLoopStart() const noexcept { return loopStart.load (std::memory_order_relaxed); }
     int64_t getLoopEnd() const noexcept   { return loopEnd.load (std::memory_order_relaxed); }
@@ -100,7 +114,8 @@ private:
     std::atomic<int64_t> playStart { 0 };
     std::atomic<int64_t> pendingLocate { -1 };
     std::atomic<bool> audioRunning { false };
-    std::atomic<bool> loopEnabled { false };
+    std::atomic<bool> loopEnabled { false }, punchEnabled { false };
+    std::atomic<int64_t> punchIn { 0 }, punchOut { 0 };
     std::atomic<int64_t> loopStart { 0 }, loopEnd { 0 };
     std::atomic<int64_t> countInRemaining { 0 }, countInLength { 0 };
 };

@@ -79,6 +79,7 @@ void SelfTest::start()
         testAutomation();
         testLoudnessAndExport();
         testTrackEditing();
+        testPunchRecording();
         testStress();
         testRobustness(); // before the remote tests: their BOUNCE runs in the background
         testMcpTools();
@@ -1916,6 +1917,91 @@ void SelfTest::testAutomation()
 }
 
 //==============================================================================
+// Punch recording: takes written only between punch-in and punch-out.
+
+void SelfTest::testPunchRecording()
+{
+    beginGroup ("Punch recording");
+    juce::TimeSliceThread writerThread ("punch test writer");
+    writerThread.startThread();
+    const auto takeFile = output.getChildFile ("punch-take.wav");
+
+    {
+        AudioEngine engine;
+        engine.prepare (sampleRate, 500);
+        engine.getMasterBus().consoleEnabled.store (false);
+
+        auto take = std::make_shared<RecordTake>();
+        juce::String error;
+        auto writer = createSessionWriter (takeFile, sampleRate, 1, 24, false, error);
+        take->writer = std::make_unique<juce::AudioFormatWriter::ThreadedWriter> (writer.release(), writerThread, 48000);
+        take->trackId = 1;
+        take->numChannels = 1;
+        take->inputChannel = 0;
+
+        auto graph = std::make_unique<RenderGraph>();
+        graph->maxBlockSize = 500;
+        graph->sampleRate = sampleRate;
+        TrackRender audio;
+        audio.state = std::make_shared<TrackRealtimeState> (1);
+        audio.state->recordArmed.store (true);
+        audio.numChannels = 1;
+        audio.inputChannel = 0;
+        audio.take = take;
+        audio.buffer.setSize (1, 500);
+        audio.clipScratch.setSize (2, 500);
+        graph->tracks.push_back (std::move (audio));
+        TrackRender keys;
+        keys.state = std::make_shared<TrackRealtimeState> (2);
+        keys.state->recordArmed.store (true);
+        keys.numChannels = 2;
+        keys.inputChannel = -1;
+        keys.instrument = std::make_shared<InstrumentState>();
+        keys.buffer.setSize (2, 500);
+        keys.clipScratch.setSize (2, 500);
+        graph->tracks.push_back (std::move (keys));
+        engine.publishGraph (std::move (graph));
+
+        // Punch 0.5 s .. 1.0 s; record from 0 (a half-second pre-roll), in blocks that do not
+        // line up with the punch points; a key before, inside and after the range.
+        auto& transport = engine.getTransport();
+        transport.setPunch (true, 24000, 48000);
+        transport.play (Transport::State::recording);
+        std::vector<float> l (500), r (500);
+        float* outs[2] = { l.data(), r.data() };
+        for (int done = 0; done < 72000; done += 500)
+        {
+            if (done == 10000 || done == 30000 || done == 60000)
+                engine.pushLiveMidi (60 + done / 10000, 0.8f, true, 0.0);
+            engine.renderOffline (outs, 2, 500);
+        }
+        transport.stop();
+
+        expect ("punch: the take starts exactly at punch-in and holds exactly the punch range (not the pre/post-roll)",
+                take->startSample.load() == 24000 && take->samplesWritten.load() == 24000,
+                "start " + juce::String (take->startSample.load()) + ", " + juce::String (take->samplesWritten.load()) + " samples");
+        std::vector<int> captured;
+        AudioEngine::RecordedMidi m;
+        while (engine.popRecordedMidi (m))
+            captured.push_back ((int) m.time);
+        expect ("punch: MIDI is captured only inside the range (the key at 0.625 s, not 0.21 s or 1.25 s)",
+                captured == std::vector<int> { 30000 }, juce::String ((int) captured.size()) + " captured");
+        take->writer.reset();
+    }
+    writerThread.stopThread (2000);
+    takeFile.deleteFile();
+
+    auto& tools = app.getRemoteTools();
+    auto r = tools.call ("set_punch", juce::JSON::parse (R"({"enabled":true,"start_seconds":2,"end_seconds":3})"));
+    const auto& transport = app.getEngine().getTransport();
+    expect ("set_punch sets the engine's punch range; an empty range is refused",
+            r.ok && transport.isPunchEnabled() && transport.getPunchIn() == 96000 && transport.getPunchOut() == 144000
+                && ! tools.call ("set_punch", juce::JSON::parse (R"({"enabled":true,"start_seconds":3,"end_seconds":2})")).ok,
+            r.error);
+    tools.call ("set_punch", juce::JSON::parse (R"({"enabled":false})"));
+}
+
+//==============================================================================
 // Track duplicate and reorder.
 
 void SelfTest::testTrackEditing()
@@ -2784,8 +2870,8 @@ void SelfTest::testMcpTools()
     if (toolArray != nullptr)
         for (const auto& tool : *toolArray)
             allDescribed = allDescribed && tool["inputSchema"].isObject() && tool["description"].toString().length() > 20;
-    expect ("tools/list describes all 40 tools, each with a description and a JSON schema",
-            allDescribed && toolArray->size() == 40, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
+    expect ("tools/list describes all 41 tools, each with a description and a JSON schema",
+            allDescribed && toolArray->size() == 41, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
 
     auto r = toolCall ("get_status", "{}");
     expect ("get_status returns the session and tracks", ! failed (r) && callText (r).contains ("\"Vocal\""), callText (r).substring (0, 160));

@@ -105,6 +105,11 @@ private:
         if ((bool) s.getProperty (ids::loopEnabled, false)
             && (juce::int64) s.getProperty (ids::loopEnd, 0) <= (juce::int64) s.getProperty (ids::loopStart, 0))
             set (s, ids::loopEnabled, false, "session", "loop playback with an empty range");
+        clampNumber (s, ids::punchIn, 0.0, 1.0e15, 0.0, "session");
+        clampNumber (s, ids::punchOut, 0.0, 1.0e15, 0.0, "session");
+        if ((bool) s.getProperty (ids::punchEnabled, false)
+            && (juce::int64) s.getProperty (ids::punchOut, 0) <= (juce::int64) s.getProperty (ids::punchIn, 0))
+            set (s, ids::punchEnabled, false, "session", "punch recording with an empty range");
 
         auto markers = s.getChildWithName (ids::MARKERS);
         if (! markers.isValid())
@@ -505,9 +510,12 @@ juce::String findSessionProblem (const Session& session)
         return "click level " + s[ids::clickLevelDb].toString();
     if (s.hasProperty (ids::countInBars) && ! finiteIn (s[ids::countInBars], 0.0, 8.0))
         return "count-in " + s[ids::countInBars].toString();
-    for (const auto* p : { &ids::loopStart, &ids::loopEnd })
+    for (const auto* p : { &ids::loopStart, &ids::loopEnd, &ids::punchIn, &ids::punchOut })
         if (s.hasProperty (*p) && ! finiteIn (s[*p], 0.0, 1.0e15))
             return p->toString() + " " + s[*p].toString();
+    if ((bool) s.getProperty (ids::punchEnabled, false)
+        && (juce::int64) s.getProperty (ids::punchOut, 0) <= (juce::int64) s.getProperty (ids::punchIn, 0))
+        return "punch recording with an empty range";
     if ((bool) s.getProperty (ids::loopEnabled, false)
         && (juce::int64) s.getProperty (ids::loopEnd, 0) <= (juce::int64) s.getProperty (ids::loopStart, 0))
         return "loop playback with an empty range";

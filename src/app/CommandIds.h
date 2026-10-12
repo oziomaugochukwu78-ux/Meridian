@@ -50,6 +50,7 @@ enum : juce::CommandID
     countIn1Bar,
     countIn2Bars,
     addMarker,
+    punchRecording,
 
     // Setup
     playbackEngine = 0x15000,

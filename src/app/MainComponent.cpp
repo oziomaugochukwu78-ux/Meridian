@@ -1,4 +1,4 @@
-﻿#include "MainComponent.h"
+#include "MainComponent.h"
 
 #include "CommandIds.h"
 
@@ -315,7 +315,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& c)
                   undo, redo, separateClip, deleteSelection, elasticAudio, zoomIn, zoomOut,
                   slipMode, gridMode, trimTool, selectorTool, grabberTool, smartTool, pencilTool,
                   newTracks, deleteTrack,
-                  playStop, record, returnToZero, loopPlayback, clickToggle, countInOff, countIn1Bar, countIn2Bars, addMarker,
+                  playStop, record, returnToZero, loopPlayback, punchRecording, clickToggle, countInOff, countIn1Bar, countIn2Bars, addMarker,
                   playbackEngine, pluginManager, toggleRemoteControl, remoteControlInfo,
                   toggleWindow, showEditWindow, showMixWindow });
 }
@@ -413,8 +413,13 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setTicked (hasSession && (bool) s.getProperty (ids::loopEnabled, false));
             break;
         }
-        case clickToggle:      info.setInfo ("Click", "Metronome while playing and recording", "Transport", 0);
-                               info.addDefaultKeypress ('k', cmd | shift); info.setActive (hasSession);
+        case punchRecording:
+            info.setInfo ("Punch Recording", "Record only within the selection (or the last punch range); play before and after", "Transport", 0);
+            info.addDefaultKeypress ('p', cmd | shift);
+            info.setActive (hasSession);
+            info.setTicked (hasSession && (bool) app.getSession()->getState().getProperty (ids::punchEnabled, false));
+            break;
+        case clickToggle:      info.setInfo ("Click", "Metronome while playing and recording", "Transport", 0);                               info.addDefaultKeypress ('k', cmd | shift); info.setActive (hasSession);
                                info.setTicked (hasSession && (bool) app.getSession()->getState().getProperty (ids::clickEnabled, false)); break;
         case countInOff:
         case countIn1Bar:
@@ -513,8 +518,24 @@ bool MainComponent::perform (const InvocationInfo& info)
                 app.setLoop (on, start, end);
             }
             break;
-        case clickToggle:
+        case punchRecording:
             if (auto* session = app.getSession())
+            {
+                const auto s = session->getState();
+                const bool on = ! (bool) s.getProperty (ids::punchEnabled, false);
+                juce::int64 in = s.getProperty (ids::punchIn, 0), out = s.getProperty (ids::punchOut, 0);
+                if (edit.hasTimeRange())
+                {
+                    in = edit.selectionStart;
+                    out = edit.selectionEnd;
+                }
+                if (on && out <= in)
+                    showMessage (juce::MessageBoxIconType::InfoIcon, "Punch Recording", "Select the time range to record over first.");
+                else
+                    app.setPunch (on, in, out);
+            }
+            break;
+        case clickToggle:            if (auto* session = app.getSession())
                 app.setClick (! (bool) session->getState().getProperty (ids::clickEnabled, false),
                               session->getState().getProperty (ids::clickLevelDb, -6.0));
             break;
@@ -592,7 +613,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int index, const juce::String&)
         {
             add (playStop); add (record); add (returnToZero);
             menu.addSeparator();
-            add (loopPlayback); add (clickToggle);
+            add (loopPlayback); add (punchRecording); add (clickToggle);
             menu.addSeparator();
             add (countInOff); add (countIn1Bar); add (countIn2Bars);
             menu.addSeparator();

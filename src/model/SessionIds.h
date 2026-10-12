@@ -42,7 +42,7 @@
                 NOTE  pitch velocity start length       (ticks)
 
     SESSION also holds tempo (BPM, default 120), loop playback (loopEnabled,
-    loopStart, loopEnd in samples), the click (clickEnabled, clickLevelDb),
+    loopStart, loopEnd in samples), punch recording (punchEnabled, punchIn, punchOut), the click (clickEnabled, clickLevelDb),
     countInBars (0 = none; counts in before recording), and markers:
       MARKERS
         MARKER  number name start      (start in samples)
@@ -89,6 +89,9 @@ MERIDIAN_ID (tempo)
 MERIDIAN_ID (loopEnabled)
 MERIDIAN_ID (loopStart)
 MERIDIAN_ID (loopEnd)
+MERIDIAN_ID (punchEnabled)
+MERIDIAN_ID (punchIn)
+MERIDIAN_ID (punchOut)
 MERIDIAN_ID (clickEnabled)
 MERIDIAN_ID (clickLevelDb)
 MERIDIAN_ID (countInBars)

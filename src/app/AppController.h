@@ -80,6 +80,8 @@ public:
     /** Loop playback over [start, end) in samples. Not an edit: not in the undo history. */
     void setLoop (bool enabled, juce::int64 start, juce::int64 end);
     void setClick (bool enabled, double levelDb);
+    /** Punch recording: while recording, write takes only within [in, out). */
+    void setPunch (bool enabled, juce::int64 in, juce::int64 out);
     void setCountInBars (int bars);
     /** Samples of count-in before recording at the current tempo (0 if none). */
     juce::int64 getCountInSamples() const;
