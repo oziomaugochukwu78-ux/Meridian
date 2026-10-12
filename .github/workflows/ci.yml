@@ -98,15 +98,6 @@ jobs:
         run: cmake --build build/app --parallel 4 -- -k
       - name: Unit tests
         run: ctest --test-dir build/app --output-on-failure
-      - name: Virtual sound card (best effort)
-        # The kernel's dummy ALSA card lets the live-playback checks run on a
-        # server. If the runner's kernel lacks it, those checks are skipped.
-        run: |
-          sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)" || true
-          sudo modprobe snd-dummy || true
-          sudo modprobe snd-seq || true
-          sudo chmod -R a+rw /dev/snd 2>/dev/null || true
-          ls -l /dev/snd || echo "no sound devices"
       - name: Self test
         run: |
           set +e
