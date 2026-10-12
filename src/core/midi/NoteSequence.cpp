@@ -30,7 +30,10 @@ size_t NoteSequence::add (Note n)
     {
         return a.start != b.start ? a.start < b.start : a.pitch < b.pitch;
     });
-    return (size_t) (notes.insert (at, n) - notes.begin());
+    // Two statements: the operands of '-' are unsequenced, and begin() read before
+    // a reallocating insert would give a garbage index (it did, with GCC).
+    const auto inserted = notes.insert (at, n);
+    return (size_t) (inserted - notes.begin());
 }
 
 void NoteSequence::removeAt (size_t index)

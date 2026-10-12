@@ -26,7 +26,8 @@ juce::ValueTree makeNoteNode (const midi::Note& note)
 {
     // Clamp exactly as NoteSequence does, so the document never holds an invalid note.
     midi::NoteSequence one;
-    const auto& n = one.getNotes()[one.add (note)];
+    const auto index = one.add (note);
+    const auto& n = one.getNotes()[index];
     juce::ValueTree node (ids::NOTE);
     node.setProperty (ids::pitch, n.pitch, nullptr);
     node.setProperty (ids::velocity, (double) n.velocity, nullptr);

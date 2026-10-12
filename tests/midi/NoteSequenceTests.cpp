@@ -39,6 +39,22 @@ TEST_CASE ("Notes are kept sorted by start, then pitch", "[notes]")
     CHECK (s.endTick() == 1440);
 }
 
+TEST_CASE ("add() returns the index of the note it inserted, through every reallocation", "[notes]")
+{
+    // Regression: the index was once computed as insert(...) - begin() in one
+    // expression, which GCC may evaluate begin() first, before the vector grows.
+    NoteSequence s;
+    for (int i = 0; i < 200; ++i)
+    {
+        const int pitch = (i * 37) % 128;
+        const int64_t start = ((i * 7919) % 50) * 120; // out of order, with ties
+        const auto index = s.add ({ pitch, 0.8f, start, 100 });
+        REQUIRE (index < s.size());
+        CHECK (s.getNotes()[index].pitch == pitch);
+        CHECK (s.getNotes()[index].start == start);
+    }
+}
+
 TEST_CASE ("Invalid note values are clamped, never stored", "[notes]")
 {
     NoteSequence s;

@@ -104,6 +104,7 @@ jobs:
           xvfb-run -a -s "-screen 0 1600x1000x24" \
             "build/app/src/Meridian_artefacts/Release/Meridian" --self-test "$PWD/build/self-test" --allow-no-audio-device
           status=$?
+          if [ $status -ne 0 ]; then echo "---- last lines of progress.log (exit $status) ----"; tail -n 40 build/self-test/progress.log; fi
           cat build/self-test/report.txt
           exit $status
       - name: Upload self-test report and screenshots
@@ -148,6 +149,7 @@ jobs:
             "build/asan/src/Meridian_artefacts/RelWithDebInfo/Meridian" --self-test "$PWD/build/self-test" --allow-no-audio-device \
             2> build/sanitizer.log
           status=$?
+          if [ $status -ne 0 ]; then echo "---- last lines of progress.log (exit $status) ----"; tail -n 40 build/self-test/progress.log; fi
           cat build/self-test/report.txt
           echo "---- sanitizer output ----"
           cat build/sanitizer.log
@@ -182,6 +184,7 @@ jobs:
           "build/app/src/Meridian_artefacts/Release/Meridian.app/Contents/MacOS/Meridian" \
             --self-test "$PWD/build/self-test" --allow-no-audio-device
           status=$?
+          if [ $status -ne 0 ]; then echo "---- last lines of progress.log (exit $status) ----"; tail -n 40 build/self-test/progress.log; fi
           cat build/self-test/report.txt
           exit $status
       - name: Upload self-test report and screenshots
