@@ -1,0 +1,146 @@
+# Builds and tests Meridian on every push to main and every pull request.
+#
+#   core     - the dependency-free core library and its unit tests, on Linux and macOS
+#   windows  - the full application: unit tests, then the end-to-end self test
+#              (numeric audio checks, golden-file null tests, simulated UI input)
+#   linux    - the same as windows, under a virtual display
+#   macos    - the full application; run manually (macOS minutes cost 10x)
+#
+# CI machines have no sound card, so the self test runs with
+# --allow-no-audio-device: live-device checks are reported as SKIP, never PASS.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      macos_app:
+        description: "Also build and self-test the application on macOS"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: Core unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build/core -DMERIDIAN_BUILD_APP=OFF -DCMAKE_BUILD_TYPE=Release -DMERIDIAN_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build/core --parallel 4
+      - name: Unit tests
+        run: ctest --test-dir build/core --output-on-failure
+
+  windows:
+    name: Application (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build/app -A x64 -DMERIDIAN_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build/app --config Debug --parallel 4
+      - name: Unit tests
+        run: ctest --test-dir build/app -C Debug --output-on-failure
+      - name: Self test
+        shell: pwsh
+        run: |
+          $out = Join-Path $PWD "build/self-test"
+          $p = Start-Process -FilePath "build/app/src/Meridian_artefacts/Debug/Meridian.exe" `
+                             -ArgumentList "--self-test", "`"$out`"", "--allow-no-audio-device" -PassThru -Wait
+          Get-Content "$out/report.txt"
+          exit $p.ExitCode
+      - name: Upload self-test report and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-test-windows
+          path: |
+            build/self-test/report.*
+            build/self-test/screens/
+          if-no-files-found: ignore
+
+  linux:
+    name: Application (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install JUCE dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libjack-jackd2-dev ladspa-sdk libfreetype-dev libfontconfig1-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev \
+            libxrender-dev libglu1-mesa-dev mesa-common-dev xvfb
+      - name: Configure
+        run: cmake -S . -B build/app -DCMAKE_BUILD_TYPE=Release -DMERIDIAN_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build/app --parallel 4
+      - name: Unit tests
+        run: ctest --test-dir build/app --output-on-failure
+      - name: Self test
+        run: |
+          set +e
+          xvfb-run -a -s "-screen 0 1600x1000x24" \
+            "build/app/src/Meridian_artefacts/Release/Meridian" --self-test "$PWD/build/self-test" --allow-no-audio-device
+          status=$?
+          cat build/self-test/report.txt
+          exit $status
+      - name: Upload self-test report and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-test-linux
+          path: |
+            build/self-test/report.*
+            build/self-test/screens/
+          if-no-files-found: ignore
+
+  macos:
+    name: Application (macOS)
+    if: github.event_name == 'workflow_dispatch' && inputs.macos_app
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build/app -G Xcode -DMERIDIAN_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build/app --config Release --parallel 4
+      - name: Unit tests
+        run: ctest --test-dir build/app -C Release --output-on-failure
+      - name: Self test
+        run: |
+          set +e
+          "build/app/src/Meridian_artefacts/Release/Meridian.app/Contents/MacOS/Meridian" \
+            --self-test "$PWD/build/self-test" --allow-no-audio-device
+          status=$?
+          cat build/self-test/report.txt
+          exit $status
+      - name: Upload self-test report and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-test-macos
+          path: |
+            build/self-test/report.*
+            build/self-test/screens/
+          if-no-files-found: ignore

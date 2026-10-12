@@ -42,7 +42,7 @@ public:
             // --update-golden: rewrite the reference renders in tests/golden
             // (only after a deliberate, reviewed change to the sound).
             selfTest->setUpdateGoldenFiles (args.contains ("--update-golden"));
-            // Start once the window is on screen (screenshots need it).
+            selfTest->setAllowNoAudioDevice (args.contains ("--allow-no-audio-device")); // CI servers            // Start once the window is on screen (screenshots need it).
             juce::MessageManager::callAsync ([this] { if (selfTest != nullptr) selfTest->start(); });
             return;
         }

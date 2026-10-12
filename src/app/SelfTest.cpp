@@ -77,6 +77,11 @@ void SelfTest::expect (const juce::String& name, bool passed, const juce::String
     checks.push_back ({ group, name, passed, detail });
 }
 
+void SelfTest::skip (const juce::String& name, const juce::String& reason)
+{
+    checks.push_back ({ group, name, true, reason, true });
+}
+
 void SelfTest::expectNear (const juce::String& name, double actual, double expected, double tolerance, const juce::String& unit)
 {
     const bool ok = std::abs (actual - expected) <= tolerance;
@@ -1296,7 +1301,10 @@ void SelfTest::startLivePlayback()
 
     if (! app.getEngine().isDeviceRunning())
     {
-        expect ("audio device available", false, "no device running: live playback not tested");
+        if (allowNoAudioDevice)
+            skip ("live playback through the audio device", "this machine has no audio device");
+        else
+            expect ("audio device available", false, "no device running: live playback not tested");
         return;
     }
 
@@ -1613,7 +1621,7 @@ void SelfTest::finish()
         expect ("test recording deleted afterwards", ! recordingToDelete.exists(), recordingToDelete.getFileName());
     }
 
-    int failures = 0;
+    int failures = 0, skipped = 0;
     juce::String text;
     std::string json = "[";
 
@@ -1625,8 +1633,9 @@ void SelfTest::finish()
             currentGroup = c.group;
             text << "\n== " << c.group << " ==\n";
         }
-        text << (c.passed ? "[PASS] " : "[FAIL] ") << c.name << "\n       " << c.detail << "\n";
+        text << (c.skipped ? "[SKIP] " : c.passed ? "[PASS] " : "[FAIL] ") << c.name << "\n       " << c.detail << "\n";
         failures += c.passed ? 0 : 1;
+        skipped += c.skipped ? 1 : 0;
 
         if (json.size() > 1)
             json += ",";
@@ -1634,13 +1643,16 @@ void SelfTest::finish()
                     .addString ("group", c.group.toStdString())
                     .addString ("name", c.name.toStdString())
                     .addBool ("passed", c.passed)
+                    .addBool ("skipped", c.skipped)
                     .addString ("detail", c.detail.toStdString())
                     .toString();
     }
     json += "]";
 
-    text = "Meridian self-test: " + juce::String ((int) checks.size() - failures) + " passed, "
-           + juce::String (failures) + " failed\n" + text;
+    text = "Meridian self-test: " + juce::String ((int) checks.size() - failures - skipped) + " passed, "
+           + juce::String (failures) + " failed"
+           + (skipped > 0 ? ", " + juce::String (skipped) + " skipped" : juce::String())
+           + "\n" + text;
     output.getChildFile ("report.txt").replaceWithText (text);
     output.getChildFile ("report.json").replaceWithText (json);
 

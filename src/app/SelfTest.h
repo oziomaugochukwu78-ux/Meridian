@@ -33,18 +33,24 @@ public:
     /** Rewrite the reference renders instead of comparing against them. */
     void setUpdateGoldenFiles (bool shouldUpdate) noexcept { updateGolden = shouldUpdate; }
 
+    /** On machines without a sound card (CI servers) the live-device checks
+        are reported as SKIP instead of FAIL. */
+    void setAllowNoAudioDevice (bool shouldAllow) noexcept { allowNoAudioDevice = shouldAllow; }
+
 private:
     struct Check
     {
         juce::String group, name;
         bool passed = false;
         juce::String detail;
+        bool skipped = false;
     };
 
     void timerCallback() override;
 
     void expect (const juce::String& name, bool passed, const juce::String& detail);
     void expectNear (const juce::String& name, double actual, double expected, double tolerance, const juce::String& unit);
+    void skip (const juce::String& name, const juce::String& reason);
     void beginGroup (const juce::String& name) { group = name; }
 
     // Phase 1
@@ -104,6 +110,7 @@ private:
     int ticks = 0;
     bool includeRecording = false;
     bool updateGolden = false;
+    bool allowNoAudioDevice = false;
     juce::ValueTree recordTrack;
     juce::int64 recordStartPosition = 0;
     juce::File recordingToDelete;
