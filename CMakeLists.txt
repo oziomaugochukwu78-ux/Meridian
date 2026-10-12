@@ -21,8 +21,25 @@ option(MERIDIAN_WITH_RUBBERBAND      "Build Elastic Audio time-stretching with R
 option(MERIDIAN_ENABLE_ASIO          "Enable the ASIO driver type on Windows"                   ON)
 option(MERIDIAN_ENABLE_AVX2          "Compile x86-64 code with AVX2 (requires a 2013+ CPU)"      OFF)
 option(MERIDIAN_WARNINGS_AS_ERRORS   "Treat compiler warnings in Meridian's own code as errors" OFF)
+option(MERIDIAN_ENABLE_ASAN          "Build with AddressSanitizer (plus UBSan on GCC/Clang); on MSVC use RelWithDebInfo and install the 'C++ AddressSanitizer' component" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+# AddressSanitizer applies to every target, dependencies included, and must be set
+# before they are fetched: MSVC refuses to link instrumented and uninstrumented
+# standard-library containers together. On MSVC use RelWithDebInfo (ASan cannot
+# combine with the Debug configuration's /RTC run-time checks).
+if(MERIDIAN_ENABLE_ASAN)
+    if(MSVC)
+        add_compile_options(/fsanitize=address /Zi)
+        add_link_options(/INCREMENTAL:NO /DEBUG)
+    else()
+        # Undefined behaviour (overflow, misaligned access, bad casts...) is fatal too.
+        add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=address,undefined)
+    endif()
+endif()
+
 include(CompilerOptions)
 include(Dependencies)
 

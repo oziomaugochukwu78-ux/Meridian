@@ -19,6 +19,8 @@ target_sources(Meridian PRIVATE
     app/MainWindow.h
     app/SelfTest.cpp
     app/SelfTest.h
+    app/SoakTest.cpp
+    app/SoakTest.h
 
     engine/AudioEngine.cpp
     engine/AudioEngine.h

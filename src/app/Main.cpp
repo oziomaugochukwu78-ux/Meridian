@@ -1,6 +1,7 @@
 #include "AppController.h"
 #include "MainWindow.h"
 #include "SelfTest.h"
+#include "SoakTest.h"
 
 #include "ui/MeridianLookAndFeel.h"
 
@@ -69,6 +70,22 @@ public:
             return;
         }
 
+        // Meridian --soak <minutes> <folder>: long-running stability test (silent).
+        if (const int index = args.indexOf ("--soak"); index >= 0)
+        {
+            const auto folder = args[index + 2].unquoted();
+            const auto outputFolder = juce::File::isAbsolutePath (folder)
+                                          ? juce::File (folder)
+                                          : juce::File::getCurrentWorkingDirectory().getChildFile (folder.isNotEmpty() ? folder : juce::String ("soak"));
+            soakTest = std::make_unique<SoakTest> (*controller, outputFolder, args[index + 1].getDoubleValue(), [this] (int failures)
+            {
+                setApplicationReturnValue (failures == 0 ? 0 : 1);
+                quit();
+            });
+            juce::MessageManager::callAsync ([this] { if (soakTest != nullptr) soakTest->start(); });
+            return;
+        }
+
         // A session file passed on the command line (e.g. double-clicked) opens
         // directly; otherwise show the Dashboard, as a console DAW does.
         const auto argument = commandLine.trim().unquoted(); // trim first: Windows passes a leading space
@@ -90,6 +107,7 @@ public:
     void shutdown() override
     {
         selfTest.reset();
+        soakTest.reset();
         window.reset();
         controller.reset();
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
@@ -123,6 +141,7 @@ private:
     std::unique_ptr<AppController> controller;
     std::unique_ptr<MainWindow> window;
     std::unique_ptr<SelfTest> selfTest;
+    std::unique_ptr<SoakTest> soakTest;
 };
 
 } // namespace meridian

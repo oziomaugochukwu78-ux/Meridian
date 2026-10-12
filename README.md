@@ -67,6 +67,7 @@ ctest --test-dir build/core -C Debug
 | `MERIDIAN_ENABLE_ASIO` | ON | ASIO driver type on Windows |
 | `MERIDIAN_ENABLE_AVX2` | OFF | Compile with AVX2 (excludes pre-2013 CPUs) |
 | `MERIDIAN_WARNINGS_AS_ERRORS` | OFF | Treat warnings in Meridian's own code as errors |
+| `MERIDIAN_ENABLE_ASAN` | OFF | AddressSanitizer for every target (plus UBSan on GCC/Clang). On MSVC, build RelWithDebInfo; this needs Visual Studio's "C++ AddressSanitizer" component |
 
 ## Architecture
 
@@ -242,6 +243,26 @@ It exits with 0 only if every check passed. Checks that cannot run on a machine 
 build\app\src\Meridian_artefacts\Debug\Meridian.exe --self-test build\self-test --update-golden
 ```
 
+**Soak test.** This mode checks long-running stability:
+
+```bash
+build\app\src\Meridian_artefacts\Release\Meridian.exe --soak 20 build\soak
+```
+
+It loops a demanding session through the real audio device for the given number of minutes. The session has:
+- 24 tracks with moving automation
+- sends into 4 buses, two of them with a latent plug-in
+- the console stage on
+
+The master fader stays fully down, so nothing is audible. Every 10 seconds it records:
+- disk underruns
+- driver-reported dropouts
+- CPU load
+- process memory
+- the engine's worst callback time, as a share of the buffer period
+
+The run fails if Meridian ever overruns its real-time budget, if the playhead stalls, if streaming falls behind, or if memory grows over the second half of the run. Dropouts reported by the driver while Meridian stayed inside its budget are reported as warnings: the operating system or driver caused them, not Meridian. The output is `soak.csv` and `soak-report.txt`.
+
 **Continuous integration** (`.github/workflows/ci.yml`) runs on every push to `main` and on every pull request:
 
 | Job | What it runs |
@@ -249,6 +270,7 @@ build\app\src\Meridian_artefacts\Debug\Meridian.exe --self-test build\self-test 
 | Core | Unit tests on Linux and macOS |
 | Windows | Full application: unit tests, then the self test |
 | Linux | Full application: unit tests, then the self test under a virtual display |
+| Sanitizers | AddressSanitizer and UndefinedBehaviorSanitizer build on Linux, running the unit tests and the whole self test. Any memory error, leak or undefined behaviour fails the run |
 | macOS | Full application; started by hand |
 
 Every job treats warnings as errors. Each run uploads the self-test report, progress log and screenshots.

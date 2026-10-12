@@ -1,0 +1,11 @@
+# LeakSanitizer suppressions for the CI sanitizer job.
+#
+# Only system libraries that keep process-lifetime caches by design are listed
+# here (font and display caches, freed by the OS at exit). Leaks in Meridian,
+# JUCE or the bundled dependencies are never suppressed: they fail the run.
+leak:libfontconfig.so
+leak:libfreetype.so
+leak:libX11.so
+leak:libxcb.so
+leak:libasound.so
+leak:libdbus-1.so

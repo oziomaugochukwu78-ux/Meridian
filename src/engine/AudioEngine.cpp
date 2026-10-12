@@ -141,7 +141,16 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
                                                     int numSamples, const juce::AudioIODeviceCallbackContext&)
 {
     juce::ScopedNoDenormals noDenormals;
+    const auto started = juce::Time::getHighResolutionTicks(); // QueryPerformanceCounter / clock_gettime: real-time safe
     renderBlock (inputs, numInputs, outputs, numOutputs, numSamples);
+
+    // Callback time as a fraction of the buffer period, kept as a running maximum.
+    const auto elapsed = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - started);
+    const double load = numSamples > 0 ? elapsed * sampleRate.load (std::memory_order_relaxed) / numSamples : 0.0;
+    auto worst = worstCallbackLoad.load (std::memory_order_relaxed);
+    while (load > worst && ! worstCallbackLoad.compare_exchange_weak (worst, load, std::memory_order_relaxed)) {}
+    if (load > 1.0)
+        callbackOverruns.fetch_add (1, std::memory_order_relaxed);
 }
 
 void AudioEngine::renderOffline (float* const* outputs, int numOutputs, int numSamples) noexcept

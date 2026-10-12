@@ -73,6 +73,15 @@ public:
     /** UI: number of blocks with missing disk data since the last call. */
     int collectDiskUnderruns() noexcept { return diskUnderruns.exchange (0); }
 
+    /** Diagnostics: the longest device callback since the last call, as a
+        fraction of the time the buffer allows (1.0 = the whole budget; above
+        that, Meridian itself caused a dropout). Lets dropouts be attributed to
+        the engine or to the OS/driver. */
+    double collectWorstCallbackLoad() noexcept { return worstCallbackLoad.exchange (0.0); }
+
+    /** Diagnostics: device callbacks that overran their budget since the last call. */
+    int collectCallbackOverruns() noexcept { return callbackOverruns.exchange (0); }
+
     /** True while a published graph has not yet been picked up by the audio thread. */
     bool hasPendingGraph() const noexcept { return pendingGraph.load() != nullptr; }
 
@@ -148,6 +157,8 @@ private:
 
     std::atomic<float> masterPeakLeft { 0.0f }, masterPeakRight { 0.0f };
     std::atomic<int> diskUnderruns { 0 };
+    std::atomic<double> worstCallbackLoad { 0.0 };
+    std::atomic<int> callbackOverruns { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)
 };
