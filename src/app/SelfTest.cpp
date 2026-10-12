@@ -2074,7 +2074,25 @@ void SelfTest::finish()
     if (assertionLog != nullptr)
     {
         beginGroup ("Internal consistency");
-        const auto fired = assertionLog->getFailures();
+        auto fired = assertionLog->getFailures();
+
+        // On machines without audio hardware (CI servers), JUCE's device layer
+        // asserts when the platform's audio/MIDI service cannot be opened at all
+        // (e.g. no ALSA sequencer). That is a property of the machine, so those
+        // are reported as skipped; every other assertion still fails the run.
+        if (allowNoAudioDevice)
+        {
+            juce::StringArray environmental;
+            for (int i = fired.size(); --i >= 0;)
+                if (fired[i].contains ("juce_Midi_") || fired[i].contains ("juce_ALSA") || fired[i].contains ("juce_JackAudio"))
+                {
+                    environmental.add (fired[i]);
+                    fired.remove (i);
+                }
+            if (! environmental.isEmpty())
+                skip ("audio/MIDI device layer assertions", "no audio or MIDI service on this machine: "
+                                                               + environmental.joinIntoString ("; "));
+        }
         expect ("no JUCE assertion fired during the whole run", fired.isEmpty(), fired.joinIntoString ("; "));
     }
 
