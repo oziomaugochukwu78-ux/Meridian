@@ -54,11 +54,11 @@ void setMeterChange (Session& session, juce::int64 bar, int numerator, int denom
     const auto valid = check.meterAt (std::max<juce::int64> (0, bar));
 
     auto map = getOrCreateChild (session.getState(), ids::METER_MAP, um);
-    auto change = map.getChildWithProperty (ids::bar, valid.bar);
+    auto change = map.getChildWithProperty (ids::bar, (juce::int64) valid.bar);
     if (! change.isValid())
     {
         change = juce::ValueTree (ids::METER);
-        change.setProperty (ids::bar, valid.bar, nullptr);
+        change.setProperty (ids::bar, (juce::int64) valid.bar, nullptr); // int64_t is long on Linux: ambiguous as a var
         change.setProperty (ids::numerator, valid.numerator, nullptr);
         change.setProperty (ids::denominator, valid.denominator, nullptr);
         map.appendChild (change, um);
