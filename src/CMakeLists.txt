@@ -43,6 +43,8 @@ target_sources(Meridian PRIVATE
     model/Automation.h
     model/MidiModel.cpp
     model/MidiModel.h
+    model/Playlists.cpp
+    model/Playlists.h
     model/Routing.cpp
     model/Routing.h
     model/Session.cpp

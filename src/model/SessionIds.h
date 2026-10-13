@@ -13,9 +13,12 @@
              masterVolumeDb consoleEnabled consoleDrive consoleCharacter consoleCurve
       TRACKS
         TRACK  id name kind channels colour volumeDb pan mute solo recordArm
-               inputChannel automationMode outputBus
-          CLIPS
+               inputChannel automationMode outputBus playlist
+          CLIPS                              (the active playlist: what plays and is edited)
             CLIP  id name file start length offset sourceLength gainDb fadeIn fadeOut
+          PLAYLISTS                          (optional: the other playlists, see model/Playlists.h)
+            PLAYLIST  name
+              CLIPS ...
           INSERTS
             INSERT  slot description state bypass
           SENDS
@@ -77,6 +80,9 @@ MERIDIAN_ID (NOTES)
 MERIDIAN_ID (NOTE)
 MERIDIAN_ID (SUSTAIN)
 MERIDIAN_ID (PEDAL)
+MERIDIAN_ID (PLAYLISTS)
+MERIDIAN_ID (PLAYLIST)
+MERIDIAN_ID (playlist)
 MERIDIAN_ID (SYNTH)
 MERIDIAN_ID (MARKERS)
 MERIDIAN_ID (MARKER)

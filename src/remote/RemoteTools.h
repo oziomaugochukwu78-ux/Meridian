@@ -53,6 +53,7 @@ private:
     Result setTrack (const juce::var&);
     Result duplicateTrack (const juce::var&);
     Result moveTrack (const juce::var&);
+    Result playlist (const juce::var&);
     Result setLoop (const juce::var&);
     Result setClick (const juce::var&);
     Result setPunch (const juce::var&);

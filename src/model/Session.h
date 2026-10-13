@@ -183,6 +183,17 @@ namespace track
         return mode == "read" || mode == "touch" || mode == "latch";
     }
     inline juce::ValueTree clips (const juce::ValueTree& t)   { return t.getChildWithName (ids::CLIPS); }
+    /** The track's alternate playlists (see Playlists.h); the active one is clips (t). */
+    inline juce::ValueTree playlists (const juce::ValueTree& t) { return t.getChildWithName (ids::PLAYLISTS); }
+    /** The active playlist's CLIPS and every alternate's: for walks over all of a track's clips. */
+    inline juce::Array<juce::ValueTree> allClipLists (const juce::ValueTree& t)
+    {
+        juce::Array<juce::ValueTree> lists { clips (t) };
+        for (const auto& p : playlists (t))
+            if (auto list = p.getChildWithName (ids::CLIPS); list.isValid())
+                lists.add (list);
+        return lists;
+    }
     inline juce::ValueTree inserts (const juce::ValueTree& t) { return t.getChildWithName (ids::INSERTS); }
     inline juce::ValueTree automation (const juce::ValueTree& t) { return t.getChildWithName (ids::AUTOMATION); }
 } // namespace track

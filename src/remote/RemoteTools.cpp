@@ -3,6 +3,7 @@
 #include "app/AppController.h"
 #include "model/Automation.h"
 #include "model/MidiModel.h"
+#include "model/Playlists.h"
 #include "model/Routing.h"
 #include "plugins/BuiltinEffects.h"
 
@@ -215,6 +216,19 @@ const std::vector<ToolInfo>& toolTable()
           "Copy a track (clips, automation, sends, plug-ins with their settings) to a new track right after it, "
           "named <name>.dup1. Audio files are shared, not copied.",
           schema ({ { "track", "track", trackHelp, true } }) },
+        { "playlist", "Playlists and comping",
+          "A track's playlists: alternate versions of its clips (takes). Only the active playlist plays. "
+          "list: names and which is active. new: start an empty playlist (the current one is kept, e.g. before "
+          "recording another take). duplicate: start a copy of the current one. switch: make \"name\" active. "
+          "rename: \"name\" to \"new_name\". delete: remove \"name\" (not the active one). comp: copy what "
+          "playlist \"name\" has between start_seconds and end_seconds onto the active playlist, replacing what "
+          "was there (to build one performance from the best parts of several takes).",
+          schema ({ { "track", "track", trackHelp, true },
+                    { "action", "string", "What to do", true, { "list", "new", "duplicate", "switch", "rename", "delete", "comp" } },
+                    { "name", "string", "The playlist to switch to, rename, delete or comp from" },
+                    { "new_name", "string", "rename: the new name" },
+                    { "start_seconds", "number", "comp: start of the range" },
+                    { "end_seconds", "number", "comp: end of the range" } }) },
         { "move_track", "Move a track",
           "Change a track's position in the track list (1 = first). The mix is unchanged; only the order is.",
           schema ({ { "track", "track", trackHelp, true },
@@ -531,6 +545,7 @@ RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var
     if (name == "set_track")          return setTrack (args);
     if (name == "duplicate_track")    return duplicateTrack (args);
     if (name == "move_track")         return moveTrack (args);
+    if (name == "playlist")           return playlist (args);
     if (name == "create_track")       return createTrack (args);
     if (name == "delete_track")       return deleteTrack (args);
     if (name == "set_output")         return setOutput (args);
@@ -803,6 +818,83 @@ RemoteTools::Result RemoteTools::duplicateTrack (const juce::var& args)
     auto copy = app.duplicateTrack (t);
     app.getSession()->getUndoManager().setCurrentTransactionName ("AI: Duplicate Track");
     return { true, describeTrack (copy, app.getSession()->indexOfTrack (copy) + 1), {} };
+}
+
+RemoteTools::Result RemoteTools::playlist (const juce::var& args)
+{
+    juce::String error;
+    auto t = findTrack (args["track"], error);
+    if (! t.isValid())
+        return { false, {}, error };
+    if (track::isAux (t))
+        return { false, {}, "\"" + track::name (t) + "\" is an aux track: it has no clips, so no playlists." };
+
+    auto* session = app.getSession();
+    const auto action = args["action"].toString();
+    const auto name = args["name"].toString().trim();
+    auto report = [&t] (juce::var extra)
+    {
+        juce::Array<juce::var> all;
+        for (const auto& n : playlists::names (t))
+            all.add (n);
+        auto result = makeObject ({ { "track", track::name (t) }, { "active", playlists::activeName (t) }, { "playlists", all },
+                                    { "clips", track::clips (t).getNumChildren() } });
+        if (auto* object = extra.getDynamicObject())
+            for (const auto& property : object->getProperties())
+                result.getDynamicObject()->setProperty (property.name, property.value);
+        return Result { true, result, {} };
+    };
+    auto needsName = [&]
+    {
+        return "Give \"name\": one of " + playlists::names (t).joinIntoString (", ") + ".";
+    };
+
+    if (action == "list")
+        return report ({});
+    if (action == "new" || action == "duplicate")
+    {
+        playlists::create (*session, t, action == "duplicate", beginEdit (action == "new" ? "New Playlist" : "Duplicate Playlist"));
+        return report ({});
+    }
+    if (action == "switch")
+    {
+        if (! playlists::names (t).contains (name))
+            return { false, {}, needsName() };
+        playlists::activate (t, name, beginEdit ("Switch Playlist"));
+        return report ({});
+    }
+    if (action == "rename")
+    {
+        if (! playlists::names (t).contains (name))
+            return { false, {}, needsName() };
+        if (! playlists::rename (t, name, args["new_name"].toString(), beginEdit ("Rename Playlist")))
+            return { false, {}, "\"new_name\" must be a name no other playlist of this track has." };
+        return report ({});
+    }
+    if (action == "delete")
+    {
+        if (name == playlists::activeName (t))
+            return { false, {}, "\"" + name + "\" is the active playlist: switch to another one first." };
+        if (! playlists::find (t, name).isValid())
+            return { false, {}, needsName() };
+        playlists::remove (t, name, beginEdit ("Delete Playlist"));
+        return report ({});
+    }
+    if (action == "comp")
+    {
+        if (! playlists::find (t, name).isValid())
+            return { false, {}, name == playlists::activeName (t) ? juce::String ("\"" + name + "\" is already the active playlist: comp from another one.")
+                                                                  : needsName() };
+        if (! args.hasProperty ("start_seconds") || ! args.hasProperty ("end_seconds"))
+            return { false, {}, "comp needs start_seconds and end_seconds." };
+        const auto start = std::max<juce::int64> (0, secondsToSamples (args["start_seconds"]));
+        const auto end = secondsToSamples (args["end_seconds"]);
+        if (end <= start)
+            return { false, {}, "end_seconds must be after start_seconds." };
+        const int copied = playlists::promote (*session, t, name, start, end, beginEdit ("Comp"));
+        return report (makeObject ({ { "clips_copied", copied } }));
+    }
+    return { false, {}, "Unknown action \"" + action + "\": list, new, duplicate, switch, rename, delete or comp." };
 }
 
 RemoteTools::Result RemoteTools::moveTrack (const juce::var& args)

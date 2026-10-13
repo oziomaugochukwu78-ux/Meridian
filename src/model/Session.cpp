@@ -167,9 +167,10 @@ bool Session::saveAs (const juce::File& newFile, juce::String& error)
     // Resolve every clip's audio from the old folder before switching.
     std::vector<std::pair<juce::ValueTree, juce::File>> audio;
     for (const auto& t : getTracksNode())
-        for (const auto& c : track::clips (t))
-            if (const auto stored = c[ids::file].toString(); stored.isNotEmpty())
-                audio.emplace_back (c, resolveStoredPath (stored));
+        for (const auto& list : track::allClipLists (t)) // every playlist's clips, not only the active one
+            for (const auto& c : list)
+                if (const auto stored = c[ids::file].toString(); stored.isNotEmpty())
+                    audio.emplace_back (c, resolveStoredPath (stored));
 
     const auto oldFile = sessionFile;
     const auto oldName = state[ids::name];
@@ -384,6 +385,10 @@ juce::ValueTree Session::duplicateTrack (const juce::ValueTree& t, juce::UndoMan
     copy.setProperty (ids::id, allocateId(), nullptr);
     copy.setProperty (ids::name, name, nullptr);
     copy.setProperty (ids::recordArm, false, nullptr); // one input, one armed track
+    // A duplicate is the active playlist only, its playlist named after the new track.
+    copy.removeProperty (ids::playlist, nullptr);
+    if (auto alternates = track::playlists (copy); alternates.isValid())
+        copy.removeChild (alternates, nullptr);
     for (auto c : track::clips (copy))
         c.setProperty (ids::id, allocateId(), nullptr);
 

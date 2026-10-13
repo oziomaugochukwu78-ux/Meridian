@@ -2,6 +2,7 @@
 
 #include "Automation.h"
 #include "MidiModel.h"
+#include "Playlists.h"
 #include "Routing.h"
 
 #include <dsp/FaderTaper.h>
@@ -198,8 +199,9 @@ private:
         for (const auto& t : session.getTracksNode())
         {
             maxId = juce::jmax (maxId, (int) t[ids::id]);
-            for (const auto& c : track::clips (t))
-                maxId = juce::jmax (maxId, (int) c[ids::id]);
+            for (const auto& list : track::allClipLists (t))
+                for (const auto& c : list)
+                    maxId = juce::jmax (maxId, (int) c[ids::id]);
         }
     }
 
@@ -260,7 +262,8 @@ private:
             }
         }
 
-        repairClips (t, where);
+        repairClips (t, track::clips (t), where);
+        repairPlaylists (t, where);
         repairSlots (track::inserts (t), ids::INSERT, Session::maxInserts, where, "insert");
         repairSlots (track::sends (t), ids::SEND, Session::maxSends, where, "send");
         for (auto s : track::sends (t))
@@ -382,9 +385,65 @@ private:
         }
     }
 
-    void repairClips (juce::ValueTree t, const juce::String& trackName)
+    /** At most one PLAYLISTS list of PLAYLISTs, each with a unique name (not the active
+        playlist's) and exactly one CLIPS list, whose clips are repaired like the active ones. */
+    void repairPlaylists (juce::ValueTree t, const juce::String& where)
     {
-        auto clips = track::clips (t);
+        juce::ValueTree list;
+        for (int i = 0; i < t.getNumChildren(); ++i)
+        {
+            if (! t.getChild (i).hasType (ids::PLAYLISTS))
+                continue;
+            if (! list.isValid())
+            {
+                list = t.getChild (i);
+                continue;
+            }
+            note (where, "removed a duplicate <PLAYLISTS> list");
+            t.removeChild (i--, nullptr);
+        }
+        if (! list.isValid())
+            return;
+
+        removeChildrenNotOfType (list, ids::PLAYLIST, where);
+        juce::StringArray taken { playlists::activeName (t) };
+        for (auto p : list)
+        {
+            auto name = p[ids::name].toString().trim();
+            if (name.isEmpty() || taken.contains (name))
+            {
+                const auto base = name.isEmpty() ? track::name (t) + " playlist" : name;
+                auto fixed = base;
+                for (int n = 2; taken.contains (fixed); ++n)
+                    fixed = base + " (" + juce::String (n) + ")";
+                set (p, ids::name, fixed, where, "playlist name (empty or taken)");
+                name = fixed;
+            }
+            taken.add (name);
+
+            juce::ValueTree clips;
+            for (int i = 0; i < p.getNumChildren(); ++i)
+            {
+                if (p.getChild (i).hasType (ids::CLIPS) && ! clips.isValid())
+                {
+                    clips = p.getChild (i);
+                    continue;
+                }
+                note (where + ", playlist " + name, "removed an extra <" + p.getChild (i).getType().toString() + ">");
+                p.removeChild (i--, nullptr);
+            }
+            if (! clips.isValid())
+            {
+                note (where + ", playlist " + name, "added the missing <CLIPS> list");
+                p.appendChild (juce::ValueTree (ids::CLIPS), nullptr);
+                continue;
+            }
+            repairClips (t, clips, where + ", playlist " + name);
+        }
+    }
+
+    void repairClips (juce::ValueTree t, juce::ValueTree clips, const juce::String& trackName)
+    {
         removeChildrenNotOfType (clips, ids::CLIP, trackName);
         const bool instrument = track::isInstrument (t);
 
@@ -688,7 +747,28 @@ juce::String findSessionProblem (const Session& session)
                 return name + " has " + juce::String (count) + " <" + type->toString() + "> lists";
         }
 
-        for (const auto& c : track::clips (t))
+        // Alternate playlists: one list, uniquely named, each with exactly one CLIPS.
+        int playlistLists = 0;
+        for (const auto& child : t)
+            playlistLists += child.hasType (ids::PLAYLISTS) ? 1 : 0;
+        if (playlistLists > 1)
+            return name + " has " + juce::String (playlistLists) + " <PLAYLISTS> lists";
+        juce::StringArray playlistNames { playlists::activeName (t) };
+        for (const auto& p : track::playlists (t))
+        {
+            const auto playlistName = p[ids::name].toString();
+            if (! p.hasType (ids::PLAYLIST) || playlistName.trim().isEmpty() || playlistNames.contains (playlistName))
+                return name + " has an unnamed, duplicate or unknown playlist";
+            playlistNames.add (playlistName);
+            if (p.getNumChildren() != 1 || ! p.getChild (0).hasType (ids::CLIPS))
+                return name + " playlist " + playlistName + " does not hold exactly one <CLIPS> list";
+        }
+
+        juce::Array<juce::ValueTree> everyClip; // every playlist's, the active one first
+        for (const auto& clipList : track::allClipLists (t))
+            for (const auto& c : clipList)
+                everyClip.add (c);
+        for (const auto& c : everyClip)
         {
             if (! c.hasType (ids::CLIP))
                 return name + " has a non-clip element";
