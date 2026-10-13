@@ -1510,9 +1510,9 @@ void SelfTest::testBuiltinEffects()
                 if (auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (p); hosted != nullptr && hosted->getParameterID() == "reference")
                     p->setValue (p->getValueForText ("442"));
             const auto at442 = readout->readPitch();
-            auto describePitch = [] (const PitchReadout::Reading& r)
+            auto describePitch = [] (const PitchReadout::Reading& reading)
             {
-                return r.found ? r.note + " " + juce::String (r.cents, 2) + " cents, " + juce::String (r.frequencyHz, 2) + " Hz" : juce::String ("no pitch");
+                return reading.found ? reading.note + " " + juce::String (reading.cents, 2) + " cents, " + juce::String (reading.frequencyHz, 2) + " Hz" : juce::String ("no pitch");
             };
             const double expected440 = (69.0 + 12.0 * std::log2 (1000.0 / 440.0) - 83.0) * 100.0;
             const double expected442 = (69.0 + 12.0 * std::log2 (1000.0 / 442.0) - 83.0) * 100.0;

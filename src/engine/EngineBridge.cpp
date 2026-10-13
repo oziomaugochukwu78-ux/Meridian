@@ -560,10 +560,10 @@ void EngineBridge::buildMidiEvents (const juce::ValueTree& t, TrackRender& rende
         const auto notes = midimodel::readNotes (c);
         for (const auto& n : notes.getNotes())
         {
-            const auto on = tempo.samplesFromOrigin (origin, n.start, rate);
+            const auto on = (juce::int64) tempo.samplesFromOrigin (origin, n.start, rate); // int64_t is long on Linux
             if (on < start || on >= end)
                 continue;
-            const auto off = juce::jlimit (on + 1, end, tempo.samplesFromOrigin (origin, n.end(), rate));
+            const auto off = juce::jlimit (on + 1, end, (juce::int64) tempo.samplesFromOrigin (origin, n.end(), rate));
             render.events.push_back ({ on, n.pitch, n.velocity, true });
             render.events.push_back ({ off, n.pitch, 0.0f, false });
         }
@@ -572,8 +572,8 @@ void EngineBridge::buildMidiEvents (const juce::ValueTree& t, TrackRender& rende
         // the clip starts goes down at its start; one still held at its end lifts there.
         for (const auto& range : midimodel::readSustain (c))
         {
-            const auto down = std::max (start, tempo.samplesFromOrigin (origin, range.start, rate));
-            const auto up = std::min (end, tempo.samplesFromOrigin (origin, range.end(), rate));
+            const auto down = std::max (start, (juce::int64) tempo.samplesFromOrigin (origin, range.start, rate));
+            const auto up = std::min (end, (juce::int64) tempo.samplesFromOrigin (origin, range.end(), rate));
             if (down >= up)
                 continue;
             render.events.push_back ({ down, midi::sustainPedal, 0.0f, true });

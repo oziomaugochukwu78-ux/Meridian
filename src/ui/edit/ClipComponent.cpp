@@ -116,10 +116,10 @@ void ClipComponent::paintNotes (juce::Graphics& g, juce::Rectangle<int> area)
     g.reduceClipRegion (area);
     for (const auto& n : notes.getNotes())
     {
-        const auto on = tempo.samplesFromOrigin (origin, n.start, rate);
+        const auto on = (juce::int64) tempo.samplesFromOrigin (origin, n.start, rate); // int64_t is long on Linux
         if (on < clipStart || on >= clipEnd)
             continue; // not played: outside the clip
-        const auto off = juce::jmin (clipEnd, tempo.samplesFromOrigin (origin, n.end(), rate));
+        const auto off = juce::jmin (clipEnd, (juce::int64) tempo.samplesFromOrigin (origin, n.end(), rate));
         const float x0 = (float) (logicalLeft + (double) (on - clipStart) / editState.samplesPerPixel);
         const float x1 = (float) (logicalLeft + (double) (off - clipStart) / editState.samplesPerPixel);
         const float y = (float) area.getBottom() - (float) (n.pitch - bottomPitch + 1) * rowHeight;
