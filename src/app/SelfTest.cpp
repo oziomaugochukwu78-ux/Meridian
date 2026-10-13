@@ -1476,6 +1476,60 @@ void SelfTest::testBuiltinEffects()
                 showsItsFigure (comp) && showsItsFigure (lim) && showsItsFigure (gated) && showsItsFigure (ess)
                     && eq.created && eq.reduction < 0.0f && eq.shown.isEmpty(),
                 comp.shown + " | " + lim.shown + " | " + gated.shown + " | " + ess.shown + " | EQ \"" + eq.shown + "\"");
+
+        // Tuner: the 1 kHz tone passes untouched and reads B5 +21.3 cents (69 + 12 log2(1000/440) = 83.213),
+        // and 7.85 cents lower (+13.5) with the reference at A4 = 442 Hz.
+        const auto* tunerDesc = find ("Meridian Tuner");
+        juce::String tunerError;
+        auto tuner = tunerDesc != nullptr ? format.createInstanceFromDescription (*tunerDesc, sampleRate, 512, tunerError) : nullptr;
+        auto* readout = dynamic_cast<PitchReadout*> (tuner.get());
+        expect ("the tuner is in the plug-in list and reads pitch", readout != nullptr, tunerError);
+        if (readout != nullptr)
+        {
+            const auto silent = readout->readPitch(); // before any audio
+            tuner->prepareToPlay (sampleRate, 512);
+            juce::AudioBuffer<float> block (2, 512);
+            juce::MidiBuffer noMidi;
+            bool untouched = true;
+            for (int start = 0; start < (int) sampleRate; start += 512)
+            {
+                for (int i = 0; i < 512; ++i)
+                {
+                    const auto x = (float) (0.5 * std::sin (juce::MathConstants<double>::twoPi * 1000.0 * (start + i) / sampleRate));
+                    block.setSample (0, i, x);
+                    block.setSample (1, i, x);
+                }
+                tuner->processBlock (block, noMidi);
+                for (int i = 0; untouched && i < 512; ++i)
+                    untouched = juce::exactlyEqual (block.getSample (0, i),
+                                                    (float) (0.5 * std::sin (juce::MathConstants<double>::twoPi * 1000.0 * (start + i) / sampleRate)));
+            }
+            const auto at440 = readout->readPitch();
+            for (auto* p : tuner->getParameters())
+                if (auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (p); hosted != nullptr && hosted->getParameterID() == "reference")
+                    p->setValue (p->getValueForText ("442"));
+            const auto at442 = readout->readPitch();
+            auto describePitch = [] (const PitchReadout::Reading& r)
+            {
+                return r.found ? r.note + " " + juce::String (r.cents, 2) + " cents, " + juce::String (r.frequencyHz, 2) + " Hz" : juce::String ("no pitch");
+            };
+            const double expected440 = (69.0 + 12.0 * std::log2 (1000.0 / 440.0) - 83.0) * 100.0;
+            const double expected442 = (69.0 + 12.0 * std::log2 (1000.0 / 442.0) - 83.0) * 100.0;
+            expect ("tuner: audio passes bit for bit; the 1 kHz tone reads B5 +21.3 cents (A4 = 440), +13.5 (A4 = 442); silence reads nothing",
+                    untouched && ! silent.found && at440.found && at440.note == "B5" && std::abs (at440.cents - expected440) < 0.5
+                        && std::abs (at440.frequencyHz - 1000.0) < 0.3 && at442.found && std::abs (at442.cents - expected442) < 0.5,
+                    "untouched " + juce::String (untouched ? "yes" : "no") + "; " + describePitch (at440) + "; at 442: "
+                        + describePitch (at442));
+
+            std::unique_ptr<juce::AudioProcessorEditor> editor (tuner->createEditorAndMakeActive());
+            auto* display = editor != nullptr ? editor->findChildWithID ("tunerDisplay") : nullptr;
+            const auto shown = display != nullptr ? display->getDescription() : juce::String();
+            expect ("the tuner window shows the note, cents and frequency", shown.startsWith ("B5 +") && shown.contains ("1000.0 Hz"), shown);
+            if (editor != nullptr)
+                snapshot (*editor, "plugin_meridiantuner.png");
+            tuner->editorBeingDeleted (editor.get());
+            editor.reset();
+        }
     }
 
     // Reference render: a pad through EQ, compressor and limiter, into the reverb bus.

@@ -32,6 +32,8 @@ add_library(meridian_core STATIC
     dsp/MeterScale.h
     dsp/Metronome.cpp
     dsp/Metronome.h
+    dsp/PitchDetector.cpp
+    dsp/PitchDetector.h
     dsp/MixKernels.cpp
     dsp/MixKernels.h
     dsp/PanLaw.h

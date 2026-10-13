@@ -5,6 +5,7 @@
 #include <dsp/FdnReverb.h>
 #include <dsp/Gate.h>
 #include <dsp/Limiter.h>
+#include <dsp/PitchDetector.h>
 #include <dsp/StereoDelay.h>
 #include <dsp/ParametricEq.h>
 
@@ -19,7 +20,8 @@ constexpr const char* limiterId = "meridian:limiter";
 constexpr const char* gateId = "meridian:gate";
 constexpr const char* delayId = "meridian:delay";
 constexpr const char* deEsserId = "meridian:deesser";
-constexpr const char* allIds[] = { eqId, compressorId, limiterId, gateId, deEsserId, delayId, reverbId };
+constexpr const char* tunerId = "meridian:tuner";
+constexpr const char* allIds[] = { eqId, compressorId, limiterId, gateId, deEsserId, delayId, reverbId, tunerId };
 
 juce::NormalisableRange<float> frequencyRange (float lo, float hi, float centre)
 {
@@ -168,6 +170,106 @@ private:
 };
 
 //==============================================================================
+/** The tuner's face: the nearest note, a needle on a -50..+50 cent scale (green
+    within 3 cents), and the frequency. Its accessible description is the reading. */
+class TunerDisplay final : public juce::Component
+{
+public:
+    TunerDisplay()
+    {
+        setComponentID ("tunerDisplay");
+        setTitle ("Tuner");
+        setDescription (describe (reading));
+    }
+
+    void show (const PitchReadout::Reading& next)
+    {
+        reading = next;
+        setDescription (describe (reading));
+        repaint();
+    }
+
+    static juce::String describe (const PitchReadout::Reading& r)
+    {
+        if (! r.found)
+            return "No pitch";
+        return r.note + " " + (r.cents >= 0.0 ? "+" : "") + juce::String (r.cents, 1) + " cents (" + juce::String (r.frequencyHz, 1) + " Hz)";
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto background = getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId);
+        const auto ink = background.contrasting (0.85f);
+        auto area = getLocalBounds().toFloat().reduced (10.0f, 6.0f);
+        const bool inTune = reading.found && std::abs (reading.cents) < 3.0;
+        const auto needleColour = inTune ? juce::Colour (0xff4fc96b) : juce::Colour (0xffe8a33d);
+
+        g.setColour (reading.found ? (inTune ? needleColour : ink) : ink.withAlpha (0.35f));
+        g.setFont (juce::FontOptions (34.0f, juce::Font::bold));
+        g.drawText (reading.found ? reading.note : juce::String ("--"), area.removeFromTop (42.0f), juce::Justification::centred);
+
+        // The scale: ticks every 10 cents, a longer one at 0.
+        auto scale = area.removeFromTop (26.0f).reduced (8.0f, 0.0f);
+        g.setColour (ink.withAlpha (0.5f));
+        for (int c = -50; c <= 50; c += 10)
+        {
+            const float x = scale.getX() + scale.getWidth() * (float) (c + 50) / 100.0f;
+            const float inset = c == 0 ? 0.0f : 8.0f;
+            g.drawLine (x, scale.getY() + inset, x, scale.getBottom() - inset, c == 0 ? 2.0f : 1.0f);
+        }
+        if (reading.found)
+        {
+            const float x = scale.getX() + scale.getWidth() * (float) (juce::jlimit (-50.0, 50.0, reading.cents) + 50.0) / 100.0f;
+            g.setColour (needleColour);
+            g.fillRoundedRectangle (x - 2.5f, scale.getY() - 2.0f, 5.0f, scale.getHeight() + 4.0f, 2.0f);
+        }
+
+        g.setColour (ink.withAlpha (0.8f));
+        g.setFont (juce::FontOptions (13.0f));
+        const auto detail = reading.found ? (reading.cents >= 0.0 ? "+" : "") + juce::String (reading.cents, 1) + " cents    "
+                                                + juce::String (reading.frequencyHz, 1) + " Hz"
+                                          : juce::String ("Play a single note");
+        g.drawText (detail, area.removeFromTop (22.0f), juce::Justification::centred);
+    }
+
+private:
+    PitchReadout::Reading reading;
+};
+
+/** The tuner display with the generic controls (the reference pitch) below it. */
+class TunerEditor final : public juce::AudioProcessorEditor, private juce::Timer
+{
+public:
+    TunerEditor (juce::AudioProcessor& effect, PitchReadout& source)
+        : juce::AudioProcessorEditor (effect), readout (source), controls (effect)
+    {
+        addAndMakeVisible (display);
+        addAndMakeVisible (controls);
+        display.show (readout.readPitch());
+        setSize (std::max (controls.getWidth(), 360), controls.getHeight() + displayHeight);
+        startTimerHz (15);
+    }
+
+    void paint (juce::Graphics& g) override { g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId)); }
+
+    void resized() override
+    {
+        auto area = getLocalBounds();
+        display.setBounds (area.removeFromTop (displayHeight));
+        controls.setBounds (area);
+    }
+
+private:
+    static constexpr int displayHeight = 108;
+
+    void timerCallback() override { display.show (readout.readPitch()); }
+
+    PitchReadout& readout;
+    juce::GenericAudioProcessorEditor controls;
+    TunerDisplay display;
+};
+
+//==============================================================================
 /** Shared plumbing: mono or stereo (same in and out), parameter state as XML,
     the generic editor (with a gain-reduction meter for dynamics), one program. */
 class BuiltinEffect : public juce::AudioPluginInstance
@@ -221,6 +323,8 @@ public:
     {
         if (const auto* meter = dynamic_cast<const GainReductionMeter*> (this))
             return new MeteredEditor (*this, *meter);
+        if (auto* tuner = dynamic_cast<PitchReadout*> (this))
+            return new TunerEditor (*this, *tuner);
         return new juce::GenericAudioProcessorEditor (*this);
     }
     int getNumPrograms() override { return 1; }
@@ -740,8 +844,63 @@ private:
     EffectParameter* range = nullptr;
 };
 
+//==============================================================================
+/** Passes audio through untouched and keeps the latest ~70 ms for the pitch
+    detector, which runs when the window or an AI tool asks (never on the audio thread). */
+class MeridianTuner final : public BuiltinEffect, public PitchReadout
+{
+public:
+    MeridianTuner() : BuiltinEffect ("Meridian Tuner", "Analyzer", tunerId)
+    {
+        reference = add ("reference", "Reference A4", { 430.0f, 450.0f }, 440.0f, "Hz");
+    }
+
+    void prepareToPlay (double sampleRate, int) override
+    {
+        const juce::ScopedLock lock (analysisLock);
+        detector.prepare (sampleRate);
+        history.prepare (detector.getWindowSamples() * 4);
+        window.assign ((size_t) detector.getWindowSamples(), 0.0f);
+    }
+
+    void processAudio (juce::AudioBuffer<float>& buffer) override
+    {
+        history.push (buffer.getReadPointer (0), buffer.getNumChannels() > 1 ? buffer.getReadPointer (1) : nullptr,
+                      buffer.getNumSamples());
+    }
+
+    double getTailLengthSeconds() const override { return 0.0; }
+    void reset() override { history.reset(); }
+
+    Reading readPitch() override
+    {
+        const juce::ScopedLock lock (analysisLock);
+        Reading reading;
+        if (window.empty() || ! history.copyLatest (window.data(), (int) window.size()))
+            return reading;
+        const auto detected = detector.detect (window.data());
+        if (! detected.found)
+            return reading;
+        const auto nearest = dsp::PitchDetector::nearestNote (detected.frequencyHz, value (reference));
+        reading.found = true;
+        reading.frequencyHz = detected.frequencyHz;
+        reading.cents = nearest.cents;
+        reading.midiNote = nearest.midi;
+        reading.note = dsp::PitchDetector::noteName (nearest.midi);
+        return reading;
+    }
+
+private:
+    juce::CriticalSection analysisLock; // prepareToPlay against readPitch; the audio thread never takes it
+    dsp::PitchDetector detector;
+    dsp::SampleHistory history;
+    std::vector<float> window;
+    EffectParameter* reference = nullptr;
+};
+
 std::unique_ptr<juce::AudioPluginInstance> createEffect (const juce::String& identifier)
 {
+    if (identifier == tunerId)      return std::make_unique<MeridianTuner>();
     if (identifier == eqId)         return std::make_unique<MeridianEq>();
     if (identifier == compressorId) return std::make_unique<MeridianCompressor>();
     if (identifier == limiterId)    return std::make_unique<MeridianLimiter>();

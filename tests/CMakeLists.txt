@@ -5,6 +5,7 @@ add_executable(meridian_core_tests
     dsp/AutomationCurveTests.cpp
     dsp/AutomationWriterTests.cpp
     dsp/DeEsserTests.cpp
+    dsp/PitchDetectorTests.cpp
     dsp/DelayGateTests.cpp
     dsp/DelayLineTests.cpp
     dsp/DitherTests.cpp

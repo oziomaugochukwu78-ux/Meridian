@@ -23,7 +23,25 @@ private:
     std::atomic<float> reduction { 0.0f };
 };
 
-/** Meridian's own effects (EQ, Compressor, Limiter, Gate, De-Esser, Delay, Reverb), hosted through
+/** Implemented by the Meridian Tuner: the pitch of the latest audio (about 70 ms),
+    for its window and the AI tools. Call from the message thread. */
+class PitchReadout
+{
+public:
+    struct Reading
+    {
+        bool found = false;
+        double frequencyHz = 0.0;
+        double cents = 0.0;  ///< -50..+50 from the nearest note
+        int midiNote = 69;
+        juce::String note;   ///< e.g. "A4", "C#3"
+    };
+
+    virtual ~PitchReadout() = default;
+    virtual Reading readPitch() = 0;
+};
+
+/** Meridian's own effects (EQ, Compressor, Limiter, Gate, De-Esser, Delay, Reverb, Tuner), hosted through
     the normal plug-in path: they appear in the plug-in list, go in insert
     slots, bypass, save their settings in the session, compensate latency and
     open a window exactly like third-party plug-ins. The signal processing
@@ -31,7 +49,7 @@ private:
     dsp::Limiter, dsp::FdnReverb), where it is measured by unit tests.
 
     Identifiers are "meridian:eq", "meridian:compressor", "meridian:limiter",
-    "meridian:gate", "meridian:deesser", "meridian:delay" and "meridian:reverb";
+    "meridian:gate", "meridian:deesser", "meridian:delay", "meridian:reverb" and "meridian:tuner";
     the format is named "Built-in". */
 class BuiltinEffectFormat final : public juce::AudioPluginFormat
 {

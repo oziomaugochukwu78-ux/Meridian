@@ -246,7 +246,8 @@ const std::vector<ToolInfo>& toolTable()
           "\"Meridian EQ\" (hpOn, hpFreq, lsFreq, lsGain, p1Freq/p1Gain/p1Q to p3..., hsFreq, hsGain, lpOn, lpFreq, "
           "output) and \"Meridian Reverb\" (size, decay, damping, predelay, mix, width). For Meridian's dynamics "
           "(Compressor, Limiter, Gate, De-Esser) it also gives gain_reduction_db: how far it is turning the "
-          "signal down right now.",
+          "signal down right now. For \"Meridian Tuner\" it gives pitch: the note being played, cents off "
+          "and frequency (the reference A4 is its \"reference\" control).",
           schema ({ { "track", "track", trackHelp, true }, { "slot", "string", "Insert slot A-J (or 1-10)", true } }) },
         { "set_plugin_parameter", "Set a plug-in control",
           "Set one control of the plug-in in an insert slot, by id or name, in its own units (Hz, dB, seconds, "
@@ -1146,6 +1147,14 @@ RemoteTools::Result RemoteTools::listPluginParameters (const juce::var& args)
     auto result = makeObject ({ { "plugin", plugin->getName() }, { "parameters", list } });
     if (const auto* meter = dynamic_cast<const GainReductionMeter*> (plugin))
         result.getDynamicObject()->setProperty ("gain_reduction_db", std::round (meter->getGainReductionDb() * 100.0) / 100.0);
+    if (auto* tuner = dynamic_cast<PitchReadout*> (plugin))
+    {
+        const auto reading = tuner->readPitch();
+        result.getDynamicObject()->setProperty ("pitch", reading.found
+            ? makeObject ({ { "note", reading.note }, { "cents", std::round (reading.cents * 10.0) / 10.0 },
+                            { "frequency_hz", std::round (reading.frequencyHz * 100.0) / 100.0 } })
+            : juce::var ("none (silence, or not a single clear note)"));
+    }
     return { true, result, {} };
 }
 
