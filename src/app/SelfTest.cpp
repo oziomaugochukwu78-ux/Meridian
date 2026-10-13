@@ -3077,6 +3077,11 @@ void SelfTest::testSessionSafety()
                                  : juce::String ("the child never became ready"));
     expect ("the killed process left the session marked open", backups::wasLeftOpen (file), {});
 
+    // Where file times are whole seconds (Linux), the session file and a backup made in the
+    // same second look equally old. Reproduce that here: recovery must not depend on file times.
+    if (const auto newestBackup = backups::list (file); ! newestBackup.isEmpty())
+        file.setLastModificationTime (newestBackup.getFirst().getLastModificationTime());
+
     offered = juce::File();
     result = app.openSession (file);
     expect ("re-opening after the crash offers the backup with the unsaved work",

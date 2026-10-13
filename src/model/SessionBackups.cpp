@@ -1,5 +1,7 @@
 #include "SessionBackups.h"
 
+#include <cstring>
+
 namespace meridian::backups
 {
 namespace
@@ -19,6 +21,8 @@ juce::String timestamp (juce::Time t)
 {
     return t.formatted ("%Y%m%d-%H%M%S") + "-" + juce::String (t.getMilliseconds()).paddedLeft ('0', 3);
 }
+constexpr int stampLength = 19; // "20261013-091500-123"
+constexpr const char* sinceKey = "since=";
 } // namespace
 
 juce::File folderFor (const juce::File& sessionFile)
@@ -75,9 +79,12 @@ juce::File markerFor (const juce::File& sessionFile)
 
 void markOpen (const juce::File& sessionFile)
 {
-    markerFor (sessionFile).replaceWithText ("Meridian has had this session open since "
-                                             + juce::Time::getCurrentTime().toISO8601 (true) + ".\n"
-                                             "If Meridian is not running, it did not close normally.\n");
+    // "since" is when the file on disk was last current (opened or saved), to the millisecond
+    // in the same form as backup names: a newer backup holds work that was never saved.
+    const auto now = juce::Time::getCurrentTime();
+    markerFor (sessionFile).replaceWithText ("Meridian has had this session open since " + now.toISO8601 (true) + ".\n"
+                                             "If Meridian is not running, it did not close normally.\n"
+                                             + sinceKey + timestamp (now) + "\n");
 }
 
 void markClosed (const juce::File& sessionFile)
@@ -98,6 +105,19 @@ juce::File findRecovery (const juce::File& sessionFile)
     if (all.isEmpty())
         return {};
     const auto& newest = all.getReference (0);
+
+    // Compare the backup's name (its time to the millisecond) with when the session was last
+    // opened or saved. File-system times are not enough: some (Linux, through JUCE) are whole
+    // seconds, so a backup made in the same second as the save would look no newer.
+    juce::String since;
+    for (const auto& line : juce::StringArray::fromLines (markerFor (sessionFile).loadFileAsString()))
+        if (line.startsWith (sinceKey))
+            since = line.substring ((int) std::strlen (sinceKey)).trim();
+    const auto stamp = newest.getFileName().substring (prefixFor (sessionFile).length()).substring (0, since.length());
+    if (since.length() == stampLength && stamp.length() == stampLength)
+        return stamp >= since ? newest : juce::File();
+
+    // A marker from before the stamp was recorded: fall back to file times.
     return newest.getLastModificationTime() > sessionFile.getLastModificationTime() ? newest : juce::File();
 }
 

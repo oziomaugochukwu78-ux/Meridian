@@ -388,7 +388,10 @@ juce::Result AppController::saveSession()
 
     bridge->storePluginStates();
     juce::String error;
-    return session->save (error) ? juce::Result::ok() : juce::Result::fail (error);
+    if (! session->save (error))
+        return juce::Result::fail (error);
+    backups::markOpen (session->getSessionFile()); // the file is current as of now: older backups are not offered
+    return juce::Result::ok();
 }
 
 juce::Result AppController::saveSessionAs (const juce::File& newFile)
