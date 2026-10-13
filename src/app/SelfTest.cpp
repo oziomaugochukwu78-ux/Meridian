@@ -1358,9 +1358,9 @@ void SelfTest::testBuiltinEffects()
         // Gate: open for a -6 dB tone with a -20 dB threshold; closed (-80 dB) with -3 dB.
         auto levelIn = [this] (const BounceResult& result, double from, double to)
         {
-            const auto audio = readAudio (result.file);
-            const auto a = (int) (from * sampleRate), b = std::min ((int) (to * sampleRate), audio.getNumSamples());
-            return b > a ? db (dsp::measureLevels (audio.getReadPointer (0, a), b - a).peak) : -999.0;
+            const auto rendered = readAudio (result.file);
+            const auto a = (int) (from * sampleRate), b = std::min ((int) (to * sampleRate), rendered.getNumSamples());
+            return b > a ? db (dsp::measureLevels (rendered.getReadPointer (0, a), b - a).peak) : -999.0;
         };
         clearTracks();
         t = addToneTrack ("Gated", 1, tone, clipStart);
