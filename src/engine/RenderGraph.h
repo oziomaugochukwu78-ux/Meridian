@@ -152,6 +152,9 @@ struct TrackRender
     // repeated note retriggers cleanly).
     std::shared_ptr<InstrumentState> instrument;
     bool drumKit = false;                          ///< play `drums` instead of `synth`
+    /** A plug-in instrument (VST3/AU...) in insert A plays the MIDI instead of the
+        built-in synth: it receives `midi` for the block, sample-accurate. */
+    bool pluginInstrument = false;
     synth::PolySynth::Params synthParams;
     synth::DrumSynth::Params drumParams;
     uint64_t synthParamsVersion = 0;

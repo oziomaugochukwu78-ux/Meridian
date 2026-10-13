@@ -453,13 +453,18 @@ void AudioEngine::renderTrack (TrackRender& t, const BlockContext& ctx) noexcept
     if (! t.inserts.empty())
     {
         juce::AudioBuffer<float> view (t.buffer.getArrayOfWritePointers(), numChannels, 0, ctx.numSamples);
+        bool first = true;
         for (auto& slot : t.inserts)
         {
-            if (slot != nullptr && slot->plugin != nullptr && ! slot->bypassed.load (std::memory_order_relaxed))
+            // A plug-in instrument (always insert A) is played even if "bypassed": it is the source.
+            const bool isSource = first && t.pluginInstrument;
+            if (slot != nullptr && slot->plugin != nullptr && (isSource || ! slot->bypassed.load (std::memory_order_relaxed)))
             {
-                t.midi.clear();
+                if (! isSource)
+                    t.midi.clear(); // effects get no MIDI (the instrument's has been used)
                 slot->plugin->processBlock (view, t.midi);
             }
+            first = false;
         }
     }
 
@@ -549,6 +554,41 @@ void AudioEngine::renderInstrument (TrackRender& t, const BlockContext& ctx) noe
         inst.drums.prepare (rate);
         inst.preparedRate = rate;
         inst.appliedParamsVersion = 0;
+    }
+
+    if (t.pluginInstrument)
+    {
+        // A plug-in instrument in insert A: it gets this block's MIDI (the clips' notes and
+        // the keyboard's, each at its sample) and makes the sound itself.
+        t.midi.clear();
+        const bool rolling = ctx.state != Transport::State::stopped;
+        if ((! rolling && inst.nextPosition >= 0) || (rolling && inst.nextPosition != ctx.position))
+            t.midi.addEvent (juce::MidiMessage::allNotesOff (1), 0); // stopped or jumped: nothing may hang
+
+        const auto pos = ctx.position, end = pos + ctx.numSamples;
+        if (rolling)
+            for (auto it = std::lower_bound (t.events.begin(), t.events.end(), pos,
+                                             [] (const MidiEvent& e, juce::int64 time) { return e.time < time; });
+                 it != t.events.end() && it->time < end; ++it)
+                t.midi.addEvent (it->on ? juce::MidiMessage::noteOn (1, it->pitch, it->velocity) : juce::MidiMessage::noteOff (1, it->pitch),
+                                 (int) (it->time - pos));
+
+        if (t.state->recordArmed.load (std::memory_order_relaxed))
+        {
+            const bool capture = ctx.state == Transport::State::recording;
+            for (int i = 0; i < numBlockNotes; ++i)
+            {
+                const auto& note = blockNotes[(size_t) i];
+                if (note.offset < ctx.inputOffset || note.offset >= ctx.inputOffset + ctx.numSamples)
+                    continue;
+                const int at = note.offset - ctx.inputOffset;
+                t.midi.addEvent (note.on ? juce::MidiMessage::noteOn (1, note.pitch, note.velocity) : juce::MidiMessage::noteOff (1, note.pitch), at);
+                if (capture && ! recordedMidi.push ({ t.state->trackId, pos + at, note.pitch, note.velocity, note.on }))
+                    recordedMidiOverflows.fetch_add (1, std::memory_order_relaxed);
+            }
+        }
+        inst.nextPosition = rolling ? end : -1;
+        return;
     }
 
     float* left = t.buffer.getWritePointer (0);

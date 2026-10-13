@@ -21,3 +21,25 @@ target_link_libraries(MeridianTestGain
     PRIVATE juce::juce_audio_utils
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 set_target_properties(MeridianTestGain PROPERTIES FOLDER "Meridian/Tests")
+
+# A tiny VST3 instrument: pure sines from MIDI, for the instrument-hosting self test.
+juce_add_plugin(MeridianTestSynth
+    FORMATS VST3
+    PRODUCT_NAME "Meridian Test Synth"
+    COMPANY_NAME "Meridian Project"
+    PLUGIN_MANUFACTURER_CODE Mrdn
+    PLUGIN_CODE Mtsy
+    IS_SYNTH TRUE
+    NEEDS_MIDI_INPUT TRUE
+    NEEDS_MIDI_OUTPUT FALSE
+    COPY_PLUGIN_AFTER_BUILD FALSE)
+
+target_sources(MeridianTestSynth PRIVATE TestSynthPlugin.cpp)
+target_compile_definitions(MeridianTestSynth PUBLIC
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_VST3_CAN_REPLACE_VST2=0)
+target_link_libraries(MeridianTestSynth
+    PRIVATE juce::juce_audio_utils
+    PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+set_target_properties(MeridianTestSynth PROPERTIES FOLDER "Meridian/Tests")

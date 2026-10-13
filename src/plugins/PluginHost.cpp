@@ -102,14 +102,18 @@ std::unique_ptr<juce::AudioPluginInstance> PluginHost::createInstance (const juc
     }
 
     auto layout = instance->getBusesLayout();
-    if (layout.inputBuses.isEmpty() || layout.outputBuses.isEmpty())
+    const bool instrument = description.isInstrument;
+    if (layout.outputBuses.isEmpty() || (! instrument && layout.inputBuses.isEmpty()))
     {
         error = description.name + " has no audio input, so it cannot be used as an insert on an audio track.";
         return nullptr;
     }
 
+    // Effects: the track's width in and out. Instruments: no audio in (MIDI only),
+    // the track's width out; any input buses they declare are switched off.
     const auto set = numChannels == 1 ? juce::AudioChannelSet::mono() : juce::AudioChannelSet::stereo();
-    layout.inputBuses.getReference (0) = set;
+    if (! layout.inputBuses.isEmpty())
+        layout.inputBuses.getReference (0) = instrument ? juce::AudioChannelSet::disabled() : set;
     layout.outputBuses.getReference (0) = set;
     for (int i = 1; i < layout.inputBuses.size(); ++i)
         layout.inputBuses.getReference (i) = juce::AudioChannelSet::disabled();

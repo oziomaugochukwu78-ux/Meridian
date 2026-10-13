@@ -159,6 +159,11 @@ if(TARGET MeridianTestGain_VST3)
         MERIDIAN_TEST_PLUGIN_BINARY="$<TARGET_FILE:MeridianTestGain_VST3>")
     add_dependencies(Meridian MeridianTestGain_VST3)
 endif()
+if(TARGET MeridianTestSynth_VST3)
+    target_compile_definitions(Meridian PRIVATE
+        MERIDIAN_TEST_SYNTH_BINARY="$<TARGET_FILE:MeridianTestSynth_VST3>")
+    add_dependencies(Meridian MeridianTestSynth_VST3)
+endif()
 
 # Strict IEEE semantics in the app as well: the engine includes the core DSP
 # headers inline.

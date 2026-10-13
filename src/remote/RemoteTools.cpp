@@ -1034,13 +1034,16 @@ RemoteTools::Result RemoteTools::listPlugins (const juce::var& args)
 {
     const auto filter = args["filter"].toString().trim();
     juce::Array<juce::var> list;
-    for (const auto& d : app.getPluginHost().getEffectPlugins())
+    for (const auto& d : app.getPluginHost().getKnownPlugins().getTypes())
         if (filter.isEmpty() || d.name.containsIgnoreCase (filter) || d.manufacturerName.containsIgnoreCase (filter))
             list.add (makeObject ({ { "name", d.name }, { "manufacturer", d.manufacturerName },
-                                    { "format", d.pluginFormatName }, { "category", d.category } }));
-    auto result = makeObject ({ { "plugins", list } });
+                                    { "format", d.pluginFormatName }, { "category", d.category },
+                                    { "instrument", d.isInstrument } }));
+    auto result = makeObject ({ { "plugins", list },
+                                { "note", "Instruments (instrument: true) go in insert A of an instrument track, where they "
+                                          "play its MIDI instead of the built-in synth." } });
     if (list.isEmpty())
-        set (result, "note", "No effect plug-ins are scanned. The user can scan in Setup > Plug-in Manager.");
+        set (result, "note", "No plug-ins are scanned. The user can scan in Setup > Plug-in Manager.");
     return { true, result, {} };
 }
 
@@ -1056,7 +1059,7 @@ RemoteTools::Result RemoteTools::insertPlugin (const juce::var& args)
 
     const auto wanted = args["plugin"].toString().trim();
     const juce::PluginDescription* match = nullptr;
-    const auto plugins = app.getPluginHost().getEffectPlugins();
+    const auto plugins = app.getPluginHost().getKnownPlugins().getTypes();
     for (const auto& d : plugins)
         if (d.name.equalsIgnoreCase (wanted))
             match = &d;

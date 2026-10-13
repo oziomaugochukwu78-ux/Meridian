@@ -244,6 +244,11 @@ bool EngineBridge::insertPlugin (juce::ValueTree t, int slot, const juce::Plugin
 {
     if (session == nullptr)
         return false;
+    if (description.isInstrument && (! track::isInstrument (t) || slot != 0))
+    {
+        error = description.name + " is an instrument: it goes in insert A of an instrument track, where it plays the track's MIDI.";
+        return false;
+    }
 
     // Create the plug-in before touching the document, so a failure leaves no
     // trace. The listener that reacts to the new INSERT node adopts this instance.
@@ -678,6 +683,9 @@ std::unique_ptr<RenderGraph> EngineBridge::buildGraph (double sampleRate, int ma
                 render.drumParams = midimodel::readDrumParams (track::synth (t));
                 render.synthParamsVersion = ++graphVersion;
                 buildMidiEvents (t, render);
+                if (auto first = getInsert (track::id (t), 0);
+                    first != nullptr && first->plugin != nullptr && first->description.isInstrument && first->plugin->acceptsMidi())
+                    render.pluginInstrument = true;
             }
             else if (! render.isAux)
             {
@@ -774,7 +782,7 @@ void EngineBridge::assignDelayCompensation (RenderGraph& graph, bool sharedDelay
     for (auto& t : graph.tracks)
     {
         // An instrument's own synth delays its output like a plug-in would.
-        int pluginLatency = t.instrument == nullptr ? 0
+        int pluginLatency = t.instrument == nullptr || t.pluginInstrument ? 0 // a plug-in instrument reports its own, below
                           : t.drumKit ? synth::DrumSynth::getLatencySamples() : synth::PolySynth::getLatencySamples();
         for (const auto& slot : t.inserts)
             if (! slot->bypassed.load())

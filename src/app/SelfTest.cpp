@@ -81,6 +81,7 @@ void SelfTest::start()
         testTrackEditing();
         testPunchRecording();
         testTempoAndMeter();
+        testPluginInstrument();
         testStress();
         testRobustness(); // before the remote tests: their BOUNCE runs in the background
         testMcpTools();
@@ -1915,6 +1916,73 @@ void SelfTest::testAutomation()
                 && juce::exactlyEqual ((double) automation::lane (t, "pan").getChild (0)[ids::value], 1.0),
             problemBefore + " | " + repairs.joinIntoString ("; ").substring (0, 200));
     clearTracks();
+}
+
+//==============================================================================
+// Plug-in instruments (VST3) on instrument tracks.
+
+void SelfTest::testPluginInstrument()
+{
+    beginGroup ("Plug-in instruments (VST3)");
+#ifndef MERIDIAN_TEST_SYNTH_BINARY
+    skip ("VST3 instrument hosting", "the test instrument was not built");
+#else
+    auto bundle = juce::File (MERIDIAN_TEST_SYNTH_BINARY).getParentDirectory();
+    while (bundle != bundle.getParentDirectory() && ! bundle.getFileName().endsWithIgnoreCase (".vst3"))
+        bundle = bundle.getParentDirectory();
+    juce::AudioPluginFormat* vst3 = nullptr;
+    for (auto* format : app.getPluginHost().getFormatManager().getFormats())
+        if (format->getName() == "VST3")
+            vst3 = format;
+    juce::OwnedArray<juce::PluginDescription> found;
+    if (vst3 != nullptr)
+        vst3->findAllTypesForFile (found, bundle.getFullPathName());
+    expect ("scan finds the test instrument, marked as an instrument", found.size() == 1 && found[0]->isInstrument, bundle.getFullPathName());
+    if (found.isEmpty())
+        return;
+    const auto synthDesc = *found[0];
+
+    auto* session = app.getSession();
+    clearTracks();
+    auto audio = addToneTrack ("Not An Instrument Track", 1, media.getChildFile ("tone1k_mono.wav"), clipStart);
+    auto keys = session->addTrack ("VST Keys", 2, nullptr, Session::TrackKind::instrument);
+    juce::String error;
+    const bool refusedOnAudio = ! app.getBridge().insertPlugin (audio, 0, synthDesc, error);
+    const bool refusedInB = ! app.getBridge().insertPlugin (keys, 1, synthDesc, error);
+    const bool inserted = app.getBridge().insertPlugin (keys, 0, synthDesc, error);
+    expect ("an instrument plug-in goes in insert A of an instrument track (refused elsewhere)",
+            refusedOnAudio && refusedInB && inserted, error);
+    session->removeTrack (audio, nullptr);
+
+    // A4 at exactly 1 s (beat 2 at 120 BPM), for half a second.
+    auto clip = session->addMidiClip (keys, 0, (juce::int64) (3.0 * sampleRate), "notes", nullptr);
+    midimodel::addNote (clip, { 69, 1.0f, 2 * midi::ticksPerQuarter, midi::ticksPerQuarter }, nullptr);
+    const auto audioOut = readAudio (bounce ("vst_instrument", 0, (juce::int64) (3.0 * sampleRate)).file);
+    const int on = (int) sampleRate, off = (int) (1.5 * sampleRate);
+    int first = -1, last = -1;
+    for (int i = 0; i < audioOut.getNumSamples(); ++i)
+        if (! juce::exactlyEqual (audioOut.getSample (0, i), 0.0f))
+        {
+            if (first < 0)
+                first = i;
+            last = i;
+        }
+    expect ("the plug-in plays the clip's note from exactly its sample to exactly its note-off",
+            first == on + 1 && last == off - 1, // the sine starts at zero phase; the note-off stops it dead
+            "sound from " + juce::String (first) + " to " + juce::String (last) + ", note " + juce::String (on) + "-" + juce::String (off));
+    const float* x = audioOut.getReadPointer (0, on + 2400);
+    expectNear ("it is the plug-in's 440 Hz at velocity 1 (amplitude 0.5), centre-panned stereo at unity",
+                db (dsp::toneAmplitude (x, 19200, 440.0, sampleRate)), -6.0206, 0.02, "dB");
+    const auto level = dsp::measureLevels (x, 19200);
+    expect ("and only the plug-in: the built-in synth is silent (the output is a pure sine)",
+            std::abs (level.rms * std::sqrt (2.0) / 0.5 - 1.0) < 0.002, "RMS " + juce::String (level.rms, 5));
+
+    auto& tools = app.getRemoteTools();
+    app.getPluginHost().getKnownPlugins().addType (synthDesc); // what a scan in the Plug-in Manager does
+    const auto listed = juce::JSON::toString (tools.call ("list_plugins", juce::JSON::parse (R"({"filter":"Test Synth"})")).data);
+    expect ("list_plugins shows the instrument as one", listed.contains ("Meridian Test Synth") && listed.contains (R"("instrument": true)"), listed);
+    clearTracks();
+#endif
 }
 
 //==============================================================================
