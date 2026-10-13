@@ -541,9 +541,10 @@ void EngineBridge::buildSegments (const juce::ValueTree& t, TrackRender& render,
 
 void EngineBridge::buildMidiEvents (const juce::ValueTree& t, TrackRender& render) const
 {
-    // Notes are in ticks from each clip's content origin; the timeline is in
-    // samples at the session rate. A note sounds if it starts inside its clip,
-    // and is cut off at the clip's end.
+    // Notes are in ticks from each clip's content origin, timed by the tempo map
+    // from there (TempoMap::samplesFromOrigin); the timeline is in samples at the
+    // session rate. A note sounds if it starts inside its clip, and is cut off at
+    // the clip's end.
     const auto tempo = midimodel::tempoMap (*session);
     const double rate = session->getSampleRate();
 
@@ -559,10 +560,10 @@ void EngineBridge::buildMidiEvents (const juce::ValueTree& t, TrackRender& rende
         const auto notes = midimodel::readNotes (c);
         for (const auto& n : notes.getNotes())
         {
-            const auto on = origin + tempo.ticksToSamples (n.start, rate);
+            const auto on = tempo.samplesFromOrigin (origin, n.start, rate);
             if (on < start || on >= end)
                 continue;
-            const auto off = juce::jlimit (on + 1, end, origin + tempo.ticksToSamples (n.end(), rate));
+            const auto off = juce::jlimit (on + 1, end, tempo.samplesFromOrigin (origin, n.end(), rate));
             render.events.push_back ({ on, n.pitch, n.velocity, true });
             render.events.push_back ({ off, n.pitch, 0.0f, false });
         }

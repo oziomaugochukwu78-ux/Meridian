@@ -1573,7 +1573,7 @@ RemoteTools::Result RemoteTools::addNotes (const juce::var& args)
     // clip's content origin, which a trimmed clip has moved earlier.
     auto* session = app.getSession();
     const auto tempo = midimodel::tempoMap (*session);
-    const auto offsetTicks = tempo.samplesToTicks (clip::offset (c), session->getSampleRate());
+    const auto offsetTicks = tempo.ticksFromOrigin (clip::contentOrigin (c), clip::start (c), session->getSampleRate());
 
     std::vector<midi::Note> notes;
     for (const auto& n : *list)
@@ -1618,7 +1618,8 @@ RemoteTools::Result RemoteTools::listNotes (const juce::var& args)
         return { false, {}, error };
 
     auto* session = app.getSession();
-    const auto offsetTicks = midimodel::tempoMap (*session).samplesToTicks (clip::offset (c), session->getSampleRate());
+    const auto offsetTicks = midimodel::tempoMap (*session).ticksFromOrigin (clip::contentOrigin (c), clip::start (c),
+                                                                             session->getSampleRate());
     juce::Array<juce::var> result;
     const auto notes = midimodel::readNotes (c); // named: a temporary would die before the loop runs
     for (const auto& n : notes.getNotes())

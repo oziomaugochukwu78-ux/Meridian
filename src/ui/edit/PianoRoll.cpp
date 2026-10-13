@@ -164,22 +164,53 @@ void PianoRollComponent::setGridTicks (int64_t ticks)
             gridBox.setSelectedId (i + 1, juce::dontSendNotification);
 }
 
-int64_t PianoRollComponent::snap (int64_t tick) const noexcept
+int64_t PianoRollComponent::snap (int64_t tick, bool down) const
 {
+    // The grid counts from the start of each bar (in the session's meter), so
+    // a 1/8 triplet in 7/8 still starts on the bar line; "1 bar" snaps to bars.
     const auto grid = getGridTicks();
-    return grid <= 1 ? tick : (int64_t) std::llround ((double) tick / (double) grid) * grid;
+    if (grid <= 1)
+        return tick;
+    const auto meter = meterMap();
+    const auto origin = originTick();
+    const auto bar = meter.positionOf (origin + tick).bar;
+    const auto barStart = meter.barToTicks (bar), nextBar = meter.barToTicks (bar + 1);
+    const auto at = origin + tick;
+    int64_t snapped = 0;
+    if (grid == barTicks)
+        snapped = down || at - barStart < nextBar - at ? barStart : nextBar;
+    else if (down)
+        snapped = barStart + ((at - barStart) / grid) * grid;
+    else
+        snapped = std::min (nextBar, barStart + (int64_t) std::llround ((double) (at - barStart) / (double) grid) * grid);
+    return snapped - origin;
+}
+
+int64_t PianoRollComponent::originTick() const
+{
+    if (auto* session = app.getSession())
+        return midimodel::tempoMap (*session).samplesToTicks (clip::contentOrigin (clipNode), session->getSampleRate());
+    return 0;
+}
+
+midi::MeterMap PianoRollComponent::meterMap() const
+{
+    if (auto* session = app.getSession())
+        return midimodel::meterMap (*session);
+    return {};
 }
 
 void PianoRollComponent::clipRangeTicks (int64_t& start, int64_t& end) const
 {
-    // The part of the content that plays: from the clip's offset to its end.
+    // The part of the content that plays: from the clip's start to its end.
     start = end = 0;
     if (auto* session = app.getSession())
     {
         const auto tempo = midimodel::tempoMap (*session);
         const double rate = session->getSampleRate();
-        start = tempo.samplesToTicks (clip::offset (clipNode), rate);
-        end = tempo.samplesToTicks (clip::offset (clipNode) + clip::length (clipNode), rate);
+        const auto origin = clip::contentOrigin (clipNode);
+        start = tempo.ticksFromOrigin (origin, clip::start (clipNode), rate);
+        end = tempo.ticksFromOrigin (origin, clip::end (clipNode), rate);
     }
 }
 
@@ -270,23 +301,33 @@ void PianoRollComponent::paint (juce::Graphics& g)
     if (rangeRight < (float) grid.getRight())
         g.fillRect (rangeRight, (float) grid.getY(), (float) grid.getRight() - rangeRight, (float) grid.getHeight());
 
-    // Vertical grid: bars, beats and the snap grid; bar numbers in the ruler.
+    // Vertical grid from the session's meter: bars (numbered as in the timeline),
+    // beats, and the snap grid counted from each bar line.
     const auto snapTicks = getGridTicks();
-    const int64_t lineStep = snapTicks > 1 && (double) snapTicks * pixelsPerTick >= 6.0 ? snapTicks : beatTicks;
-    const int64_t lastTick = tickAtX ((float) getWidth());
-    for (int64_t t = (viewStartTick / lineStep) * lineStep; t <= lastTick; t += lineStep)
+    const auto meter = meterMap();
+    const auto origin = originTick();
+    const int64_t firstTick = origin + viewStartTick, lastTick = origin + tickAtX ((float) getWidth());
+    for (auto bar = meter.positionOf (firstTick).bar; meter.barToTicks (bar) <= lastTick; ++bar)
     {
-        if (t < viewStartTick)
-            continue;
-        const float x = xForTick (t);
-        const bool bar = t % barTicks == 0, beat = t % beatTicks == 0;
-        g.setColour (bar ? theme::gridBar.brighter (0.3f) : beat ? theme::gridBar : theme::gridLine);
-        g.drawVerticalLine ((int) x, (float) grid.getY(), (float) grid.getBottom());
-        if (bar)
+        const auto& m = meter.meterAt (bar);
+        const auto barStart = meter.barToTicks (bar), barEnd = meter.barToTicks (bar + 1);
+        const auto beatLength = midi::MeterMap::ticksPerBeat (m);
+        const int64_t step = snapTicks > 1 && snapTicks < beatLength * m.numerator && (double) snapTicks * pixelsPerTick >= 6.0
+                                 ? snapTicks : beatLength;
+        for (int64_t t = barStart; t < barEnd && t <= lastTick; t += step)
         {
-            g.setColour (theme::text);
-            g.setFont (theme::font (11.0f));
-            g.drawText (juce::String (t / barTicks + 1), (int) x + 3, toolbarHeight, 40, rulerHeight, juce::Justification::centredLeft);
+            if (t < firstTick)
+                continue;
+            const float x = xForTick (t - origin);
+            const bool isBar = t == barStart, isBeat = (t - barStart) % beatLength == 0;
+            g.setColour (isBar ? theme::gridBar.brighter (0.3f) : isBeat ? theme::gridBar : theme::gridLine);
+            g.drawVerticalLine ((int) x, (float) grid.getY(), (float) grid.getBottom());
+            if (isBar)
+            {
+                g.setColour (theme::text);
+                g.setFont (theme::font (11.0f));
+                g.drawText (juce::String (bar + 1), (int) x + 3, toolbarHeight, 40, rulerHeight, juce::Justification::centredLeft);
+            }
         }
     }
 
@@ -386,9 +427,15 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
     {
         // Empty space: create a note one grid step long, then drag sets its length.
         um->beginNewTransaction ("Add Note");
-        const auto grid = std::max<int64_t> (getGridTicks(), beatTicks / 8);
-        const auto start = std::max<int64_t> (0, getGridTicks() > 1 ? (tickAtX (e.position.x) / grid) * grid : tickAtX (e.position.x));
-        hit.note = midimodel::addNote (clipNode, { pitchAtY (e.position.y), (float) (velocity.getValue() / 127.0), start, grid }, um);
+        auto length = std::max<int64_t> (getGridTicks(), beatTicks / 8);
+        const auto start = std::max<int64_t> (0, snap (tickAtX (e.position.x), true));
+        if (getGridTicks() == barTicks) // a whole bar of this bar's meter
+        {
+            const auto meter = meterMap();
+            const auto bar = meter.positionOf (originTick() + start).bar;
+            length = meter.barToTicks (bar + 1) - meter.barToTicks (bar);
+        }
+        hit.note = midimodel::addNote (clipNode, { pitchAtY (e.position.y), (float) (velocity.getValue() / 127.0), start, length }, um);
         hit.onRightEdge = true;
         selection = { hit.note };
     }

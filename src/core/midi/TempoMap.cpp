@@ -101,4 +101,18 @@ int64_t TempoMap::samplesToTicks (int64_t samples, double sampleRate) const noex
     return sampleRate > 0.0 ? secondsToTicks ((double) samples / sampleRate) : 0;
 }
 
+int64_t TempoMap::samplesFromOrigin (int64_t originSample, int64_t ticks, double sampleRate) const noexcept
+{
+    const auto originTick = samplesToTicks (originSample, sampleRate);
+    const auto subTick = originSample - ticksToSamples (originTick, sampleRate);
+    return ticksToSamples (originTick + ticks, sampleRate) + subTick;
+}
+
+int64_t TempoMap::ticksFromOrigin (int64_t originSample, int64_t sample, double sampleRate) const noexcept
+{
+    const auto originTick = samplesToTicks (originSample, sampleRate);
+    const auto subTick = originSample - ticksToSamples (originTick, sampleRate);
+    return samplesToTicks (sample - subTick, sampleRate) - originTick;
+}
+
 } // namespace meridian::midi

@@ -2,6 +2,8 @@
 
 #include "app/AppController.h"
 
+#include <midi/MeterMap.h>
+
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <functional>
@@ -72,7 +74,10 @@ private:
     float yForPitch (int pitch) const noexcept;
     juce::Rectangle<float> noteRect (const juce::ValueTree& note) const;
     Hit noteAt (juce::Point<float>) const;
-    int64_t snap (int64_t tick) const noexcept;
+    /** The nearest grid position (or, with `down`, the grid cell's start), counted from bar lines. */
+    int64_t snap (int64_t tick, bool down = false) const;
+    int64_t originTick() const;        ///< the session tick of the clip's content origin (note tick 0)
+    midi::MeterMap meterMap() const;   ///< the session's time signatures
     bool isSelected (const juce::ValueTree&) const;
     std::vector<juce::ValueTree> targets() const; ///< the selection, or every note if none
     juce::UndoManager* undoManager() const;

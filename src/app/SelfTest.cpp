@@ -2139,6 +2139,56 @@ void SelfTest::testTempoAndMeter()
     }
     clearTracks();
 
+    // A clip that starts after the tempo change keeps musical time: bar 4 starts at 5.5 s, and a
+    // note 3 beats (one 6/8 bar) into the clip is on bar 5, at 7.5 s. Timed with the session's
+    // first tempo (120 BPM) instead, it would sound at 7.0 s.
+    call ("create_track", R"({"kind":"instrument","name":"Keys"})");
+    call ("add_midi_clip", R"({"track":"Keys","start_beat":4,"length_beats":6})");  // bars 2-3 (3/4)
+    call ("add_midi_clip", R"({"track":"Keys","start_beat":10,"length_beats":8})"); // bars 4-6 (6/8)
+    call ("add_notes", R"({"track":"Keys","clip":2,"notes":[{"pitch":69,"start_beats":3,"length_beats":1,"velocity":1}]})");
+    {
+        const auto listedNotes = call ("list_notes", R"({"track":"Keys","clip":2})");
+        const auto audio = readAudio (bounce ("tempo_map_clip_after_change", 0, (juce::int64) (8.0 * sampleRate)).file);
+        int onset = -1;
+        for (int i = 0; i < audio.getNumSamples() && onset < 0; ++i)
+            if (! juce::exactlyEqual (audio.getSample (0, i), 0.0f))
+                onset = i;
+        const int expected = (int) (7.5 * sampleRate);
+        expect ("a clip after a tempo change plays in musical time (its note on bar 5 sounds at 7.500 s)",
+                onset >= expected - synth::PolySynth::getLatencySamples() && onset <= expected
+                    && juce::JSON::toString (listedNotes.data).contains (R"("start_beats": 3.0)"),
+                "first sound at " + juce::String (onset) + ", bar 5 at " + juce::String (expected) + "; "
+                    + juce::JSON::toString (listedNotes.data).substring (0, 120));
+    }
+
+    // The MIDI editor uses the meter too: with the 1-bar grid, a click in the second 3/4 bar of
+    // the first clip (bars 2-3) adds a note on that bar line, one 3/4 bar long.
+    {
+        auto keysTrack = session->getTrack (0); // the only track
+        auto firstClip = keysTrack.isValid() && track::name (keysTrack) == "Keys" ? track::clips (keysTrack).getChild (0) : juce::ValueTree();
+        auto& editView = main.getEditView();
+        main.showWindow (WindowKind::edit);
+        if (firstClip.isValid())
+            editView.openPianoRoll (firstClip);
+        if (auto* pr = editView.getPianoRoll(); pr != nullptr && firstClip.isValid())
+        {
+            pr->setGridTicks (3840);
+            const auto p = pr->positionFor (2880 + 400, 67) + juce::Point<float> (2.0f, pr->rowHeight() * 0.5f);
+            pr->mouseDown (mouseEvent (*pr, p, p, false, {}));
+            pr->mouseUp (mouseEvent (*pr, p, p, false, {}));
+            const auto added = clip::notes (firstClip).getChild (0);
+            expect ("piano roll: the 1-bar grid snaps to the 3/4 bar line, and a bar is three beats",
+                    added.isValid() && (juce::int64) added[ids::start] == 2880 && (juce::int64) added[ids::length] == 2880,
+                    added.isValid() ? "start " + added[ids::start].toString() + ", length " + added[ids::length].toString()
+                                    : juce::String ("no note"));
+            snapshot (*pr, "piano_roll_meter.png");
+            editView.closePianoRoll();
+        }
+        else
+            expect ("the MIDI editor opens for the clip", false, {});
+    }
+    clearTracks();
+
     // The click through the real graph: every beat on its exact sample, accents on bar starts.
     {
         AudioEngine engine;

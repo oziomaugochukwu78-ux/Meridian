@@ -46,6 +46,18 @@ public:
     int64_t ticksToSamples (int64_t tick, double sampleRate) const noexcept;
     int64_t samplesToTicks (int64_t samples, double sampleRate) const noexcept;
 
+    /** Content placed at a sample position (a MIDI clip's origin) keeps its
+        musical timing: `ticks` after an origin at `originSample` falls where the
+        music is that many ticks after the origin's own tick, under the tempo
+        there, not under the tempo at the start of the session. An origin exactly
+        on a tick lands its notes on exactly the samples ticksToSamples gives
+        (where the click sounds); an origin between ticks keeps that sub-tick
+        offset. */
+    int64_t samplesFromOrigin (int64_t originSample, int64_t ticks, double sampleRate) const noexcept;
+
+    /** The inverse: ticks from an origin at `originSample` to `sample` (nearest tick). */
+    int64_t ticksFromOrigin (int64_t originSample, int64_t sample, double sampleRate) const noexcept;
+
 private:
     static double secondsPerTick (double bpm) noexcept { return 60.0 / (bpm * (double) ticksPerQuarter); }
 

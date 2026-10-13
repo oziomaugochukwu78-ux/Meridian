@@ -369,14 +369,14 @@ void TrackLane::mouseDoubleClick (const juce::MouseEvent& e)
     if (session == nullptr || ! track::isInstrument (trackNode) || editState.tool == EditTool::pencil)
         return;
 
-    // A four-bar MIDI clip, starting at the beginning of the bar that was clicked.
+    // A four-bar MIDI clip (in the session's meter), starting at the beginning of the bar that was clicked.
     const auto tempo = midimodel::tempoMap (*session);
+    const auto meter = midimodel::meterMap (*session);
     const double rate = session->getSampleRate();
-    constexpr int64_t barTicks = midi::ticksPerQuarter * timeformat::beatsPerBar;
     const auto tick = tempo.samplesToTicks (std::max<juce::int64> (0, editState.xToSample (e.position.x)), rate);
-    const auto startTick = (tick / barTicks) * barTicks;
-    const auto start = tempo.ticksToSamples (startTick, rate);
-    const auto end = tempo.ticksToSamples (startTick + 4 * barTicks, rate);
+    const auto bar = std::max<int64_t> (0, meter.positionOf (tick).bar);
+    const auto start = tempo.ticksToSamples (meter.barToTicks (bar), rate);
+    const auto end = tempo.ticksToSamples (meter.barToTicks (bar + 4), rate);
 
     auto& um = session->getUndoManager();
     um.beginNewTransaction ("New MIDI Clip");

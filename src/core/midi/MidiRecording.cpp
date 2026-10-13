@@ -16,10 +16,9 @@ RecordedTake buildTake (std::vector<RecordedEvent> events, int64_t recordStart, 
 
     std::stable_sort (events.begin(), events.end(), [] (const RecordedEvent& a, const RecordedEvent& b) { return a.time < b.time; });
 
-    // Ticks from the clip start, measured through the tempo map from the session
-    // start, so the conversion stays right once the tempo can change.
-    const auto originTicks = tempo.samplesToTicks (take.clipStart, sampleRate);
-    auto ticksAt = [&] (int64_t time) { return tempo.samplesToTicks (time, sampleRate) - originTicks; };
+    // Ticks from the clip start under the tempo there: the exact inverse of how
+    // playback places notes (TempoMap::samplesFromOrigin).
+    auto ticksAt = [&] (int64_t time) { return tempo.ticksFromOrigin (take.clipStart, time, sampleRate); };
 
     struct Held { int64_t since = -1; float velocity = 0.0f; };
     std::array<Held, 128> held {};
