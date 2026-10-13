@@ -85,4 +85,25 @@ void Metronome::render (float* out, int numSamples, int64_t position) noexcept
     }
 }
 
+void Metronome::render (float* out, int numSamples, int64_t position, const midi::ClickGrid& grid) noexcept
+{
+    int done = 0;
+    int64_t searchFrom = position;
+    while (done < numSamples)
+    {
+        const auto beat = grid.beatAtOrAfter (searchFrom);
+        const int until = (int) std::min<int64_t> (numSamples, beat.sample - position);
+
+        for (int i = done; i < until && remaining > 0; ++i, --remaining, ++elapsed, envelope *= decayPerSample)
+            out[i] += (float) (gain * std::sin (twoPi * frequency * elapsed / sampleRate) * envelope);
+        done = std::max (done, until);
+
+        if (beat.sample - position < numSamples) // an onset in this block
+        {
+            startClick (beat.accent);
+            searchFrom = beat.sample + 1;
+        }
+    }
+}
+
 } // namespace meridian::dsp

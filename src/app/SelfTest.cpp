@@ -80,6 +80,7 @@ void SelfTest::start()
         testLoudnessAndExport();
         testTrackEditing();
         testPunchRecording();
+        testTempoAndMeter();
         testStress();
         testRobustness(); // before the remote tests: their BOUNCE runs in the background
         testMcpTools();
@@ -1917,6 +1918,131 @@ void SelfTest::testAutomation()
 }
 
 //==============================================================================
+// Tempo changes and time signatures.
+
+void SelfTest::testTempoAndMeter()
+{
+    beginGroup ("Tempo map and time signatures");
+    auto& tools = app.getRemoteTools();
+    auto call = [&tools] (const juce::String& tool, const juce::String& arguments) { return tools.call (tool, juce::JSON::parse (arguments)); };
+    auto* session = app.getSession();
+    clearTracks();
+
+    // 4/4 for bars 1-2, 3/4 for bars 2-3... : 4/4 (bar 1), 3/4 (bars 2-3), 6/8 (from bar 4); 120 BPM, then 90 from bar 3.
+    auto r = call ("set_tempo", R"({"bpm":120,"clear_changes":true})");
+    call ("set_meter", R"({"numerator":3,"denominator":4,"at_bar":2})");
+    call ("set_meter", R"({"numerator":6,"denominator":8,"at_bar":4})");
+    r = call ("set_tempo", R"({"bpm":90,"at_bar":3})");
+    const auto mapText = juce::JSON::toString (r.data, true);
+    expect ("the tools set tempo changes and time signatures, and report them",
+            r.ok && mapText.contains (R"("time_signature": "6/8")") && mapText.contains (R"("bpm": 90)"), mapText.substring (0, 200));
+    session->getUndoManager().undo();
+    const bool undone = midimodel::tempoMap (*session).getChanges().size() == 1;
+    session->getUndoManager().redo();
+    expect ("a tempo change is one undo step (undo removes it, redo restores it)",
+            undone && midimodel::tempoMap (*session).getChanges().size() == 2, {});
+
+    const auto tempo = midimodel::tempoMap (*session);
+    const auto meter = midimodel::meterMap (*session);
+    // Bar 5 starts at tick 3840 (4/4) + 2 x 2880 (3/4) + 2880 (6/8) = 12480 = 13 quarter notes.
+    // Seconds: 120 BPM until bar 3 (tick 6720 = 7 quarters = 3.5 s), then 6 quarters at 90 BPM = 4 s: 7.5 s.
+    expect ("bar positions follow the meters, times follow the tempo changes",
+            meter.barToTicks (4) == 12480 && tempo.ticksToSamples (12480, sampleRate) == (juce::int64) (7.5 * sampleRate),
+            juce::String (meter.barToTicks (4)) + " ticks, " + juce::String (tempo.ticksToSamples (12480, sampleRate)) + " samples");
+
+    // A synth note written on bar 5 sounds at 7.5 s exactly (plus the synth's own latency).
+    call ("create_track", R"({"kind":"instrument","name":"Keys"})");
+    call ("add_midi_clip", R"({"track":"Keys","start_beat":0,"length_beats":16})");
+    call ("add_notes", R"({"track":"Keys","clip":1,"notes":[{"pitch":69,"start_beats":13,"length_beats":1,"velocity":1}]})");
+    {
+        const auto audio = readAudio (bounce ("tempo_map_note", 0, (juce::int64) (8.0 * sampleRate)).file);
+        int onset = -1;
+        for (int i = 0; i < audio.getNumSamples() && onset < 0; ++i)
+            if (! juce::exactlyEqual (audio.getSample (0, i), 0.0f))
+                onset = i;
+        const int expected = (int) (7.5 * sampleRate);
+        // The synth's 16-sample latency is compensated, and its linear-phase oversampling
+        // filter rings ahead of the attack: the first non-zero sample is up to 16 early.
+        expect ("a note on bar 5 sounds at exactly 7.500 s (after a 3/4 and a 6/8 bar and a tempo change)",
+                onset >= expected - synth::PolySynth::getLatencySamples() && onset <= expected,
+                "first sound at " + juce::String (onset) + ", bar 5 at " + juce::String (expected));
+    }
+    clearTracks();
+
+    // The click through the real graph: every beat on its exact sample, accents on bar starts.
+    {
+        AudioEngine engine;
+        engine.prepare (sampleRate, 512);
+        engine.getMasterBus().consoleEnabled.store (false);
+        engine.publishGraph (app.getBridge().buildOfflineGraph (sampleRate, 512));
+        engine.clickEnabled.store (true);
+        engine.getTransport().play();
+        const int total = (int) (10.0 * sampleRate);
+        const auto x = renderEngine (engine, total, 512);
+        const auto onsets = clickOnsets (x);
+
+        std::vector<int> expected;
+        std::vector<bool> accents;
+        for (auto beat = meter.beatAtOrAfter (0);; beat = meter.beatAtOrAfter (beat.tick + 1))
+        {
+            const auto s = tempo.ticksToSamples (beat.tick, sampleRate);
+            if (s + 2 >= total)
+                break;
+            expected.push_back ((int) s);
+            accents.push_back (beat.barStart);
+        }
+        bool accentsRight = onsets == expected;
+        for (size_t i = 0; accentsRight && i < expected.size(); ++i)
+        {
+            float peak = 0.0f;
+            for (int k = 0; k < 1700; ++k)
+                peak = std::max (peak, std::abs (x[(size_t) expected[i] + (size_t) k]));
+            accentsRight = (db (peak) > -8.0) == accents[i];
+        }
+        expect ("the click follows the tempo and meter maps to the sample, accenting each bar's first beat",
+                onsets == expected && accentsRight,
+                juce::String ((int) onsets.size()) + " clicks, " + juce::String ((int) expected.size()) + " expected");
+    }
+
+    // A count-in in 6/8 at 90 BPM: six eighths per bar at 180 eighths per minute.
+    app.locate (tempo.ticksToSamples (meter.barToTicks (3), sampleRate));
+    for (int waited = 0; app.getEngine().getTransport().getPosition() != tempo.ticksToSamples (meter.barToTicks (3), sampleRate) && waited < 2000; waited += 10)
+        juce::Thread::sleep (10);
+    const auto [countBpm, countBeats] = app.countInGrid();
+    expect ("a count-in in a 6/8 bar at 90 BPM clicks six eighths per bar (180 per minute)",
+            countBeats == 6 && std::abs (countBpm - 180.0) < 1.0e-9, juce::String (countBpm) + " / " + juce::String (countBeats));
+    app.locate (0);
+
+    // The editing grid snaps to the beats of the maps: in 6/8 at 90 BPM an eighth is 16000 samples.
+    {
+        EditState grid;
+        grid.sampleRate = sampleRate;
+        grid.tempoMap = tempo;
+        grid.meterMap = meter;
+        grid.setMode (EditMode::grid);
+        const auto bar4 = tempo.ticksToSamples (meter.barToTicks (3), sampleRate);
+        expect ("Grid mode snaps to the beats of the tempo and meter maps",
+                grid.snap (bar4 + 7000) == bar4 && grid.snap (bar4 + 9000) == bar4 + 16000, juce::String (grid.snap (bar4 + 9000) - bar4));
+    }
+
+    // Damaged maps.
+    auto bad = juce::ValueTree (ids::TEMPO);
+    bad.setProperty (ids::tick, 960, nullptr);
+    bad.setProperty (ids::bpm, std::numeric_limits<double>::quiet_NaN(), nullptr);
+    session->getState().getOrCreateChildWithName (ids::TEMPO_MAP, nullptr).appendChild (bad, nullptr);
+    auto badMeter = juce::ValueTree (ids::METER);
+    badMeter.setProperty (ids::bar, 2, nullptr);
+    badMeter.setProperty (ids::numerator, 5, nullptr);
+    badMeter.setProperty (ids::denominator, 3, nullptr);
+    session->getState().getOrCreateChildWithName (ids::METER_MAP, nullptr).appendChild (badMeter, nullptr);
+    const auto problem = findSessionProblem (*session);
+    repairSession (*session);
+    expect ("an invalid tempo or time signature is found and removed by repair",
+            problem.isNotEmpty() && findSessionProblem (*session).isEmpty(), problem);
+    call ("set_tempo", R"({"bpm":120,"clear_changes":true})");
+}
+
+//==============================================================================
 // Punch recording: takes written only between punch-in and punch-out.
 
 void SelfTest::testPunchRecording()
@@ -2870,8 +2996,8 @@ void SelfTest::testMcpTools()
     if (toolArray != nullptr)
         for (const auto& tool : *toolArray)
             allDescribed = allDescribed && tool["inputSchema"].isObject() && tool["description"].toString().length() > 20;
-    expect ("tools/list describes all 41 tools, each with a description and a JSON schema",
-            allDescribed && toolArray->size() == 41, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
+    expect ("tools/list describes all 42 tools, each with a description and a JSON schema",
+            allDescribed && toolArray->size() == 42, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
 
     auto r = toolCall ("get_status", "{}");
     expect ("get_status returns the session and tracks", ! failed (r) && callText (r).contains ("\"Vocal\""), callText (r).substring (0, 160));

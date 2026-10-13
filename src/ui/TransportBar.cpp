@@ -1,4 +1,5 @@
 #include "TransportBar.h"
+#include "model/MidiModel.h"
 
 #include "Theme.h"
 #include "TimeFormat.h"
@@ -123,8 +124,11 @@ void TransportBar::timerCallback()
     mixButton.setToggleState (window == WindowKind::mix, juce::dontSendNotification);
 
     mainCounter = timeformat::minSecs (position, sr);
-    const double bpm = app.getSession() != nullptr ? app.getSession()->getTempo() : timeformat::tempoBpm;
-    subCounter = timeformat::barsBeats (position, sr, bpm) + "    " + juce::String (position) + " smp";
+    if (auto* session = app.getSession())
+        subCounter = timeformat::barsBeats (position, sr, midimodel::tempoMap (*session), midimodel::meterMap (*session));
+    else
+        subCounter = timeformat::barsBeats (position, sr);
+    subCounter << "    " << juce::String (position) << " smp";
 
     cpuLoad = (float) app.getDeviceManager().getCpuUsage();
     if (app.getEngine().collectDiskUnderruns() > 0)

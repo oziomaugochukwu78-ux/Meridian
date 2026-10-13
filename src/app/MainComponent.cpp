@@ -1,5 +1,7 @@
 #include "MainComponent.h"
 
+#include "model/MidiModel.h"
+
 #include "CommandIds.h"
 
 #include "plugins/PluginWindow.h"
@@ -512,8 +514,13 @@ bool MainComponent::perform (const InvocationInfo& info)
                 }
                 else if (end <= start)
                 {
-                    start = app.getEngine().getTransport().getPosition();
-                    end = start + (juce::int64) std::llround (AppController::beatsPerBar * 60.0 * session->getSampleRate() / session->getTempo());
+                    // No range yet: loop the bar the playhead is in (tempo and meter maps).
+                    const auto tempo = midimodel::tempoMap (*session);
+                    const auto meter = midimodel::meterMap (*session);
+                    const double rate = session->getSampleRate();
+                    const auto bar = meter.positionOf (tempo.samplesToTicks (app.getEngine().getTransport().getPosition(), rate)).bar;
+                    start = tempo.ticksToSamples (meter.barToTicks (bar), rate);
+                    end = tempo.ticksToSamples (meter.barToTicks (bar + 1), rate);
                 }
                 app.setLoop (on, start, end);
             }

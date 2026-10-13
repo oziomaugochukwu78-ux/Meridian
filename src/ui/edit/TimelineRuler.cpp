@@ -163,36 +163,49 @@ void TimelineRuler::paint (juce::Graphics& g)
 
 void TimelineRuler::paintBarsBeats (juce::Graphics& g, juce::Rectangle<int> row)
 {
-    const double samplesPerBeat = timeformat::samplesPerBeat (state.sampleRate, state.tempo);
-    const double samplesPerBar = samplesPerBeat * timeformat::beatsPerBar;
-    const double barPixels = samplesPerBar / state.samplesPerPixel;
+    // Bars and beats follow the tempo and meter maps: bar lengths change with both.
+    const auto& meter = state.meterMap;
+    const auto firstBar = meter.positionOf (state.sampleToTicks (state.viewStart)).bar;
+    const auto lastBar = meter.positionOf (state.sampleToTicks (state.xToSample (row.getWidth()))).bar + 1;
 
+    // Label every 2^n bars so labels stay ~60 px apart (judged on the first visible bar).
+    const double firstBarPixels = (double) (state.ticksToSample (meter.barToTicks (firstBar + 1))
+                                            - state.ticksToSample (meter.barToTicks (firstBar))) / state.samplesPerPixel;
     int barStep = 1;
-    while (barPixels * barStep < 60.0 && barStep < 1024)
+    while (firstBarPixels * barStep < 60.0 && barStep < 1024)
         barStep *= 2;
-    const bool drawBeats = samplesPerBeat / state.samplesPerPixel >= 12.0;
-
-    const auto firstBar = (juce::int64) std::floor ((double) state.viewStart / samplesPerBar);
-    const auto lastBar = (juce::int64) std::ceil ((double) state.xToSample (row.getWidth()) / samplesPerBar);
 
     g.setFont (theme::font (11.0f));
-    for (auto bar = firstBar - (firstBar % barStep); bar <= lastBar; bar += (drawBeats ? 1 : barStep))
+    for (auto bar = std::max<juce::int64> (0, firstBar - (firstBar % barStep)); bar <= lastBar; ++bar)
     {
-        const auto x = (float) (row.getX() + state.sampleToX ((juce::int64) std::llround ((double) bar * samplesPerBar)));
+        const auto& m = meter.meterAt (bar);
+        const auto barStart = meter.barToTicks (bar);
+        const auto x = (float) (row.getX() + state.sampleToX (state.ticksToSample (barStart)));
         const bool labelled = bar % barStep == 0;
+        const auto beatPixels = (double) (state.ticksToSample (barStart + midi::MeterMap::ticksPerBeat (m)) - state.ticksToSample (barStart))
+                                / state.samplesPerPixel;
 
-        g.setColour (labelled ? theme::text : theme::textDim);
-        g.drawVerticalLine ((int) x, (float) row.getY() + (labelled ? 4.0f : 12.0f), (float) row.getBottom());
+        if (labelled || beatPixels >= 12.0)
+        {
+            g.setColour (labelled ? theme::text : theme::textDim);
+            g.drawVerticalLine ((int) x, (float) row.getY() + (labelled ? 4.0f : 12.0f), (float) row.getBottom());
+        }
         if (labelled)
-            g.drawText (juce::String (bar + 1), juce::Rectangle<float> (x + 3.0f, (float) row.getY(), 60.0f, (float) row.getHeight()),
+        {
+            // A new time signature is shown on the bar where it starts.
+            const bool meterChanges = bar > 0 && std::any_of (meter.getChanges().begin(), meter.getChanges().end(),
+                                                              [bar] (const midi::MeterMap::Change& c) { return c.bar == bar; });
+            g.drawText (juce::String (bar + 1) + (meterChanges ? "  " + juce::String (m.numerator) + "/" + juce::String (m.denominator) : juce::String()),
+                        juce::Rectangle<float> (x + 3.0f, (float) row.getY(), 90.0f, (float) row.getHeight()),
                         juce::Justification::centredLeft);
+        }
 
-        if (drawBeats)
+        if (beatPixels >= 12.0)
         {
             g.setColour (theme::textDim);
-            for (int beat = 1; beat < timeformat::beatsPerBar; ++beat)
+            for (int beat = 1; beat < m.numerator; ++beat)
             {
-                const auto bx = (float) (row.getX() + state.sampleToX ((juce::int64) std::llround ((double) bar * samplesPerBar + beat * samplesPerBeat)));
+                const auto bx = (float) (row.getX() + state.sampleToX (state.ticksToSample (barStart + beat * midi::MeterMap::ticksPerBeat (m))));
                 g.drawVerticalLine ((int) bx, (float) row.getBottom() - 5.0f, (float) row.getBottom());
             }
         }

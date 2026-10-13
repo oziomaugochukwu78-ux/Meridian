@@ -2,6 +2,7 @@
 
 #include "Session.h"
 
+#include <midi/MeterMap.h>
 #include <midi/NoteSequence.h>
 #include <midi/TempoMap.h>
 #include <synth/DrumSynth.h>
@@ -10,8 +11,18 @@
 namespace meridian::midimodel
 {
 
-/** The session's tempo as a TempoMap (one tempo for now). */
+/** The session's tempo: its starting tempo plus every TEMPO change. */
 midi::TempoMap tempoMap (const Session&);
+
+/** The session's time signatures (4/4 unless changed). */
+midi::MeterMap meterMap (const Session&);
+
+/** A tempo from `tick` on (tick 0 sets the session's starting tempo). Replaces a change at the same tick. Undoable. */
+void setTempoChange (Session&, juce::int64 tick, double bpm, juce::UndoManager*);
+/** A time signature from the start of `bar` (0-based). Replaces a change at the same bar. Undoable. */
+void setMeterChange (Session&, juce::int64 bar, int numerator, int denominator, juce::UndoManager*);
+/** Back to one tempo (the starting one) and 4/4. */
+void clearTempoAndMeterChanges (Session&, juce::UndoManager*);
 
 /** A clip's NOTE children as a (sorted, validated) sequence. */
 midi::NoteSequence readNotes (const juce::ValueTree& clip);

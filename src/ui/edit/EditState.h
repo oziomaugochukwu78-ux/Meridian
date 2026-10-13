@@ -2,6 +2,8 @@
 
 #include "ui/TimeFormat.h"
 
+#include <midi/MeterMap.h>
+
 #include <juce_data_structures/juce_data_structures.h>
 #include <juce_events/juce_events.h>
 
@@ -63,15 +65,25 @@ public:
     void setTool (EditTool t) { tool = t; sendChangeMessage(); }
     void setMode (EditMode m) { mode = m; sendChangeMessage(); }
 
-    /** Grid resolution: one beat at the session tempo. */
-    juce::int64 gridSize() const noexcept { return (juce::int64) std::llround (timeformat::samplesPerBeat (sampleRate, tempo)); }
+    /** The session's tempo and meter maps (the grid, ruler and bar counts follow them). */
+    midi::TempoMap tempoMap { timeformat::tempoBpm };
+    midi::MeterMap meterMap;
 
+    /** The timeline sample of a musical position (ticks), and back. */
+    juce::int64 ticksToSample (juce::int64 tick) const noexcept   { return tempoMap.ticksToSamples (tick, sampleRate); }
+    juce::int64 sampleToTicks (juce::int64 sample) const noexcept { return tempoMap.samplesToTicks (sample, sampleRate); }
+
+    /** In Grid mode: the nearest beat (beats follow the tempo and meter maps). */
     juce::int64 snap (juce::int64 sample) const noexcept
     {
         if (mode != EditMode::grid)
             return sample;
-        const auto grid = std::max<juce::int64> (1, gridSize());
-        return (juce::int64) std::llround ((double) sample / (double) grid) * grid;
+        const auto tick = sampleToTicks (sample);
+        const auto p = meterMap.positionOf (tick);
+        const auto beatTick = meterMap.barToTicks (p.bar) + p.beat * midi::MeterMap::ticksPerBeat (meterMap.meterAt (p.bar));
+        const auto before = ticksToSample (beatTick);
+        const auto after = ticksToSample (meterMap.beatAtOrAfter (beatTick + 1).tick);
+        return sample - before <= after - sample ? before : after;
     }
 
     // Selection --------------------------------------------------------------------------

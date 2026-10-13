@@ -46,6 +46,10 @@
     countInBars (0 = none; counts in before recording), and markers:
       MARKERS
         MARKER  number name start      (start in samples)
+      TEMPO_MAP                        (tempo changes after the start; SESSION.tempo is the first)
+        TEMPO  tick bpm
+      METER_MAP                        (time signatures; 4/4 unless changed)
+        METER  bar numerator denominator
 
     All times are in samples at the session sample rate. Child order of CLIPS is
     z-order: later clips cover earlier ones where they overlap.
@@ -72,6 +76,10 @@ MERIDIAN_ID (NOTE)
 MERIDIAN_ID (SYNTH)
 MERIDIAN_ID (MARKERS)
 MERIDIAN_ID (MARKER)
+MERIDIAN_ID (TEMPO_MAP)
+MERIDIAN_ID (TEMPO)
+MERIDIAN_ID (METER_MAP)
+MERIDIAN_ID (METER)
 
 // SESSION
 MERIDIAN_ID (name)
@@ -96,6 +104,11 @@ MERIDIAN_ID (clickEnabled)
 MERIDIAN_ID (clickLevelDb)
 MERIDIAN_ID (countInBars)
 MERIDIAN_ID (number)       // MARKER: 1, 2, 3... (unique in the session)
+MERIDIAN_ID (tick)         // TEMPO: where the change happens, in ticks (960 per quarter note)
+MERIDIAN_ID (bpm)
+MERIDIAN_ID (bar)          // METER: the 0-based bar the change starts
+MERIDIAN_ID (numerator)
+MERIDIAN_ID (denominator)
 
 // TRACK
 MERIDIAN_ID (id)

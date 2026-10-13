@@ -84,6 +84,7 @@ private:
     juce::OwnedArray<TrackHeader> headers;
     juce::OwnedArray<TrackLane> lanes;
     juce::ValueTree tracksNode;
+    juce::uint64 mapsSeenAt = ~juce::uint64 (0); // session change count when the tempo/meter maps were last read
     std::unique_ptr<juce::FileFilter> audioFileFilter;
     std::unique_ptr<PianoRollWindow> pianoRoll;
 };

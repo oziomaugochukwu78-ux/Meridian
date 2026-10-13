@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../midi/MeterMap.h"
+
 #include <cstdint>
 
 namespace meridian::dsp
@@ -44,8 +46,13 @@ public:
     int64_t beatStart (int64_t beat) const noexcept;
 
     /** Adds the clicks for timeline samples [position, position + numSamples)
-        to `out` (mono). Beat 0 is at sample 0. */
+        to `out` (mono). Beat 0 is at sample 0; the tempo and beats per bar
+        are the ones set in Params. */
     void render (float* out, int numSamples, int64_t position) noexcept;
+
+    /** The same, with the beats (and the accented first beats of bars) taken
+        from a tempo and meter map. Levels come from Params. */
+    void render (float* out, int numSamples, int64_t position, const midi::ClickGrid&) noexcept;
 
 private:
     void startClick (bool accent) noexcept;

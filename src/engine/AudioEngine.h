@@ -178,7 +178,7 @@ private:
     void renderBlock (const float* const* inputs, int numInputs, float* const* outputs, int numOutputs, int numSamples) noexcept;
     void processChunk (const float* const* inputs, int numInputs, float* const* outputs, int numOutputs,
                        int offset, int numSamples, Transport::State state, bool countingIn) noexcept;
-    void renderClick (int numSamples, juce::int64 gridPosition) noexcept;
+    void renderClick (int numSamples, juce::int64 gridPosition, bool useTempoMap) noexcept;
     void renderTrack (TrackRender&, const BlockContext&) noexcept;
     void renderSegments (TrackRender&, const BlockContext&) noexcept;
     void renderInstrument (TrackRender&, const BlockContext&) noexcept;

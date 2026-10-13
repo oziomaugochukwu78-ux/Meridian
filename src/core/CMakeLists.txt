@@ -43,6 +43,8 @@ add_library(meridian_core STATIC
     dsp/StereoDelay.cpp
     dsp/StereoDelay.h
 
+    midi/MeterMap.cpp
+    midi/MeterMap.h
     midi/MidiRecording.cpp
     midi/MidiRecording.h
     midi/NoteSequence.cpp

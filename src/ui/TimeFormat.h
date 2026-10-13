@@ -2,6 +2,8 @@
 
 #include <juce_core/juce_core.h>
 
+#include <midi/MeterMap.h>
+
 namespace meridian::timeformat
 {
 
@@ -39,6 +41,16 @@ inline juce::String barsBeats (juce::int64 samples, double sampleRate, double bp
     const auto beat = wholeBeats % beatsPerBar + 1;
     const auto ticks = (int) std::floor ((beats - (double) wholeBeats) * ticksPerBeat);
     return juce::String (bar) + "| " + juce::String (beat) + "| " + juce::String (ticks).paddedLeft ('0', 3);
+}
+
+/** "bar| beat| tick" under a tempo map and a meter map (beats are the meter's own
+    unit: eighths in 6/8). */
+inline juce::String barsBeats (juce::int64 samples, double sampleRate, const midi::TempoMap& tempo, const midi::MeterMap& meter)
+{
+    if (sampleRate <= 0.0)
+        return "1| 1| 000";
+    const auto p = meter.positionOf (tempo.samplesToTicks (std::max<juce::int64> (0, samples), sampleRate));
+    return juce::String (p.bar + 1) + "| " + juce::String (p.beat + 1) + "| " + juce::String (p.tick).paddedLeft ('0', 3);
 }
 
 } // namespace meridian::timeformat

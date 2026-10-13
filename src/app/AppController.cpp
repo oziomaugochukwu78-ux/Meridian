@@ -2,6 +2,7 @@
 
 #include "media/AudioImporter.h"
 #include "media/TimeStretchEngine.h"
+#include "model/MidiModel.h"
 #include "model/SessionBackups.h"
 #include "ui/TimeFormat.h"
 
@@ -257,8 +258,24 @@ void AppController::applyTransportSettings()
                                     (juce::int64) s.getProperty (ids::punchOut, 0));
     engine.clickEnabled.store (s.getProperty (ids::clickEnabled, false));
     engine.clickLevelDb.store (s.getProperty (ids::clickLevelDb, -6.0));
-    engine.clickBpm.store (session->getTempo());
-    engine.clickBeatsPerBar.store (beatsPerBar);
+    // The steady grid used for a count-in: the tempo and meter at the playhead.
+    // (While rolling, the click follows the full tempo and meter maps.)
+    const auto [bpm, beats] = countInGrid();
+    engine.clickBpm.store (bpm);
+    engine.clickBeatsPerBar.store (beats);
+}
+
+std::pair<double, int> AppController::countInGrid() const
+{
+    if (session == nullptr)
+        return { 120.0, 4 };
+    const auto tempo = midimodel::tempoMap (*session);
+    const auto meter = midimodel::meterMap (*session);
+    const double rate = engine.getSampleRate() > 0.0 ? engine.getSampleRate() : session->getSampleRate();
+    const auto tick = tempo.samplesToTicks (engine.getTransport().getPosition(), rate);
+    const auto& m = meter.meterAt (meter.positionOf (tick).bar);
+    // Beats of the meter (eighths in 6/8): the quarter-note tempo scaled to them.
+    return { juce::jlimit (20.0, 400.0, tempo.bpmAt (tick) * m.denominator / 4.0), m.numerator };
 }
 
 void AppController::setLoop (bool enabled, juce::int64 start, juce::int64 end)
@@ -305,8 +322,8 @@ juce::int64 AppController::getCountInSamples() const
     const int bars = juce::jlimit (0, 8, (int) session->getState().getProperty (ids::countInBars, 0));
     // The same grid as the click (dsp::Metronome::beatStart), so the count-in ends on a beat.
     const double rate = engine.getSampleRate() > 0.0 ? engine.getSampleRate() : session->getSampleRate();
-    const double samplesPerBeat = 60.0 * rate / juce::jlimit (20.0, 400.0, session->getTempo());
-    return (juce::int64) std::llround ((double) (bars * beatsPerBar) * samplesPerBeat);
+    const auto [bpm, beats] = countInGrid();
+    return (juce::int64) std::llround ((double) (bars * beats) * 60.0 * rate / bpm);
 }
 
 juce::ValueTree AppController::addMarker (const juce::String& name, juce::int64 position)
@@ -481,6 +498,7 @@ void AppController::togglePlay()
 
 juce::Result AppController::transportRecord()
 {
+    applyTransportSettings(); // the count-in grid at the playhead, where recording starts
     int hardwareLatency = 0, outputLatency = 0;
     if (auto* device = deviceManager.getCurrentAudioDevice())
     {

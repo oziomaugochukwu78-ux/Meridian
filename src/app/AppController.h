@@ -85,9 +85,11 @@ public:
     void setCountInBars (int bars);
     /** Samples of count-in before recording at the current tempo (0 if none). */
     juce::int64 getCountInSamples() const;
+    /** The count-in's steady click: beats per minute (in the meter's beat
+        unit) and beats per bar, from the tempo and meter at the playhead. */
+    std::pair<double, int> countInGrid() const;
     juce::ValueTree addMarker (const juce::String& name, juce::int64 position);
     bool locateToMarker (int number);
-    static constexpr int beatsPerBar = 4; ///< one meter (4/4) until the meter map exists
 
     // Transport ----------------------------------------------------------------------------
     // (Distinct names from the RemoteActions overrides below, which wrap these.)

@@ -119,21 +119,28 @@ void TrackLane::paint (juce::Graphics& g)
 {
     g.fillAll (theme::well);
 
-    // Bar lines, with beat lines when zoomed in far enough.
-    const double samplesPerBeat = timeformat::samplesPerBeat (editState.sampleRate, editState.tempo);
-    const double samplesPerBar = samplesPerBeat * timeformat::beatsPerBar;
-    const bool drawBeats = samplesPerBeat / editState.samplesPerPixel >= 12.0;
-    const double step = drawBeats ? samplesPerBeat : samplesPerBar;
-    if (step / editState.samplesPerPixel >= 6.0)
+    // Bar lines, with beat lines when zoomed in far enough (tempo and meter maps).
     {
-        const auto first = (juce::int64) std::floor ((double) editState.viewStart / step);
-        const auto last = (juce::int64) std::ceil ((double) editState.xToSample (getWidth()) / step);
-        for (auto i = first; i <= last; ++i)
+        const auto& meter = editState.meterMap;
+        const auto firstBar = std::max<juce::int64> (0, meter.positionOf (editState.sampleToTicks (editState.viewStart)).bar);
+        const auto lastBar = meter.positionOf (editState.sampleToTicks (editState.xToSample (getWidth()))).bar + 1;
+        for (auto bar = firstBar; bar <= lastBar; ++bar)
         {
-            const auto sample = (juce::int64) std::llround ((double) i * step);
-            const bool isBar = ! drawBeats || i % timeformat::beatsPerBar == 0;
-            g.setColour (isBar ? theme::gridBar : theme::gridLine);
-            g.drawVerticalLine ((int) editState.sampleToX (sample), 0.0f, (float) getHeight());
+            const auto& m = meter.meterAt (bar);
+            const auto barStart = meter.barToTicks (bar);
+            const auto barX = editState.sampleToX (editState.ticksToSample (barStart));
+            const auto nextBarX = editState.sampleToX (editState.ticksToSample (meter.barToTicks (bar + 1)));
+            if (nextBarX - barX < 6.0)
+                continue; // too dense to draw
+            g.setColour (theme::gridBar);
+            g.drawVerticalLine ((int) barX, 0.0f, (float) getHeight());
+            if ((nextBarX - barX) / m.numerator >= 12.0)
+            {
+                g.setColour (theme::gridLine);
+                for (int beat = 1; beat < m.numerator; ++beat)
+                    g.drawVerticalLine ((int) editState.sampleToX (editState.ticksToSample (barStart + beat * midi::MeterMap::ticksPerBeat (m))),
+                                        0.0f, (float) getHeight());
+            }
         }
     }
 

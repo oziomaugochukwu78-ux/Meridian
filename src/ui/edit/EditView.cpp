@@ -1,4 +1,5 @@
 #include "EditView.h"
+#include "model/MidiModel.h"
 
 #include "ui/Theme.h"
 #include "ui/dialogs/TimeStretchComponent.h"
@@ -65,6 +66,9 @@ void EditView::bindSession()
     ruler.setSessionState (session != nullptr ? session->getState() : juce::ValueTree());
     state.sampleRate = session != nullptr ? session->getSampleRate() : 48000.0;
     state.tempo = session != nullptr ? session->getTempo() : timeformat::tempoBpm;
+    state.tempoMap = session != nullptr ? midimodel::tempoMap (*session) : midi::TempoMap (timeformat::tempoBpm);
+    state.meterMap = session != nullptr ? midimodel::meterMap (*session) : midi::MeterMap();
+    mapsSeenAt = session != nullptr ? session->getChangeCount() : ~juce::uint64 (0);
     state.clearSelection();
     state.setView (0, state.samplesPerPixel);
     rebuildTracks();
@@ -186,12 +190,30 @@ void EditView::visibilityChanged()
 
 void EditView::timerCallback()
 {
-    // Follow tempo changes (from the AI tools or undo): grid, ruler and clips are drawn in beats.
-    if (auto* session = app.getSession(); session != nullptr && ! juce::exactlyEqual (session->getTempo(), state.tempo))
+    // Follow tempo and meter changes (from the AI tools, menus or undo): grid, ruler and
+    // MIDI clips are drawn in beats. Rebuilt only when the session changed at all.
+    if (auto* session = app.getSession(); session != nullptr && session->getChangeCount() != mapsSeenAt)
     {
-        state.tempo = session->getTempo();
-        state.sendChangeMessage();
-        repaint();
+        mapsSeenAt = session->getChangeCount();
+        auto tempo = midimodel::tempoMap (*session);
+        auto meter = midimodel::meterMap (*session);
+        const auto& t1 = tempo.getChanges();
+        const auto& t2 = state.tempoMap.getChanges();
+        const auto& m1 = meter.getChanges();
+        const auto& m2 = state.meterMap.getChanges();
+        bool same = t1.size() == t2.size() && m1.size() == m2.size();
+        for (size_t i = 0; same && i < t1.size(); ++i)
+            same = t1[i].tick == t2[i].tick && juce::exactlyEqual (t1[i].bpm, t2[i].bpm);
+        for (size_t i = 0; same && i < m1.size(); ++i)
+            same = m1[i].bar == m2[i].bar && m1[i].numerator == m2[i].numerator && m1[i].denominator == m2[i].denominator;
+        if (! same)
+        {
+            state.tempoMap = std::move (tempo);
+            state.meterMap = std::move (meter);
+            state.tempo = session->getTempo();
+            state.sendChangeMessage();
+            repaint();
+        }
     }
 
     const auto& transport = app.getEngine().getTransport();

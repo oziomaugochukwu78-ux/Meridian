@@ -5,7 +5,83 @@ namespace meridian::midimodel
 
 midi::TempoMap tempoMap (const Session& session)
 {
-    return midi::TempoMap (session.getTempo());
+    midi::TempoMap map (session.getTempo());
+    for (const auto& change : session.getState().getChildWithName (ids::TEMPO_MAP))
+        if (change.hasType (ids::TEMPO) && (juce::int64) change[ids::tick] > 0)
+            map.addChange ((juce::int64) change[ids::tick], (double) change[ids::bpm]);
+    return map;
+}
+
+namespace
+{
+juce::ValueTree getOrCreateChild (juce::ValueTree parent, const juce::Identifier& type, juce::UndoManager* um)
+{
+    auto child = parent.getChildWithName (type);
+    if (! child.isValid())
+    {
+        child = juce::ValueTree (type);
+        parent.appendChild (child, um);
+    }
+    return child;
+}
+} // namespace
+
+void setTempoChange (Session& session, juce::int64 tick, double bpm, juce::UndoManager* um)
+{
+    bpm = std::isfinite (bpm) ? juce::jlimit (midi::TempoMap::minBpm, midi::TempoMap::maxBpm, bpm) : 120.0;
+    if (tick <= 0)
+    {
+        session.getState().setProperty (ids::tempo, bpm, um);
+        return;
+    }
+    auto map = getOrCreateChild (session.getState(), ids::TEMPO_MAP, um);
+    if (auto existing = map.getChildWithProperty (ids::tick, tick); existing.isValid())
+    {
+        existing.setProperty (ids::bpm, bpm, um);
+        return;
+    }
+    juce::ValueTree change (ids::TEMPO);
+    change.setProperty (ids::tick, tick, nullptr);
+    change.setProperty (ids::bpm, bpm, nullptr);
+    map.appendChild (change, um);
+}
+
+void setMeterChange (Session& session, juce::int64 bar, int numerator, int denominator, juce::UndoManager* um)
+{
+    // Store what MeterMap will use (it makes invalid meters valid).
+    midi::MeterMap check;
+    check.addChange (std::max<juce::int64> (0, bar), numerator, denominator);
+    const auto valid = check.meterAt (std::max<juce::int64> (0, bar));
+
+    auto map = getOrCreateChild (session.getState(), ids::METER_MAP, um);
+    auto change = map.getChildWithProperty (ids::bar, valid.bar);
+    if (! change.isValid())
+    {
+        change = juce::ValueTree (ids::METER);
+        change.setProperty (ids::bar, valid.bar, nullptr);
+        change.setProperty (ids::numerator, valid.numerator, nullptr);
+        change.setProperty (ids::denominator, valid.denominator, nullptr);
+        map.appendChild (change, um);
+        return;
+    }
+    change.setProperty (ids::numerator, valid.numerator, um);
+    change.setProperty (ids::denominator, valid.denominator, um);
+}
+
+void clearTempoAndMeterChanges (Session& session, juce::UndoManager* um)
+{
+    for (const auto* type : { &ids::TEMPO_MAP, &ids::METER_MAP })
+        if (auto node = session.getState().getChildWithName (*type); node.isValid())
+            session.getState().removeChild (node, um);
+}
+
+midi::MeterMap meterMap (const Session& session)
+{
+    midi::MeterMap map;
+    for (const auto& change : session.getState().getChildWithName (ids::METER_MAP))
+        if (change.hasType (ids::METER))
+            map.addChange ((juce::int64) change[ids::bar], (int) change[ids::numerator], (int) change[ids::denominator]);
+    return map;
 }
 
 midi::NoteSequence readNotes (const juce::ValueTree& clip)

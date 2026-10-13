@@ -579,6 +579,8 @@ std::unique_ptr<RenderGraph> EngineBridge::buildGraph (double sampleRate, int ma
 
     if (session != nullptr)
     {
+        graph->clickGrid = std::make_shared<const midi::ClickGrid> (midimodel::tempoMap (*session), midimodel::meterMap (*session),
+                                                                    sampleRate > 0.0 ? sampleRate : session->getSampleRate());
         // Render order: audio tracks first, then aux tracks sorted so that every
         // aux comes after all auxes feeding it (Kahn's algorithm). The model
         // refuses cycles; if a hand-edited file contains one anyway, the auxes

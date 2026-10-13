@@ -300,8 +300,19 @@ const std::vector<ToolInfo>& toolTable()
                     { "points", "breakpoints", "Breakpoints, e.g. [{\"seconds\": 0, \"value\": -1}, {\"seconds\": 4, \"value\": 1}]", true },
                     { "replace", "boolean", "Replace existing points (default true)" } }) },
         { "set_tempo", "Set the tempo",
-          "Session tempo in BPM (beats per minute). MIDI notes are placed in beats, so they follow the tempo.",
-          schema ({ { "bpm", "number", "Tempo, 20-999 BPM", true } }) },
+          "Tempo in BPM (quarter notes per minute). Without at_bar it sets the starting tempo; with at_bar it adds a "
+          "tempo change there (the tempo holds until the next change). MIDI notes and the click follow the tempo map. "
+          "clear_changes=true removes every change (and time signature) first.",
+          schema ({ { "bpm", "number", "Tempo, 20-999 BPM", true },
+                    { "at_bar", "integer", "Bar where the change starts, 1-based (default: the start)" },
+                    { "at_beat", "number", "Beat within that bar, 1-based (default 1)" },
+                    { "clear_changes", "boolean", "Remove all tempo and time-signature changes first" } }) },
+        { "set_meter", "Set the time signature",
+          "Time signature from a bar on, e.g. 3/4 or 6/8 (beats are the denominator's notes: eighths in 6/8). "
+          "The click accents the first beat of each bar, and bars, the grid and count-ins follow it.",
+          schema ({ { "numerator", "integer", "Beats per bar, 1-32", true },
+                    { "denominator", "integer", "Beat note: 1, 2, 4, 8, 16 or 32", true },
+                    { "at_bar", "integer", "Bar where it starts, 1-based (default 1)" } }) },
         { "add_midi_clip", "Create a MIDI clip",
           "Create an empty MIDI clip on an instrument track, positioned in beats (quarter notes; at 4/4 a bar is 4 "
           "beats). Returns the clip number for add_notes.",
@@ -522,6 +533,7 @@ RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var
     if (name == "set_volume_automation") return setVolumeAutomation (args);
     if (name == "set_automation")     return setAutomation (args);
     if (name == "set_tempo")          return setTempo (args);
+    if (name == "set_meter")          return setMeter (args);
     if (name == "add_midi_clip")      return addMidiClip (args);
     if (name == "add_notes")          return addNotes (args);
     if (name == "list_notes")         return listNotes (args);
@@ -711,6 +723,7 @@ RemoteTools::Result RemoteTools::getStatus()
     }
 
     set (status, "loop_and_click", describeTransportSettings());
+    set (status, "tempo_map", describeTempoMap());
     const auto& s = session->getState();
     set (status, "session", makeObject ({ { "name", session->getName() },
                                           { "sample_rate", session->getSampleRate() },
@@ -1454,8 +1467,52 @@ RemoteTools::Result RemoteTools::setTempo (const juce::var& args)
     const double bpm = args["bpm"];
     if (bpm < midi::TempoMap::minBpm || bpm > midi::TempoMap::maxBpm)
         return { false, {}, "Tempo must be between 20 and 999 BPM." };
-    app.getSession()->getState().setProperty (ids::tempo, bpm, beginEdit ("Tempo"));
-    return { true, makeObject ({ { "tempo_bpm", app.getSession()->getTempo() } }), {} };
+    auto& session = *app.getSession();
+    auto* um = beginEdit ("Tempo");
+    if ((bool) args["clear_changes"])
+        midimodel::clearTempoAndMeterChanges (session, um);
+
+    juce::int64 tick = 0;
+    if (args.hasProperty ("at_bar"))
+    {
+        const int bar = args["at_bar"];
+        const double beat = args.hasProperty ("at_beat") ? (double) args["at_beat"] : 1.0;
+        const auto meter = midimodel::meterMap (session);
+        const auto& m = meter.meterAt (bar - 1);
+        if (bar < 1 || beat < 1.0 || beat >= m.numerator + 1.0)
+            return { false, {}, "at_bar must be 1 or more and at_beat within the bar (1-" + juce::String (m.numerator) + ")." };
+        tick = meter.barToTicks (bar - 1) + (juce::int64) std::llround ((beat - 1.0) * (double) midi::MeterMap::ticksPerBeat (m));
+    }
+    midimodel::setTempoChange (session, tick, bpm, um);
+    return { true, describeTempoMap(), {} };
+}
+
+RemoteTools::Result RemoteTools::setMeter (const juce::var& args)
+{
+    const int numerator = args["numerator"], denominator = args["denominator"];
+    const int bar = args.hasProperty ("at_bar") ? (int) args["at_bar"] : 1;
+    const bool powerOfTwo = denominator >= 1 && denominator <= 32 && (denominator & (denominator - 1)) == 0;
+    if (numerator < 1 || numerator > 32 || ! powerOfTwo || bar < 1)
+        return { false, {}, "numerator 1-32, denominator 1, 2, 4, 8, 16 or 32, at_bar 1 or more." };
+    midimodel::setMeterChange (*app.getSession(), bar - 1, numerator, denominator, beginEdit ("Time Signature"));
+    return { true, describeTempoMap(), {} };
+}
+
+juce::var RemoteTools::describeTempoMap() const
+{
+    const auto& session = *app.getSession();
+    const auto tempo = midimodel::tempoMap (session);
+    const auto meter = midimodel::meterMap (session);
+    juce::Array<juce::var> tempos, meters;
+    for (const auto& c : tempo.getChanges())
+    {
+        const auto p = meter.positionOf (c.tick);
+        tempos.add (makeObject ({ { "bar", (int) p.bar + 1 }, { "beat", p.beat + 1 }, { "bpm", c.bpm },
+                                  { "seconds", std::round (tempo.ticksToSeconds (c.tick) * 1000.0) / 1000.0 } }));
+    }
+    for (const auto& c : meter.getChanges())
+        meters.add (makeObject ({ { "bar", (int) c.bar + 1 }, { "time_signature", juce::String (c.numerator) + "/" + juce::String (c.denominator) } }));
+    return makeObject ({ { "tempo_changes", tempos }, { "time_signatures", meters } });
 }
 
 RemoteTools::Result RemoteTools::addMidiClip (const juce::var& args)

@@ -82,6 +82,8 @@ private:
     Result setVolumeAutomation (const juce::var&);
     Result setAutomation (const juce::var&);
     Result setTempo (const juce::var&);
+    Result setMeter (const juce::var&);
+    juce::var describeTempoMap() const;
     Result addMidiClip (const juce::var&);
     Result addNotes (const juce::var&);
     Result listNotes (const juce::var&);

@@ -287,7 +287,7 @@ void AudioEngine::meterLoudness (int numSamples) noexcept
     }
 }
 
-void AudioEngine::renderClick (int numSamples, juce::int64 gridPosition) noexcept
+void AudioEngine::renderClick (int numSamples, juce::int64 gridPosition, bool useTempoMap) noexcept
 {
     dsp::Metronome::Params p;
     p.bpm = clickBpm.load (std::memory_order_relaxed);
@@ -301,7 +301,10 @@ void AudioEngine::renderClick (int numSamples, juce::int64 gridPosition) noexcep
     }
 
     juce::FloatVectorOperations::clear (clickScratch.data(), numSamples);
-    metronome.render (clickScratch.data(), numSamples, gridPosition);
+    if (useTempoMap && activeGraph != nullptr && activeGraph->clickGrid != nullptr)
+        metronome.render (clickScratch.data(), numSamples, gridPosition, *activeGraph->clickGrid); // tempo and meter changes
+    else
+        metronome.render (clickScratch.data(), numSamples, gridPosition);
     for (auto& channel : masterOut)
         for (int i = 0; i < numSamples; ++i)
             channel[(size_t) i] += clickScratch[(size_t) i];
@@ -363,7 +366,8 @@ void AudioEngine::processChunk (const float* const* inputs, int numInputs, float
     // The click: after the master fader, so it is never in a bounce's mix level
     // and the fader does not change it. Count-in clicks run on their own grid.
     if (countingIn || (rolling && clickEnabled.load (std::memory_order_relaxed)))
-        renderClick (numSamples, countingIn ? transport.getCountInLength() - transport.getCountInRemaining() : ctx.position);
+        renderClick (numSamples, countingIn ? transport.getCountInLength() - transport.getCountInRemaining() : ctx.position,
+                     ! countingIn); // a count-in clicks on its own steady grid (the tempo and meter where it starts)
 
     storeMax (masterPeakLeft, (float) dsp::peakMagnitude (masterOut[0].data(), numSamples));
     storeMax (masterPeakRight, (float) dsp::peakMagnitude (masterOut[1].data(), numSamples));

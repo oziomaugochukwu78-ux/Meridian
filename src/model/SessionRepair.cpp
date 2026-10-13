@@ -111,6 +111,40 @@ private:
             && (juce::int64) s.getProperty (ids::punchOut, 0) <= (juce::int64) s.getProperty (ids::punchIn, 0))
             set (s, ids::punchEnabled, false, "session", "punch recording with an empty range");
 
+        // Tempo and meter changes: positions at or after the start, values in range.
+        if (auto tempos = s.getChildWithName (ids::TEMPO_MAP); tempos.isValid())
+        {
+            removeChildrenNotOfType (tempos, ids::TEMPO, "tempo map");
+            for (int i = tempos.getNumChildren(); --i >= 0;)
+            {
+                auto t = tempos.getChild (i);
+                const double tick = t[ids::tick], bpm = t[ids::bpm];
+                if (! (std::isfinite (tick) && tick > 0.0 && tick < 1.0e15 && std::isfinite (bpm)))
+                {
+                    note ("tempo map", "removed a tempo change with an invalid position or tempo");
+                    tempos.removeChild (i, nullptr);
+                    continue;
+                }
+                clampNumber (t, ids::bpm, 20.0, 999.0, 120.0, "tempo map");
+            }
+        }
+        if (auto meters = s.getChildWithName (ids::METER_MAP); meters.isValid())
+        {
+            removeChildrenNotOfType (meters, ids::METER, "meter map");
+            for (int i = meters.getNumChildren(); --i >= 0;)
+            {
+                auto m = meters.getChild (i);
+                const double bar = m[ids::bar];
+                const int numerator = m[ids::numerator], denominator = m[ids::denominator];
+                const bool powerOfTwo = denominator >= 1 && denominator <= 32 && (denominator & (denominator - 1)) == 0;
+                if (! (std::isfinite (bar) && bar >= 0.0 && bar < 1.0e12) || numerator < 1 || numerator > 32 || ! powerOfTwo)
+                {
+                    note ("meter map", "removed an invalid time signature");
+                    meters.removeChild (i, nullptr);
+                }
+            }
+        }
+
         auto markers = s.getChildWithName (ids::MARKERS);
         if (! markers.isValid())
             return;
@@ -519,6 +553,16 @@ juce::String findSessionProblem (const Session& session)
     if ((bool) s.getProperty (ids::loopEnabled, false)
         && (juce::int64) s.getProperty (ids::loopEnd, 0) <= (juce::int64) s.getProperty (ids::loopStart, 0))
         return "loop playback with an empty range";
+    for (const auto& t : s.getChildWithName (ids::TEMPO_MAP))
+        if (! t.hasType (ids::TEMPO) || ! finiteIn (t[ids::tick], 1.0, 1.0e15) || ! finiteIn (t[ids::bpm], 20.0, 999.0))
+            return "invalid tempo change";
+    for (const auto& m : s.getChildWithName (ids::METER_MAP))
+    {
+        const int denominator = m[ids::denominator];
+        if (! m.hasType (ids::METER) || ! finiteIn (m[ids::bar], 0.0, 1.0e12) || ! finiteIn (m[ids::numerator], 1.0, 32.0)
+            || denominator < 1 || denominator > 32 || (denominator & (denominator - 1)) != 0)
+            return "invalid time signature";
+    }
     {
         std::set<int> markerNumbers;
         for (const auto& m : s.getChildWithName (ids::MARKERS))

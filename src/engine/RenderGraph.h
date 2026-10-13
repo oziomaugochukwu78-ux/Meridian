@@ -5,6 +5,7 @@
 
 #include <dsp/AutomationCurve.h>
 #include <dsp/DelayLine.h>
+#include <midi/MeterMap.h>
 #include <synth/DrumSynth.h>
 #include <synth/PolySynth.h>
 
@@ -186,6 +187,11 @@ struct RenderGraph
     /** Plug-in latency of the slowest path to the master bus, after
         compensation: everything reaches the master this much late. */
     int compensatedLatency = 0;
+
+    /** Where the click's beats fall under the session's tempo and meter maps
+        (null: the engine's plain click settings). Freed with the graph, on the
+        message thread. */
+    std::shared_ptr<const midi::ClickGrid> clickGrid;
 };
 
 } // namespace meridian
