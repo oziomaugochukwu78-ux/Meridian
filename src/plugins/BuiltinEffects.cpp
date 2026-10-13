@@ -81,8 +81,95 @@ private:
 };
 
 //==============================================================================
+/** A horizontal gain-reduction meter: the bar grows from the right as the effect
+    turns the signal down (0 to 30 dB across), with the figure beside it. It rises
+    at once and falls back at 20 dB/s, so short reductions stay readable. Its
+    accessible description is the figure shown. */
+class GainReductionBar final : public juce::Component
+{
+public:
+    static constexpr float scaleDb = 30.0f, fallDbPerSecond = 20.0f;
+
+    GainReductionBar()
+    {
+        setComponentID ("gainReduction");
+        setTitle ("Gain reduction");
+        setDescription (describe (0.0f));
+    }
+
+    /** Shows `reductionDb`, or the previous value fallen for `seconds` if that is more. */
+    void show (float reductionDb, float seconds)
+    {
+        const float next = std::max (reductionDb, shown - fallDbPerSecond * seconds);
+        if (std::abs (next - shown) < 0.01f)
+            return;
+        shown = std::max (0.0f, next);
+        setDescription (describe (shown));
+        repaint();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto area = getLocalBounds().toFloat();
+        auto labels = area;
+        const auto label = labels.removeFromLeft (34.0f), figure = labels.removeFromRight (64.0f);
+        const auto track = labels.reduced (4.0f, 3.0f);
+        const auto background = getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId);
+
+        g.setColour (background.darker (0.6f));
+        g.fillRoundedRectangle (track, 3.0f);
+        const float fraction = std::min (shown / scaleDb, 1.0f);
+        g.setColour (juce::Colour (0xffe8a33d));
+        g.fillRoundedRectangle (track.withLeft (track.getRight() - track.getWidth() * fraction), 3.0f);
+
+        g.setColour (background.contrasting (0.85f));
+        g.setFont (juce::FontOptions (13.0f));
+        g.drawText ("GR", label, juce::Justification::centredLeft);
+        g.drawText (describe (shown), figure, juce::Justification::centredRight);
+    }
+
+private:
+    static juce::String describe (float db) { return (db >= 0.05f ? "-" : "") + juce::String (db, 1) + " dB"; }
+
+    float shown = 0.0f;
+};
+
+/** The generic controls with a gain-reduction meter above them. */
+class MeteredEditor final : public juce::AudioProcessorEditor, private juce::Timer
+{
+public:
+    MeteredEditor (juce::AudioProcessor& effect, const GainReductionMeter& source)
+        : juce::AudioProcessorEditor (effect), meter (source), controls (effect)
+    {
+        addAndMakeVisible (bar);
+        addAndMakeVisible (controls);
+        bar.show (meter.getGainReductionDb(), 0.0f);
+        setSize (std::max (controls.getWidth(), 320), controls.getHeight() + barHeight);
+        startTimerHz (30);
+    }
+
+    void paint (juce::Graphics& g) override { g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId)); }
+
+    void resized() override
+    {
+        auto area = getLocalBounds();
+        bar.setBounds (area.removeFromTop (barHeight).reduced (10, 6));
+        controls.setBounds (area);
+    }
+
+private:
+    static constexpr int barHeight = 32;
+
+    void timerCallback() override { bar.show (meter.getGainReductionDb(), (float) getTimerInterval() / 1000.0f); }
+
+    const GainReductionMeter& meter;
+    juce::GenericAudioProcessorEditor controls;
+    GainReductionBar bar;
+};
+
+//==============================================================================
 /** Shared plumbing: mono or stereo (same in and out), parameter state as XML,
-    the generic editor, one program. */
+    the generic editor (with a gain-reduction meter for dynamics), one program. */
 class BuiltinEffect : public juce::AudioPluginInstance
 {
 public:
@@ -130,7 +217,12 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool hasEditor() const override { return true; }
-    juce::AudioProcessorEditor* createEditor() override { return new juce::GenericAudioProcessorEditor (*this); }
+    juce::AudioProcessorEditor* createEditor() override
+    {
+        if (const auto* meter = dynamic_cast<const GainReductionMeter*> (this))
+            return new MeteredEditor (*this, *meter);
+        return new juce::GenericAudioProcessorEditor (*this);
+    }
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
     void setCurrentProgram (int) override {}
@@ -334,7 +426,7 @@ private:
 };
 
 //==============================================================================
-class MeridianCompressor final : public BuiltinEffect
+class MeridianCompressor final : public BuiltinEffect, public GainReductionMeter
 {
 public:
     MeridianCompressor() : BuiltinEffect ("Meridian Compressor", "Dynamics", compressorId)
@@ -360,10 +452,15 @@ public:
         applyParameters (false);
         compressor.process (buffer.getWritePointer (0), buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr,
                             buffer.getNumSamples());
+        reportGainReduction (compressor.getGainReductionDb());
     }
 
     double getTailLengthSeconds() const override { return 0.0; }
-    void reset() override { compressor.reset(); }
+    void reset() override
+    {
+        compressor.reset();
+        reportGainReduction (0.0);
+    }
 
 private:
     void applyParameters (bool force)
@@ -399,7 +496,7 @@ private:
 };
 
 //==============================================================================
-class MeridianLimiter final : public BuiltinEffect
+class MeridianLimiter final : public BuiltinEffect, public GainReductionMeter
 {
 public:
     MeridianLimiter() : BuiltinEffect ("Meridian Limiter", "Dynamics", limiterId)
@@ -423,10 +520,15 @@ public:
         applyParameters (false);
         limiter.process (buffer.getWritePointer (0), buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr,
                          buffer.getNumSamples());
+        reportGainReduction (limiter.getGainReductionDb());
     }
 
     double getTailLengthSeconds() const override { return 0.0; }
-    void reset() override { limiter.reset(); }
+    void reset() override
+    {
+        limiter.reset();
+        reportGainReduction (0.0);
+    }
 
 private:
     void applyParameters (bool force)
@@ -517,7 +619,7 @@ private:
 };
 
 //==============================================================================
-class MeridianGate final : public BuiltinEffect
+class MeridianGate final : public BuiltinEffect, public GainReductionMeter
 {
 public:
     MeridianGate() : BuiltinEffect ("Meridian Gate", "Dynamics", gateId)
@@ -542,10 +644,15 @@ public:
         applyParameters (false);
         gate.process (buffer.getWritePointer (0), buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr,
                       buffer.getNumSamples());
+        reportGainReduction (gate.getGain() < 1.0 ? -20.0 * std::log10 (gate.getGain()) : 0.0);
     }
 
     double getTailLengthSeconds() const override { return 0.0; }
-    void reset() override { gate.reset(); }
+    void reset() override
+    {
+        gate.reset();
+        reportGainReduction (0.0);
+    }
 
 private:
     void applyParameters (bool force)
@@ -578,7 +685,7 @@ private:
 };
 
 //==============================================================================
-class MeridianDeEsser final : public BuiltinEffect
+class MeridianDeEsser final : public BuiltinEffect, public GainReductionMeter
 {
 public:
     MeridianDeEsser() : BuiltinEffect ("Meridian De-Esser", "Dynamics", deEsserId)
@@ -600,10 +707,15 @@ public:
         applyParameters (false);
         deEsser.process (buffer.getWritePointer (0), buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr,
                          buffer.getNumSamples());
+        reportGainReduction (deEsser.getGainReductionDb());
     }
 
     double getTailLengthSeconds() const override { return 0.0; }
-    void reset() override { deEsser.reset(); }
+    void reset() override
+    {
+        deEsser.reset();
+        reportGainReduction (0.0);
+    }
 
 private:
     void applyParameters (bool force)

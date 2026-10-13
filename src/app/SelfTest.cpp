@@ -1397,6 +1397,85 @@ void SelfTest::testBuiltinEffects()
         }
         else
             expect ("the de-esser is in the plug-in list", false, {});
+
+        // The AI tools report a dynamics insert's gain reduction (the live value: only its presence is checked here).
+        const auto controls = call ("list_plugin_parameters", R"({"track":"Esses","slot":"A"})");
+        expect ("list_plugin_parameters gives a dynamics effect's gain_reduction_db",
+                controls.ok && controls.data.hasProperty ("gain_reduction_db") && (double) controls.data["gain_reduction_db"] >= 0.0,
+                controls.ok ? juce::JSON::toString (controls.data, true).getLastCharacters (80) : controls.error);
+    }
+
+    // Gain-reduction meters: one second of the 1 kHz tone (peak 0.5) through a fresh instance of each
+    // dynamics effect; its meter must read the steady reduction its specification predicts, and its
+    // window must show that figure. The EQ never reduces gain and has no meter.
+    if (const auto* deEsserDesc = find ("Meridian De-Esser"); deEsserDesc != nullptr && gateDesc != nullptr)
+    {
+        struct Reading
+        {
+            bool created = false;
+            float reduction = -1.0f; ///< -1: the effect has no meter
+            juce::String shown;      ///< the meter's figure in the effect's window ("" if none)
+        };
+        BuiltinEffectFormat format;
+        auto readMeter = [&format, this] (const juce::PluginDescription& description,
+                                         std::initializer_list<std::pair<const char*, float>> settings)
+        {
+            Reading reading;
+            juce::String createError;
+            auto effect = format.createInstanceFromDescription (description, sampleRate, 512, createError);
+            if (effect == nullptr)
+                return reading;
+            reading.created = true;
+            for (const auto& setting : settings)
+                for (auto* p : effect->getParameters())
+                    if (auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (p);
+                        hosted != nullptr && hosted->getParameterID() == setting.first)
+                        p->setValue (p->getValueForText (juce::String (setting.second)));
+            effect->prepareToPlay (sampleRate, 512);
+            juce::AudioBuffer<float> block (2, 512);
+            juce::MidiBuffer noMidi;
+            for (int start = 0; start < (int) sampleRate; start += 512)
+            {
+                for (int i = 0; i < 512; ++i)
+                {
+                    const auto x = (float) (0.5 * std::sin (juce::MathConstants<double>::twoPi * 1000.0 * (start + i) / sampleRate));
+                    block.setSample (0, i, x);
+                    block.setSample (1, i, x);
+                }
+                effect->processBlock (block, noMidi);
+            }
+            if (const auto* meter = dynamic_cast<const GainReductionMeter*> (effect.get()))
+                reading.reduction = meter->getGainReductionDb();
+            std::unique_ptr<juce::AudioProcessorEditor> editor (effect->createEditorAndMakeActive());
+            if (auto* bar = editor != nullptr ? editor->findChildWithID ("gainReduction") : nullptr)
+                reading.shown = bar->getDescription();
+            if (editor != nullptr && reading.reduction >= 0.0f)
+                snapshot (*editor, "plugin_" + description.name.removeCharacters (" -").toLowerCase() + ".png");
+            effect->editorBeingDeleted (editor.get()); // as a host does before deleting the window
+            editor.reset();
+            return reading;
+        };
+
+        const auto comp = readMeter (*compressorDesc, { { "threshold", -18.0f }, { "ratio", 4.0f }, { "knee", 0.0f } });
+        const auto lim = readMeter (*limiterDesc, { { "input", 12.0f }, { "ceiling", -1.0f } });
+        const auto gated = readMeter (*gateDesc, { { "threshold", -3.0f } });
+        const auto ess = readMeter (*deEsserDesc, { { "frequency", 2000.0f }, { "threshold", -60.0f } });
+        const auto eq = readMeter (*eqDesc, {});
+        const double compExpected = (toneDb + 18.0) * (1.0 - 1.0 / 4.0), limExpected = toneDb + 12.0 + 1.0;
+        expect ("gain-reduction meters read the steady reduction (compressor 8.98, limiter 6.98, gate 80, de-esser 12 dB)",
+                comp.created && lim.created && gated.created && ess.created
+                    && std::abs (comp.reduction - compExpected) < 0.15 && std::abs (lim.reduction - limExpected) < 0.1
+                    && std::abs (gated.reduction - 80.0) < 0.1 && std::abs (ess.reduction - 12.0) < 0.01,
+                "compressor " + fmt (comp.reduction) + ", limiter " + fmt (lim.reduction) + ", gate " + fmt (gated.reduction)
+                    + ", de-esser " + fmt (ess.reduction) + " dB");
+        auto showsItsFigure = [] (const Reading& reading)
+        {
+            return reading.shown == "-" + juce::String (reading.reduction, 1) + " dB";
+        };
+        expect ("each dynamics window shows its meter with that figure; the EQ has none",
+                showsItsFigure (comp) && showsItsFigure (lim) && showsItsFigure (gated) && showsItsFigure (ess)
+                    && eq.created && eq.reduction < 0.0f && eq.shown.isEmpty(),
+                comp.shown + " | " + lim.shown + " | " + gated.shown + " | " + ess.shown + " | EQ \"" + eq.shown + "\"");
     }
 
     // Reference render: a pad through EQ, compressor and limiter, into the reverb bus.

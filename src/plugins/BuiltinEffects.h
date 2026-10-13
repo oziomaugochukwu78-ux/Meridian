@@ -5,15 +5,34 @@
 namespace meridian
 {
 
-/** Meridian's own effects (EQ, Compressor, Limiter, Gate, Delay, Reverb), hosted through
+/** Implemented by Meridian's dynamics (Compressor, Limiter, Gate, De-Esser): how far the
+    effect is turning the signal down, for the meter in its window and the AI tools.
+    Written by the audio thread at the end of each block; read from any thread. */
+class GainReductionMeter
+{
+public:
+    virtual ~GainReductionMeter() = default;
+
+    /** dB, 0 or positive, as of the end of the last processed block. */
+    float getGainReductionDb() const noexcept { return reduction.load (std::memory_order_relaxed); }
+
+protected:
+    void reportGainReduction (double db) noexcept { reduction.store (db > 0.0 ? (float) db : 0.0f, std::memory_order_relaxed); }
+
+private:
+    std::atomic<float> reduction { 0.0f };
+};
+
+/** Meridian's own effects (EQ, Compressor, Limiter, Gate, De-Esser, Delay, Reverb), hosted through
     the normal plug-in path: they appear in the plug-in list, go in insert
     slots, bypass, save their settings in the session, compensate latency and
     open a window exactly like third-party plug-ins. The signal processing
     lives in the core library (dsp::ParametricEq, dsp::Compressor,
     dsp::Limiter, dsp::FdnReverb), where it is measured by unit tests.
 
-    Identifiers are "meridian:eq", "meridian:compressor", "meridian:limiter"
-    and "meridian:reverb"; the format is named "Built-in". */
+    Identifiers are "meridian:eq", "meridian:compressor", "meridian:limiter",
+    "meridian:gate", "meridian:deesser", "meridian:delay" and "meridian:reverb";
+    the format is named "Built-in". */
 class BuiltinEffectFormat final : public juce::AudioPluginFormat
 {
 public:

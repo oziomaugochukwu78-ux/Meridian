@@ -4,6 +4,7 @@
 #include "model/Automation.h"
 #include "model/MidiModel.h"
 #include "model/Routing.h"
+#include "plugins/BuiltinEffects.h"
 
 #include <dsp/SignalAnalysis.h>
 #include <remote/JsonLimits.h>
@@ -243,7 +244,9 @@ const std::vector<ToolInfo>& toolTable()
         { "list_plugin_parameters", "List a plug-in's controls",
           "Every control of the plug-in in an insert slot: its id, name and current value. Built-in effects: "
           "\"Meridian EQ\" (hpOn, hpFreq, lsFreq, lsGain, p1Freq/p1Gain/p1Q to p3..., hsFreq, hsGain, lpOn, lpFreq, "
-          "output) and \"Meridian Reverb\" (size, decay, damping, predelay, mix, width).",
+          "output) and \"Meridian Reverb\" (size, decay, damping, predelay, mix, width). For Meridian's dynamics "
+          "(Compressor, Limiter, Gate, De-Esser) it also gives gain_reduction_db: how far it is turning the "
+          "signal down right now.",
           schema ({ { "track", "track", trackHelp, true }, { "slot", "string", "Insert slot A-J (or 1-10)", true } }) },
         { "set_plugin_parameter", "Set a plug-in control",
           "Set one control of the plug-in in an insert slot, by id or name, in its own units (Hz, dB, seconds, "
@@ -1140,7 +1143,10 @@ RemoteTools::Result RemoteTools::listPluginParameters (const juce::var& args)
     juce::Array<juce::var> list;
     for (auto* p : plugin->getParameters())
         list.add (describeParameter (*p));
-    return { true, makeObject ({ { "plugin", plugin->getName() }, { "parameters", list } }), {} };
+    auto result = makeObject ({ { "plugin", plugin->getName() }, { "parameters", list } });
+    if (const auto* meter = dynamic_cast<const GainReductionMeter*> (plugin))
+        result.getDynamicObject()->setProperty ("gain_reduction_db", std::round (meter->getGainReductionDb() * 100.0) / 100.0);
+    return { true, result, {} };
 }
 
 RemoteTools::Result RemoteTools::setPluginParameter (const juce::var& args)
