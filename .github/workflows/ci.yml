@@ -1,10 +1,16 @@
 # Builds and tests Meridian on every push to main and every pull request.
 #
-#   core     - the dependency-free core library and its unit tests, on Linux and macOS
-#   windows  - the full application: unit tests, then the end-to-end self test
-#              (numeric audio checks, golden-file null tests, simulated UI input)
-#   linux    - the same as windows, under a virtual display
-#   macos    - the full application; run manually (macOS minutes cost 10x)
+#   core     - the dependency-free core library and its unit tests, on Linux
+#              (and macOS in a full run)
+#   linux    - the full application: unit tests, then the end-to-end self test
+#              (numeric audio checks, golden-file null tests, simulated UI input),
+#              under a virtual display
+#   windows, sanitizers (ASan + UBSan), macos - the same, in a full run only
+#
+# Pushes run only the Linux jobs: the repository is private, Actions minutes
+# are limited (Windows bills 2x, macOS 10x), and Windows is built and
+# self-tested on the development machine before every commit. Start a full
+# run from the Actions tab (Run workflow, "full") before a release.
 #
 # CI machines have no sound card, so the self test runs with
 # --allow-no-audio-device: live-device checks are reported as SKIP, never PASS.
@@ -17,6 +23,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      full:
+        description: "Full run: also Windows, the sanitizers, and macOS core tests"
+        type: boolean
+        default: true
       macos_app:
         description: "Also build and self-test the application on macOS"
         type: boolean
@@ -35,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.full && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -49,6 +59,7 @@ jobs:
 
   windows:
     name: Application (Windows)
+    if: github.event_name == 'workflow_dispatch' && inputs.full
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
@@ -120,6 +131,7 @@ jobs:
 
   sanitizers:
     name: AddressSanitizer + UBSan (Linux)
+    if: github.event_name == 'workflow_dispatch' && inputs.full
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
