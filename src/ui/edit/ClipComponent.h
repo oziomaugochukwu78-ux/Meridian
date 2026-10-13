@@ -23,7 +23,12 @@ namespace meridian
         +-----------------------------------------------+    time-stretch, TCE)
 
     The other tools force one behaviour everywhere: Selector selects, Grabber
-    moves, Trim trims the nearer edge. */
+    moves, Trim trims the nearer edge.
+
+    CLIP GAIN (audio clips, any of those tools): the readout at the bottom left
+    is a handle. Drag it up or down (0.25 dB per pixel; Shift: 0.05 dB) to set
+    the clip's gain, -60 to +24 dB; double-click it for 0 dB. The waveform is
+    drawn at the clip's gain, and a line marks it (0 dB in the middle). */
 class ClipComponent final : public juce::Component,
                             private juce::ValueTree::Listener,
                             private juce::ChangeListener
@@ -49,8 +54,15 @@ public:
     void mouseUp (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override; // MIDI clips: open the MIDI editor
 
+    /** The clip-gain handle, in this component's coordinates (empty for MIDI clips
+        or when the clip is too small to show it). Public for the self test. */
+    juce::Rectangle<float> gainHandleBounds() const;
+
+    static constexpr double gainDbPerPixel = 0.25, fineGainDbPerPixel = 0.05;
+    static constexpr double minGainDb = -60.0, maxGainDb = 24.0;
+
 private:
-    enum class Action { none, select, move, trimStart, trimEnd, stretchEnd, fadeIn, fadeOut };
+    enum class Action { none, select, move, trimStart, trimEnd, stretchEnd, fadeIn, fadeOut, clipGain };
 
     Action actionAt (const juce::MouseEvent&) const;
     static juce::MouseCursor cursorFor (Action);
@@ -75,8 +87,9 @@ private:
 
     // Drag state
     Action dragAction = Action::none;
-    int downScreenX = 0;
+    int downScreenX = 0, downScreenY = 0;
     juce::int64 originalStart = 0, originalLength = 0, originalOffset = 0, originalFadeIn = 0, originalFadeOut = 0;
+    double originalGainDb = 0.0;
 };
 
 } // namespace meridian

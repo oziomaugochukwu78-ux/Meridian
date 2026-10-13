@@ -4080,6 +4080,36 @@ void SelfTest::testUserInterface()
     drag (*clipView, { startX() + 10.0f, 5.0f }, { 30.0f, 0.0f });
     expectNear ("Smart Tool top corner draws a fade-in", (double) clip::fadeIn (clipNode), 30.0 * spp, 0.0, "samples");
 
+    // Clip gain: the handle at the bottom left, dragged 24 px up = +6 dB; double-click resets it.
+    {
+        const auto handle = clipView->gainHandleBounds();
+        expect ("an audio clip shows its clip-gain handle", ! handle.isEmpty(), handle.toString());
+        if (! handle.isEmpty())
+        {
+            drag (*clipView, handle.getCentre(), { 0.0f, -24.0f });
+            const double dragged = clip::gainDb (clipNode);
+            // An exact level needs the clean bus (the demo session above turned the console on)
+            // and this track alone ("UI Test 2" plays the same tone).
+            auto other = session->getTrack (1);
+            setConsole (false);
+            other.setProperty (ids::mute, true, nullptr);
+            const auto louder = bounce ("clip_gain_plus6", 0, clip::end (clipNode));
+            other.setProperty (ids::mute, false, nullptr);
+            setConsole (true, 6.0, 0.35);
+            expect ("dragging the clip-gain handle up 24 px sets +6 dB, and the clip plays 6 dB louder",
+                    juce::exactlyEqual (dragged, 6.0) && std::abs (db (louder.left.peak) - (toneDb + panCentreDb + 6.0)) < 0.05,
+                    fmt (dragged) + " dB set; peak " + fmt (db (louder.left.peak)) + " dB");
+            snapshot (*clipView, "clip_gain.png");
+            clipView->mouseDoubleClick (mouseEvent (*clipView, handle.getCentre(), handle.getCentre(), false));
+            const double reset = clip::gainDb (clipNode);
+            um.undo();
+            expect ("double-clicking the handle resets to 0 dB (one undo step)",
+                    juce::exactlyEqual (reset, 0.0) && juce::exactlyEqual (clip::gainDb (clipNode), 6.0),
+                    fmt (reset) + " dB, then " + fmt (clip::gainDb (clipNode)) + " dB after undo");
+            clipNode.setProperty (ids::gainDb, 0.0, nullptr);
+        }
+    }
+
     // Upper half: time selection (Selector).
     drag (*clipView, { startX() + 60.0f, h * 0.3f }, { 80.0f, 0.0f });
     expect ("Smart Tool upper half makes a time selection on this track",

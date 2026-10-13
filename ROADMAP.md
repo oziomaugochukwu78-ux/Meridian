@@ -53,18 +53,18 @@ To finish before the feature work below:
 What a home producer, songwriter or podcaster needs.
 
 **Editing and workflow**
-- clip gain line and handles
+- done: clip gain handle and line on audio clips (drag, fine with Shift, double-click for 0 dB)
 - done: track reorder and duplicate
 - done: markers, loop playback, punch-in/punch-out recording
 - playlists with comping
-- bars|beats grid and ruler
+- done: bars|beats grid and ruler (from the tempo and meter maps, also in the MIDI editor)
 - done: tempo and meter map (tempo changes, time signatures); still to do: tempo ramps, editing changes in the ruler
 - done: click with a count-in
 
 **MIDI and instruments**
 - done: MIDI input recording (keyboard, live play-through, latency compensated); VST3 instrument hosting; sustain pedal (clips, keyboard, recording, plug-ins); still to do: other controllers (mod wheel, pitch bend)
 - done: a piano-roll editor, quantise, and velocity editing
-- sample-accurate MIDI timing
+- done: sample-accurate MIDI timing (notes, sustain pedal, plug-in instruments; clips keep musical time after tempo changes)
 
 Acceptance: MIDI timing jitter of zero samples in offline renders, and at most one buffer live.
 

@@ -12,7 +12,25 @@ constexpr int nameBarHeight = 15;
 constexpr double edgeZonePixels = 6.0;
 constexpr double fadeZonePixels = 16.0;
 constexpr juce::int64 minimumClipLength = 64;
+constexpr float gainHandleWidth = 58.0f, gainHandleHeight = 14.0f, gainHandleInset = 8.0f;
+constexpr double gainLineRangeDb = 24.0; // the gain line reaches the waveform's edge at +/-24 dB
+
+juce::String gainText (double db)
+{
+    const bool zero = std::abs (db) < 0.005;
+    return (zero || db < 0.0 ? "" : "+") + juce::String (zero ? 0.0 : db, 2) + " dB";
+}
 } // namespace
+
+juce::Rectangle<float> ClipComponent::gainHandleBounds() const
+{
+    if (clip::isMidi (clipNode) || getHeight() < 40)
+        return {};
+    const float left = (float) std::max (logicalLeft, 0.0) + gainHandleInset;
+    if ((float) logicalRight - left < gainHandleWidth + gainHandleInset)
+        return {};
+    return { left, (float) getHeight() - gainHandleHeight - 4.0f, gainHandleWidth, gainHandleHeight };
+}
 
 ClipComponent::ClipComponent (AppController& a, EditState& s, juce::ValueTree c, juce::Colour trackColour)
     : app (a), editState (s), clipNode (std::move (c)), colour (trackColour),
@@ -163,8 +181,10 @@ void ClipComponent::paint (juce::Graphics& g)
     }
     else if (thumbnail.getTotalLength() > 0.0)
     {
+        // Drawn at the clip's gain, so turning it up or down is visible in the waveform.
+        const auto gain = (float) juce::jlimit (0.0, 8.0, juce::Decibels::decibelsToGain (clip::gainDb (clipNode), -144.0));
         g.setColour (theme::waveform.withAlpha (0.9f));
-        thumbnail.drawChannels (g, waveArea, sourceAt (0.0) / sampleRate, sourceAt ((double) getWidth()) / sampleRate, 1.0f);
+        thumbnail.drawChannels (g, waveArea, sourceAt (0.0) / sampleRate, sourceAt ((double) getWidth()) / sampleRate, gain);
     }
     else
     {
@@ -204,6 +224,28 @@ void ClipComponent::paint (juce::Graphics& g)
     drawFade (clip::fadeIn (clipNode), true);
     drawFade (clip::fadeOut (clipNode), false);
 
+    // Clip gain: a line where it is set (when not 0 dB), and the handle with its value.
+    if (! clip::isMidi (clipNode))
+    {
+        const double gainDb = clip::gainDb (clipNode);
+        const auto gainColour = juce::Colour (0xffe8a33d);
+        if (std::abs (gainDb) >= 0.005)
+        {
+            const float y = (float) waveArea.getCentreY()
+                            - (float) (juce::jlimit (-1.0, 1.0, gainDb / gainLineRangeDb) * waveArea.getHeight() * 0.5);
+            g.setColour (gainColour.withAlpha (0.85f));
+            g.drawHorizontalLine ((int) y, clipRect.getX(), clipRect.getRight());
+        }
+        if (const auto handle = gainHandleBounds(); ! handle.isEmpty())
+        {
+            g.setColour (juce::Colours::black.withAlpha (0.55f));
+            g.fillRoundedRectangle (handle, 3.0f);
+            g.setColour (std::abs (gainDb) >= 0.005 ? gainColour : theme::text.withAlpha (0.75f));
+            g.setFont (theme::font (10.0f));
+            g.drawText (gainText (gainDb), handle, juce::Justification::centred, false);
+        }
+    }
+
     g.setColour (theme::textOnLight);
     g.setFont (theme::font (11.0f, true));
     g.drawText (clip::name (clipNode), nameBar.reduced (4.0f, 0.0f).withLeft (juce::jmax (nameBar.getX(), 0.0f) + 4.0f),
@@ -226,6 +268,11 @@ ClipComponent::Action ClipComponent::actionAt (const juce::MouseEvent& e) const
     // Fades and time-stretching are audio operations; MIDI clips just trim.
     const bool midi = clip::isMidi (clipNode);
     const bool stretch = e.mods.isAltDown() && ! midi;
+
+    const bool clipTool = editState.tool == EditTool::smart || editState.tool == EditTool::selector
+                          || editState.tool == EditTool::grabber || editState.tool == EditTool::trim;
+    if (clipTool && gainHandleBounds().contains (e.position))
+        return Action::clipGain;
 
     switch (editState.tool)
     {
@@ -265,6 +312,7 @@ juce::MouseCursor ClipComponent::cursorFor (Action a)
         case Action::stretchEnd: return juce::MouseCursor::LeftRightResizeCursor;
         case Action::fadeIn:
         case Action::fadeOut:    return juce::MouseCursor::CrosshairCursor;
+        case Action::clipGain:   return juce::MouseCursor::UpDownResizeCursor;
         case Action::none:       break;
     }
     return juce::MouseCursor::NormalCursor;
@@ -305,6 +353,8 @@ void ClipComponent::mouseDown (const juce::MouseEvent& e)
         return;
 
     downScreenX = e.getScreenX();
+    downScreenY = e.getScreenY();
+    originalGainDb = clip::gainDb (clipNode);
     originalStart = clip::start (clipNode);
     originalLength = clip::length (clipNode);
     originalOffset = clip::offset (clipNode);
@@ -315,7 +365,7 @@ void ClipComponent::mouseDown (const juce::MouseEvent& e)
 
     if (auto* um = app.getUndoManager())
     {
-        static const char* names[] = { "", "", "Move Clip", "Trim Clip", "Trim Clip", "Elastic Audio", "Fade In", "Fade Out" };
+        static const char* names[] = { "", "", "Move Clip", "Trim Clip", "Trim Clip", "Elastic Audio", "Fade In", "Fade Out", "Clip Gain" };
         um->beginNewTransaction (names[(int) dragAction]);
     }
 }
@@ -376,6 +426,14 @@ void ClipComponent::mouseDrag (const juce::MouseEvent& e)
             clipNode.setProperty (ids::fadeOut, juce::jlimit<juce::int64> (0, originalLength - clip::fadeIn (clipNode), originalFadeOut - delta), um);
             break;
 
+        case Action::clipGain:
+        {
+            const double step = e.mods.isShiftDown() ? fineGainDbPerPixel : gainDbPerPixel;
+            const double gainDb = juce::jlimit (minGainDb, maxGainDb, originalGainDb - (double) (e.getScreenY() - downScreenY) * step);
+            clipNode.setProperty (ids::gainDb, gainDb, um);
+            break;
+        }
+
         case Action::select:
         case Action::none:
             break;
@@ -422,10 +480,20 @@ void ClipComponent::mouseUp (const juce::MouseEvent& e)
     }
 }
 
-void ClipComponent::mouseDoubleClick (const juce::MouseEvent&)
+void ClipComponent::mouseDoubleClick (const juce::MouseEvent& e)
 {
     if (clip::isMidi (clipNode) && openPianoRoll)
+    {
         openPianoRoll (clipNode);
+    }
+    else if (gainHandleBounds().contains (e.position))
+    {
+        if (auto* um = app.getUndoManager())
+        {
+            um->beginNewTransaction ("Clip Gain");
+            clipNode.setProperty (ids::gainDb, 0.0, um);
+        }
+    }
 }
 
 void ClipComponent::showMenu()
