@@ -11,6 +11,7 @@
 #include "model/SessionBackups.h"
 #include "plugins/BuiltinEffects.h"
 
+#include <dsp/Biquad.h>
 #include <dsp/Loudness.h>
 #include "ui/dialogs/DashboardComponent.h"
 #include "ui/dialogs/NewTracksComponent.h"
@@ -1374,6 +1375,28 @@ void SelfTest::testBuiltinEffects()
         expect ("gate: a tone above the threshold passes untouched; below it, it drops by the 80 dB range",
                 std::abs (openLevel - (toneDb + panCentreDb)) < 0.02 && std::abs (closedLevel - (toneDb + panCentreDb - 80.0)) < 0.1,
                 "open " + fmt (openLevel) + " dB, closed " + fmt (closedLevel) + " dB");
+
+        // De-esser: the 1 kHz tone is far below a 6 kHz band and passes; with the band moved down to
+        // 2 kHz and a -60 dB threshold, it is turned down by the full 12 dB shelf's response at 1 kHz.
+        if (const auto* deEsserDesc = find ("Meridian De-Esser"); deEsserDesc != nullptr)
+        {
+            clearTracks();
+            t = addToneTrack ("Esses", 1, tone, clipStart);
+            app.getBridge().insertPlugin (t, 0, *deEsserDesc, error);
+            r = bounce ("deesser_pass", 0, end);
+            const double passLevel = levelIn (r, 1.0, 2.0);
+            call ("set_plugin_parameter", R"({"track":"Esses","slot":"A","parameter":"frequency","value":2000})");
+            call ("set_plugin_parameter", R"({"track":"Esses","slot":"A","parameter":"threshold","value":-60})");
+            r = bounce ("deesser_cut", 0, end);
+            const double cutLevel = levelIn (r, 1.0, 2.0);
+            const auto shelf = dsp::Biquad::design (dsp::Biquad::Type::highShelf, 2000.0, 1.0, -12.0, sampleRate);
+            const double expectedCut = toneDb + panCentreDb + db (dsp::Biquad::magnitudeAt (shelf, 1000.0, sampleRate));
+            expect ("de-esser: a tone below the band passes untouched; inside the band it is shelved down by the range",
+                    std::abs (passLevel - (toneDb + panCentreDb)) < 0.02 && std::abs (cutLevel - expectedCut) < 0.1,
+                    "pass " + fmt (passLevel) + " dB, cut " + fmt (cutLevel) + " dB (expected " + fmt (expectedCut) + ")");
+        }
+        else
+            expect ("the de-esser is in the plug-in list", false, {});
     }
 
     // Reference render: a pad through EQ, compressor and limiter, into the reverb bus.

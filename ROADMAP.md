@@ -73,8 +73,8 @@ Acceptance: MIDI timing jitter of zero samples in offline renders, and at most o
 - still to do: trim mode, drawing the new lanes in the Edit window, plug-in control touch from plug-in windows
 
 **Built-in processing**
-- done: Meridian EQ, Compressor, Limiter (true peak), Gate, Delay, Reverb
-- still to do: de-esser, tuner, gain-reduction meters
+- done: Meridian EQ, Compressor, Limiter (true peak), Gate, De-Esser, Delay, Reverb
+- still to do: tuner, gain-reduction meters
 - each ships with a measured specification, checked in tests: frequency response within ±0.1 dB of design, compressor static curve, limiter true-peak ceiling
 
 **Loudness and delivery**

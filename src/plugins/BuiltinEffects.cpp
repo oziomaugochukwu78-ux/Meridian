@@ -1,6 +1,7 @@
 #include "BuiltinEffects.h"
 
 #include <dsp/Compressor.h>
+#include <dsp/DeEsser.h>
 #include <dsp/FdnReverb.h>
 #include <dsp/Gate.h>
 #include <dsp/Limiter.h>
@@ -17,7 +18,8 @@ constexpr const char* compressorId = "meridian:compressor";
 constexpr const char* limiterId = "meridian:limiter";
 constexpr const char* gateId = "meridian:gate";
 constexpr const char* delayId = "meridian:delay";
-constexpr const char* allIds[] = { eqId, compressorId, limiterId, gateId, delayId, reverbId };
+constexpr const char* deEsserId = "meridian:deesser";
+constexpr const char* allIds[] = { eqId, compressorId, limiterId, gateId, deEsserId, delayId, reverbId };
 
 juce::NormalisableRange<float> frequencyRange (float lo, float hi, float centre)
 {
@@ -575,12 +577,64 @@ private:
     EffectParameter* hysteresis = nullptr;
 };
 
+//==============================================================================
+class MeridianDeEsser final : public BuiltinEffect
+{
+public:
+    MeridianDeEsser() : BuiltinEffect ("Meridian De-Esser", "Dynamics", deEsserId)
+    {
+        threshold = add ("threshold", "Threshold", { -60.0f, 0.0f }, -30.0f, "dB");
+        frequency = add ("frequency", "Frequency", frequencyRange (2000.0f, 12000.0f, 6000.0f), 6000.0f, "Hz");
+        range = add ("range", "Range", { 0.0f, 24.0f }, 12.0f, "dB");
+    }
+
+    void prepareToPlay (double sampleRate, int) override
+    {
+        deEsser.prepare (sampleRate);
+        applied = {};
+        applyParameters (true);
+    }
+
+    void processAudio (juce::AudioBuffer<float>& buffer) override
+    {
+        applyParameters (false);
+        deEsser.process (buffer.getWritePointer (0), buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr,
+                         buffer.getNumSamples());
+    }
+
+    double getTailLengthSeconds() const override { return 0.0; }
+    void reset() override { deEsser.reset(); }
+
+private:
+    void applyParameters (bool force)
+    {
+        dsp::DeEsser::Params p;
+        p.thresholdDb = value (threshold);
+        p.frequencyHz = value (frequency);
+        p.rangeDb = value (range);
+        const bool changed = ! juce::exactlyEqual (p.thresholdDb, applied.thresholdDb)
+                          || ! juce::exactlyEqual (p.frequencyHz, applied.frequencyHz) || ! juce::exactlyEqual (p.rangeDb, applied.rangeDb);
+        if (force || changed)
+        {
+            deEsser.setParams (p);
+            applied = p;
+        }
+    }
+
+    dsp::DeEsser deEsser;
+    dsp::DeEsser::Params applied;
+    EffectParameter* threshold = nullptr;
+    EffectParameter* frequency = nullptr;
+    EffectParameter* range = nullptr;
+};
+
 std::unique_ptr<juce::AudioPluginInstance> createEffect (const juce::String& identifier)
 {
     if (identifier == eqId)         return std::make_unique<MeridianEq>();
     if (identifier == compressorId) return std::make_unique<MeridianCompressor>();
     if (identifier == limiterId)    return std::make_unique<MeridianLimiter>();
     if (identifier == gateId)       return std::make_unique<MeridianGate>();
+    if (identifier == deEsserId)    return std::make_unique<MeridianDeEsser>();
     if (identifier == delayId)      return std::make_unique<MeridianDelay>();
     if (identifier == reverbId)     return std::make_unique<MeridianReverb>();
     return nullptr;

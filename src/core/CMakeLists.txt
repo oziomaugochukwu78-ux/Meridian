@@ -13,6 +13,8 @@ add_library(meridian_core STATIC
     dsp/Compressor.cpp
     dsp/Compressor.h
     dsp/DcBlocker.h
+    dsp/DeEsser.cpp
+    dsp/DeEsser.h
     dsp/Dither.h
     dsp/DelayLine.h
     dsp/FaderTaper.cpp
