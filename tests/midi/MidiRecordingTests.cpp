@@ -55,6 +55,32 @@ TEST_CASE ("MIDI recording: held, retriggered and stray notes", "[midirec]")
     CHECK ((take.notes[2].pitch == 62 && take.notes[2].start == 960 && take.notes[2].length == 480));
 }
 
+TEST_CASE ("MIDI recording: the sustain pedal becomes ranges, compensated like notes", "[midirec]")
+{
+    // Pedal down at beat 1, up at beat 3; down again at beat 4 and held to the stop; a stray
+    // pedal-up and a repeated pedal-down change nothing. All received 1000 samples late.
+    const int64_t late = 1000;
+    const auto pedal = [] (int64_t t, bool down) { return RecordedEvent { t, sustainPedal, 0.0f, down }; };
+    const auto take = buildTake ({ pedal (10000 + late, false), pedal (24000 + late, true), on (24000 + late, 60),
+                                   pedal (36000 + late, true), off (30000 + late, 60), pedal (72000 + late, false),
+                                   pedal (96000 + late, true), { 100000 + late, -5, 1.0f, true } },
+                                 late, 120000 + late, late, tempo120, rate);
+    REQUIRE (take.sustain.size() == 2);
+    CHECK ((take.sustain[0].start == 960 && take.sustain[0].length == 1920));
+    CHECK ((take.sustain[1].start == 3840 && take.sustain[1].length == 960)); // held until the stop (120000)
+    REQUIRE (take.notes.size() == 1); // the pedal is not a note, and pitch -5 is ignored
+    CHECK ((take.notes[0].start == 960 && take.notes[0].length == 240));
+}
+
+TEST_CASE ("Pedal ranges: sorted, merged, clamped", "[midirec]")
+{
+    const auto r = normalisedPedal ({ { 1000, 500 }, { -200, 400 }, { 1200, 1000 }, { 2200, 10 }, { 5000, 0 } });
+    REQUIRE (r.size() == 3);
+    CHECK ((r[0].start == 0 && r[0].length == 200));    // the part before zero is cut
+    CHECK ((r[1].start == 1000 && r[1].length == 1210)); // overlapping and touching ranges merge
+    CHECK ((r[2].start == 5000 && r[2].length == 1));    // at least a tick
+}
+
 TEST_CASE ("MIDI recording: events outside the take are clamped into it; a take never starts before zero", "[midirec]")
 {
     const auto take = buildTake ({ on (100, 60), off (500000, 60) }, 2000, 50000, 3000, tempo120, rate);

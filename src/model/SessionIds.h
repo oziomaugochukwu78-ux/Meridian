@@ -40,6 +40,8 @@
             CLIP  kind="midi" ...
               NOTES
                 NOTE  pitch velocity start length       (ticks)
+              SUSTAIN                                   (optional: where the sustain pedal is held)
+                PEDAL  start length                     (ticks; sorted, not overlapping)
 
     SESSION also holds tempo (BPM, default 120), loop playback (loopEnabled,
     loopStart, loopEnd in samples), punch recording (punchEnabled, punchIn, punchOut), the click (clickEnabled, clickLevelDb),
@@ -73,6 +75,8 @@ MERIDIAN_ID (LANE)
 MERIDIAN_ID (POINT)
 MERIDIAN_ID (NOTES)
 MERIDIAN_ID (NOTE)
+MERIDIAN_ID (SUSTAIN)
+MERIDIAN_ID (PEDAL)
 MERIDIAN_ID (SYNTH)
 MERIDIAN_ID (MARKERS)
 MERIDIAN_ID (MARKER)

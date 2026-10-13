@@ -116,6 +116,7 @@ void PolySynth::startVoice (Voice& v, int pitch, float velocity) noexcept
     const bool wasSounding = v.active;
     v.active = true;
     v.releasing = false;
+    v.sustained = false; // the key is down again
     v.pitch = pitch;
     v.velocity = velocity;
     v.age = ++noteCounter;
@@ -173,25 +174,50 @@ void PolySynth::noteOff (int pitch) noexcept
     for (auto& v : voices)
         if (v.active && v.pitch == pitch && ! v.releasing)
         {
+            if (pedalDown)
+            {
+                v.sustained = true; // the pedal holds it
+                continue;
+            }
             v.releasing = true;
             v.stage = 2;
         }
 }
 
+void PolySynth::setSustain (bool down) noexcept
+{
+    if (pedalDown && ! down)
+        for (auto& v : voices)
+            if (v.active && v.sustained && ! v.releasing)
+            {
+                v.releasing = true;
+                v.stage = 2;
+            }
+    if (! down)
+        for (auto& v : voices)
+            v.sustained = false;
+    pedalDown = down;
+}
+
 void PolySynth::allNotesOff() noexcept
 {
+    pedalDown = false;
     for (auto& v : voices)
+    {
+        v.sustained = false;
         if (v.active)
         {
             v.releasing = true;
             v.stage = 2;
         }
+    }
 }
 
 void PolySynth::reset() noexcept
 {
     for (auto& v : voices)
         v = Voice {};
+    pedalDown = false;
     history.fill (0.0);
     historyPos = 0;
 }

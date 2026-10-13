@@ -58,8 +58,13 @@ public:
 
     void noteOn (int pitch, float velocity) noexcept;
     void noteOff (int pitch) noexcept;
-    void allNotesOff() noexcept;      ///< release every voice
+    void allNotesOff() noexcept;      ///< release every voice, and lift the sustain pedal
     void reset() noexcept;            ///< silence immediately
+
+    /** The sustain pedal (MIDI CC 64): while down, released keys keep sounding at
+        their sustain level; lifting it releases every note whose key is up. */
+    void setSustain (bool down) noexcept;
+    bool isSustainDown() const noexcept { return pedalDown; }
 
     /** Adds the synth's output into left/right (they are not cleared first). */
     void render (float* left, float* right, int numSamples) noexcept;
@@ -70,6 +75,7 @@ private:
     struct Voice
     {
         bool active = false, releasing = false;
+        bool sustained = false; // key up, held by the pedal
         int pitch = -1;
         float velocity = 0.0f;
         uint64_t age = 0;
@@ -91,6 +97,7 @@ private:
     double attackStep = 0.0, decayCoef = 0.0, releaseCoef = 0.0;
     std::array<Voice, maxVoices> voices {};
     uint64_t noteCounter = 0;
+    bool pedalDown = false;
 
     std::array<double, decimatorTaps> fir {};
     std::array<double, 2 * decimatorTaps> history {}; // doubled ring: contiguous windows

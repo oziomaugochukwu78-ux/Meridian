@@ -96,6 +96,33 @@ midi::NoteSequence readNotes (const juce::ValueTree& clip)
     return sequence;
 }
 
+std::vector<midi::PedalRange> readSustain (const juce::ValueTree& clip)
+{
+    std::vector<midi::PedalRange> ranges;
+    for (const auto& p : clip.getChildWithName (ids::SUSTAIN))
+        if (p.hasType (ids::PEDAL))
+            ranges.push_back ({ (int64_t) (juce::int64) p[ids::start], (int64_t) (juce::int64) p.getProperty (ids::length, 1) });
+    return midi::normalisedPedal (std::move (ranges));
+}
+
+void writeSustain (juce::ValueTree clip, const std::vector<midi::PedalRange>& ranges, juce::UndoManager* um)
+{
+    if (auto old = clip.getChildWithName (ids::SUSTAIN); old.isValid())
+        clip.removeChild (old, um);
+    const auto clean = midi::normalisedPedal (ranges);
+    if (clean.empty())
+        return;
+    juce::ValueTree list (ids::SUSTAIN);
+    for (const auto& r : clean)
+    {
+        juce::ValueTree pedal (ids::PEDAL);
+        pedal.setProperty (ids::start, (juce::int64) r.start, nullptr);
+        pedal.setProperty (ids::length, (juce::int64) r.length, nullptr);
+        list.appendChild (pedal, nullptr);
+    }
+    clip.appendChild (list, um);
+}
+
 namespace
 {
 juce::ValueTree makeNoteNode (const midi::Note& note)

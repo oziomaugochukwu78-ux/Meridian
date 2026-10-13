@@ -543,12 +543,17 @@ juce::StringArray AppController::getOpenMidiInputs() const
 
 void AppController::handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& message)
 {
-    // MIDI device thread. Note on/off only for now (no sustain pedal or controllers yet).
-    // JUCE stamps incoming messages in Time::getMillisecondCounter() seconds.
+    // MIDI device thread. Notes and the sustain pedal (CC 64: 64 and above is down);
+    // other controllers are not used yet. JUCE stamps incoming messages in
+    // Time::getMillisecondCounter() seconds.
     if (message.isNoteOn())
         engine.pushLiveMidi (message.getNoteNumber(), message.getFloatVelocity(), true, message.getTimeStamp());
     else if (message.isNoteOff())
         engine.pushLiveMidi (message.getNoteNumber(), 0.0f, false, message.getTimeStamp());
+    else if (message.isSustainPedalOn())
+        engine.pushLiveSustain (true, message.getTimeStamp());
+    else if (message.isSustainPedalOff())
+        engine.pushLiveSustain (false, message.getTimeStamp());
 }
 
 void AppController::returnToZero()

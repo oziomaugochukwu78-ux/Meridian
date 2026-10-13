@@ -567,6 +567,18 @@ void EngineBridge::buildMidiEvents (const juce::ValueTree& t, TrackRender& rende
             render.events.push_back ({ on, n.pitch, n.velocity, true });
             render.events.push_back ({ off, n.pitch, 0.0f, false });
         }
+
+        // The sustain pedal: down and up inside the clip. A range already under way where
+        // the clip starts goes down at its start; one still held at its end lifts there.
+        for (const auto& range : midimodel::readSustain (c))
+        {
+            const auto down = std::max (start, tempo.samplesFromOrigin (origin, range.start, rate));
+            const auto up = std::min (end, tempo.samplesFromOrigin (origin, range.end(), rate));
+            if (down >= up)
+                continue;
+            render.events.push_back ({ down, midi::sustainPedal, 0.0f, true });
+            render.events.push_back ({ up, midi::sustainPedal, 0.0f, false });
+        }
     }
 
     std::sort (render.events.begin(), render.events.end(), [] (const MidiEvent& a, const MidiEvent& b)
@@ -1019,6 +1031,7 @@ void EngineBridge::finaliseMidiTakes (juce::int64 recordEnd)
         auto clip = session->addMidiClip (t, take.clipStart, take.clipLength, "MIDI Take", &um);
         for (const auto& note : take.notes)
             midimodel::addNote (clip, note, &um);
+        midimodel::writeSustain (clip, take.sustain, &um);
     }
 }
 

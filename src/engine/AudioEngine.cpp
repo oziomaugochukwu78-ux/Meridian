@@ -2,6 +2,7 @@
 
 #include <dsp/MixKernels.h>
 #include <dsp/PanLaw.h>
+#include <midi/NoteSequence.h>
 
 #include <algorithm>
 #include <cmath>
@@ -19,6 +20,14 @@ constexpr double halfPi = 1.57079632679489661923;
 double decibelsToGain (double db) noexcept
 {
     return db <= silenceDb ? 0.0 : std::pow (10.0, db / 20.0);
+}
+
+/** A note or the sustain pedal (CC 64, 127 down / 0 up) as a MIDI message on channel 1. */
+juce::MidiMessage toMidiMessage (int pitch, float velocity, bool on) noexcept
+{
+    if (pitch == midi::sustainPedal)
+        return juce::MidiMessage::controllerEvent (1, 64, on ? 127 : 0);
+    return on ? juce::MidiMessage::noteOn (1, pitch, velocity) : juce::MidiMessage::noteOff (1, pitch);
 }
 
 int rampLength (double seconds, double sampleRate) noexcept
@@ -177,6 +186,12 @@ void AudioEngine::pushLiveMidi (int pitch, float velocity, bool noteOn, double t
         return;
     const juce::SpinLock::ScopedLockType producers (liveMidiProducers); // only MIDI threads ever wait here
     liveMidiIn.push ({ pitch, juce::jlimit (0.0f, 1.0f, velocity), noteOn && velocity > 0.0f, timeSeconds });
+}
+
+void AudioEngine::pushLiveSustain (bool down, double timeSeconds) noexcept
+{
+    const juce::SpinLock::ScopedLockType producers (liveMidiProducers);
+    liveMidiIn.push ({ midi::sustainPedal, 0.0f, down, timeSeconds });
 }
 
 void AudioEngine::drainLiveMidi (int numSamples) noexcept
@@ -570,8 +585,7 @@ void AudioEngine::renderInstrument (TrackRender& t, const BlockContext& ctx) noe
             for (auto it = std::lower_bound (t.events.begin(), t.events.end(), pos,
                                              [] (const MidiEvent& e, juce::int64 time) { return e.time < time; });
                  it != t.events.end() && it->time < end; ++it)
-                t.midi.addEvent (it->on ? juce::MidiMessage::noteOn (1, it->pitch, it->velocity) : juce::MidiMessage::noteOff (1, it->pitch),
-                                 (int) (it->time - pos));
+                t.midi.addEvent (toMidiMessage (it->pitch, it->velocity, it->on), (int) (it->time - pos));
 
         if (t.state->recordArmed.load (std::memory_order_relaxed))
         {
@@ -582,7 +596,7 @@ void AudioEngine::renderInstrument (TrackRender& t, const BlockContext& ctx) noe
                 if (note.offset < ctx.inputOffset || note.offset >= ctx.inputOffset + ctx.numSamples)
                     continue;
                 const int at = note.offset - ctx.inputOffset;
-                t.midi.addEvent (note.on ? juce::MidiMessage::noteOn (1, note.pitch, note.velocity) : juce::MidiMessage::noteOff (1, note.pitch), at);
+                t.midi.addEvent (toMidiMessage (note.pitch, note.velocity, note.on), at);
                 if (capture && ! recordedMidi.push ({ t.state->trackId, pos + at, note.pitch, note.velocity, note.on }))
                     recordedMidiOverflows.fetch_add (1, std::memory_order_relaxed);
             }
@@ -649,21 +663,24 @@ void AudioEngine::renderInstrument (TrackRender& t, const BlockContext& ctx) noe
                 done = at;
             }
 
+            auto apply = [&engineObject] (int pitch, float velocity, bool on)
+            {
+                if (pitch == midi::sustainPedal)
+                    engineObject.setSustain (on);
+                else if (on)
+                    engineObject.noteOn (pitch, velocity);
+                else
+                    engineObject.noteOff (pitch);
+            };
             if (clipAt <= liveAt)
             {
-                if (it->on)
-                    engineObject.noteOn (it->pitch, it->velocity);
-                else
-                    engineObject.noteOff (it->pitch);
+                apply (it->pitch, it->velocity, it->on);
                 ++it;
             }
             else
             {
                 const auto& note = blockNotes[(size_t) liveIndex++];
-                if (note.on)
-                    engineObject.noteOn (note.pitch, note.velocity);
-                else
-                    engineObject.noteOff (note.pitch);
+                apply (note.pitch, note.velocity, note.on);
                 if (capture && ! recordedMidi.push ({ t.state->trackId, pos + at, note.pitch, note.velocity, note.on }))
                     recordedMidiOverflows.fetch_add (1, std::memory_order_relaxed);
             }

@@ -49,6 +49,7 @@ public:
     void noteOn (int pitch, float velocity) noexcept;
     void noteOff (int) noexcept {}       ///< one-shots ring out
     void allNotesOff() noexcept {}       ///< (tails ring out on stop as on a hardware machine)
+    void setSustain (bool) noexcept {}   ///< one-shots: the pedal changes nothing
     void reset() noexcept;
 
     /** Adds the kit's output into left/right. */

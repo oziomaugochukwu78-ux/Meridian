@@ -33,11 +33,29 @@ RecordedTake buildTake (std::vector<RecordedEvent> events, int64_t recordStart, 
         h.since = -1;
     };
 
+    int64_t pedalSince = -1;
+    auto liftPedal = [&] (int64_t at)
+    {
+        if (pedalSince < 0)
+            return;
+        const auto start = ticksAt (pedalSince);
+        take.sustain.push_back ({ start, std::max<int64_t> (1, ticksAt (at) - start) });
+        pedalSince = -1;
+    };
+
     for (const auto& e : events)
     {
+        const auto at = std::clamp (e.time - compensation, take.clipStart, clipEnd);
+        if (e.pitch == sustainPedal)
+        {
+            if (e.on && pedalSince < 0)
+                pedalSince = at;
+            else if (! e.on)
+                liftPedal (at);
+            continue;
+        }
         if (e.pitch < 0 || e.pitch > 127)
             continue;
-        const auto at = std::clamp (e.time - compensation, take.clipStart, clipEnd);
         if (e.on && e.velocity > 0.0f)
         {
             close (e.pitch, at); // retriggered without a note-off
@@ -51,6 +69,8 @@ RecordedTake buildTake (std::vector<RecordedEvent> events, int64_t recordStart, 
 
     for (int pitch = 0; pitch < 128; ++pitch)
         close (pitch, clipEnd); // still held when recording stopped
+    liftPedal (clipEnd);
+    take.sustain = normalisedPedal (std::move (take.sustain));
 
     std::sort (take.notes.begin(), take.notes.end(), [] (const Note& a, const Note& b)
     {

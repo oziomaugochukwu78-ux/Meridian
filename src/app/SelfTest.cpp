@@ -83,6 +83,7 @@ void SelfTest::start()
         testPunchRecording();
         testTempoAndMeter();
         testPluginInstrument();
+        testSustainPedal();
         testStress();
         testRobustness(); // before the remote tests: their BOUNCE runs in the background
         testMcpTools();
@@ -2126,6 +2127,23 @@ void SelfTest::testPluginInstrument()
     expect ("the plug-in plays the clip's note from exactly its sample to exactly its note-off",
             first == on + 1 && last == off - 1, // the sine starts at zero phase; the note-off stops it dead
             "sound from " + juce::String (first) + " to " + juce::String (last) + ", note " + juce::String (on) + "-" + juce::String (off));
+
+    // The sustain pedal reaches the plug-in as CC 64 on its exact samples: held from 1 s to 2 s
+    // (beats 2-4), the note released at 1.5 s rings until exactly 2 s.
+    {
+        auto& pedalTools = app.getRemoteTools();
+        const auto set = pedalTools.call ("add_notes", juce::JSON::parse (
+            R"({"track":"VST Keys","clip":1,"notes":[],"sustain":[{"start_beats":2,"length_beats":2}]})"));
+        const auto held = readAudio (bounce ("vst_instrument_sustain", 0, (juce::int64) (3.0 * sampleRate)).file);
+        int heldLast = -1;
+        for (int i = 0; i < held.getNumSamples(); ++i)
+            if (! juce::exactlyEqual (held.getSample (0, i), 0.0f))
+                heldLast = i;
+        expect ("the pedal (CC 64) holds the plug-in's note past its note-off until exactly the pedal lifts",
+                set.ok && heldLast == (int) (2.0 * sampleRate) - 1,
+                set.ok ? "sound until " + juce::String (heldLast) + ", pedal up at " + juce::String ((int) (2.0 * sampleRate)) : set.error);
+        midimodel::writeSustain (clip, {}, nullptr);
+    }
     const float* x = audioOut.getReadPointer (0, on + 2400);
     expectNear ("it is the plug-in's 440 Hz at velocity 1 (amplitude 0.5), centre-panned stereo at unity",
                 db (dsp::toneAmplitude (x, 19200, 440.0, sampleRate)), -6.0206, 0.02, "dB");
@@ -2139,6 +2157,141 @@ void SelfTest::testPluginInstrument()
     expect ("list_plugins shows the instrument as one", listed.contains ("Meridian Test Synth") && listed.contains (R"("instrument": true)"), listed);
     clearTracks();
 #endif
+}
+
+//==============================================================================
+// The sustain pedal: in clips, from the keyboard, recorded, and through the AI tools.
+
+void SelfTest::testSustainPedal()
+{
+    beginGroup ("Sustain pedal");
+    auto& tools = app.getRemoteTools();
+    auto call = [&tools] (const juce::String& tool, const juce::String& arguments) { return tools.call (tool, juce::JSON::parse (arguments)); };
+    auto* session = app.getSession();
+    clearTracks();
+    call ("set_tempo", R"({"bpm":120,"clear_changes":true})");
+
+    // A4 for half a beat (0.25 s); the pedal down for the first four beats (0-2 s).
+    call ("create_track", R"({"kind":"instrument","name":"Piano"})");
+    call ("add_midi_clip", R"({"track":"Piano","start_beat":0,"length_beats":8})");
+    const auto added = call ("add_notes", R"({"track":"Piano","clip":1,"notes":[{"pitch":69,"start_beats":0,"length_beats":0.5,"velocity":1}],)"
+                                          R"("sustain":[{"start_beats":0,"length_beats":4}]})");
+    const auto listed = call ("list_notes", R"({"track":"Piano","clip":1})");
+    const auto* pedalList = listed.data["sustain"].getArray();
+    expect ("add_notes sets the pedal and list_notes reports it (beats 0-4)",
+            added.ok && pedalList != nullptr && pedalList->size() == 1
+                && juce::exactlyEqual ((double) (*pedalList)[0]["start_beats"], 0.0)
+                && juce::exactlyEqual ((double) (*pedalList)[0]["length_beats"], 4.0),
+            juce::JSON::toString (listed.data["sustain"], true));
+
+    auto peakDb = [this] (const juce::AudioBuffer<float>& audio, double from, double to)
+    {
+        const auto a = (int) (from * sampleRate), b = std::min ((int) (to * sampleRate), audio.getNumSamples());
+        return b > a ? db (dsp::measureLevels (audio.getReadPointer (0, a), b - a).peak) : -999.0;
+    };
+    const auto pedalled = readAudio (bounce ("sustain_pedal", 0, (juce::int64) (4.0 * sampleRate)).file);
+    const double whileHeld = peakDb (pedalled, 1.0, 1.5), afterLift = peakDb (pedalled, 2.6, 3.0);
+    call ("add_notes", R"({"track":"Piano","clip":1,"notes":[],"sustain":[]})");
+    const auto dry = readAudio (bounce ("sustain_none", 0, (juce::int64) (4.0 * sampleRate)).file);
+    const double withoutPedal = peakDb (dry, 1.0, 1.5);
+    expect ("the built-in synth holds a released note while the pedal is down, and releases it when it lifts",
+            whileHeld > -30.0 && afterLift < -100.0 && withoutPedal < -100.0,
+            "held " + fmt (whileHeld) + " dB at 1.0-1.5 s; " + fmt (afterLift) + " dB after the lift; without the pedal "
+                + fmt (withoutPedal) + " dB");
+
+    // A pedal range that began before the clip's (trimmed) start goes down at the clip start:
+    // with the front trimmed by 0.1 s, a note at 0.25 s still rings while the pedal is held.
+    auto clipNode = track::clips (session->getTrack (0)).getChild (0);
+    midimodel::writeSustain (clipNode, { { 0, 4 * midi::ticksPerQuarter } }, nullptr);
+    midi::NoteSequence oneNote;
+    oneNote.add ({ 69, 1.0f, midi::ticksPerQuarter / 2, midi::ticksPerQuarter / 4 });
+    midimodel::writeNotes (clipNode, oneNote, nullptr);
+    const auto trim = (juce::int64) (0.1 * sampleRate);
+    clipNode.setProperty (ids::start, clip::start (clipNode) + trim, nullptr);
+    clipNode.setProperty (ids::offset, clip::offset (clipNode) + trim, nullptr);
+    clipNode.setProperty (ids::length, clip::length (clipNode) - trim, nullptr);
+    const auto chased = readAudio (bounce ("sustain_chased", 0, (juce::int64) (4.0 * sampleRate)).file);
+    expect ("a pedal held from before a trimmed clip's start still holds its notes",
+            peakDb (chased, 1.0, 1.5) > -30.0 && peakDb (chased, 2.6, 3.0) < -100.0 && findSessionProblem (*session).isEmpty(),
+            fmt (peakDb (chased, 1.0, 1.5)) + " dB while held, " + fmt (peakDb (chased, 2.6, 3.0)) + " dB after");
+
+    // Damaged pedal data is found and repaired.
+    auto list = clipNode.getChildWithName (ids::SUSTAIN);
+    juce::ValueTree overlapping (ids::PEDAL);
+    overlapping.setProperty (ids::start, 100, nullptr);
+    overlapping.setProperty (ids::length, 5000, nullptr);
+    list.appendChild (overlapping, nullptr);
+    const auto problem = findSessionProblem (*session);
+    repairSession (*session);
+    const auto repaired = midimodel::readSustain (clipNode);
+    expect ("overlapping pedal ranges are found and merged by repair",
+            problem.isNotEmpty() && findSessionProblem (*session).isEmpty() && repaired.size() == 1 && repaired[0].start == 0
+                && repaired[0].length == 5100,
+            problem);
+
+    // From the keyboard: the pedal is captured while recording, timed like the notes.
+    {
+        AudioEngine engine;
+        engine.prepare (sampleRate, 512);
+        engine.getMasterBus().consoleEnabled.store (false);
+        auto graph = std::make_unique<RenderGraph>();
+        graph->maxBlockSize = 512;
+        graph->sampleRate = sampleRate;
+        TrackRender keys;
+        keys.state = std::make_shared<TrackRealtimeState> (7);
+        keys.state->recordArmed.store (true);
+        keys.numChannels = 2;
+        keys.inputChannel = -1;
+        keys.instrument = std::make_shared<InstrumentState>();
+        keys.buffer.setSize (2, 512);
+        keys.clipScratch.setSize (2, 512);
+        graph->tracks.push_back (std::move (keys));
+        engine.publishGraph (std::move (graph));
+
+        auto& transport = engine.getTransport();
+        transport.play (Transport::State::recording);
+        renderEngine (engine, 1024, 512);
+        engine.pushLiveSustain (true, 0.0);
+        engine.pushLiveMidi (60, 1.0f, true, 0.0);
+        renderEngine (engine, 512, 512);                 // both at 1024
+        engine.pushLiveMidi (60, 0.0f, false, 0.0);
+        renderEngine (engine, 512, 512);                 // key up at 1536: the pedal holds it
+        const auto ringing = renderEngine (engine, 4096, 512);
+        engine.pushLiveSustain (false, 0.0);
+        renderEngine (engine, 512, 512);                 // pedal up at 6144
+        renderEngine (engine, 48000, 512);
+        const auto after = renderEngine (engine, 4800, 512);
+        transport.stop();
+
+        std::vector<AudioEngine::RecordedMidi> captured;
+        AudioEngine::RecordedMidi m;
+        while (engine.popRecordedMidi (m))
+            captured.push_back (m);
+        juce::String detail;
+        bool pedalDown = false, pedalUp = false;
+        for (const auto& e : captured)
+        {
+            detail << (e.pitch == midi::sustainPedal ? juce::String ("pedal") : juce::String (e.pitch)) << (e.on ? " on@" : " off@") << e.time << " ";
+            pedalDown = pedalDown || (e.pitch == midi::sustainPedal && e.on && e.time == 1024);
+            pedalUp = pedalUp || (e.pitch == midi::sustainPedal && ! e.on && e.time == 6144);
+        }
+        float ringingPeak = 0.0f, afterPeak = 0.0f;
+        for (const auto s : ringing) ringingPeak = std::max (ringingPeak, std::abs (s));
+        for (const auto s : after) afterPeak = std::max (afterPeak, std::abs (s));
+        expect ("from the keyboard the pedal holds a released key, and recording captures it on its samples",
+                pedalDown && pedalUp && db (ringingPeak) > -30.0 && afterPeak < 1.0e-6f, detail + "; ringing " + fmt (db (ringingPeak)) + " dB");
+
+        // And the take has the pedal as a range, from where it went down to where it came up.
+        std::vector<midi::RecordedEvent> events;
+        for (const auto& e : captured)
+            events.push_back ({ e.time, e.pitch, e.velocity, e.on });
+        const auto take = midi::buildTake (std::move (events), 0, 60000, 0, midi::TempoMap (120.0), sampleRate);
+        expect ("the recorded take holds the pedal as one range (1024 to 6144 samples = 40.96 to 245.76 ticks)",
+                take.sustain.size() == 1 && take.sustain[0].start == 41 && take.sustain[0].length == 205,
+                take.sustain.empty() ? juce::String ("none")
+                                     : juce::String (take.sustain[0].start) + " + " + juce::String (take.sustain[0].length));
+    }
+    clearTracks();
 }
 
 //==============================================================================

@@ -331,6 +331,16 @@ void PianoRollComponent::paint (juce::Graphics& g)
         }
     }
 
+    // The sustain pedal: a bar along the bottom of the ruler wherever it is held.
+    g.setColour (juce::Colour (0xffe8a33d).withAlpha (0.85f));
+    for (const auto& r : midimodel::readSustain (clipNode))
+    {
+        const float x0 = std::max ((float) grid.getX(), xForTick (r.start));
+        const float x1 = std::min ((float) grid.getRight(), xForTick (r.end()));
+        if (x1 > x0)
+            g.fillRect (x0, (float) (toolbarHeight + rulerHeight - 4), x1 - x0, 3.0f);
+    }
+
     // Notes.
     for (const auto& n : clip::notes (clipNode))
     {

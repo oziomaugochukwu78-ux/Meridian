@@ -33,6 +33,12 @@ juce::ValueTree addNote (juce::ValueTree clip, const midi::Note&, juce::UndoMana
 /** Replaces every note of a MIDI clip (undoable). */
 void writeNotes (juce::ValueTree clip, const midi::NoteSequence&, juce::UndoManager*);
 
+/** Where a MIDI clip holds the sustain pedal (normalised; empty if never). */
+std::vector<midi::PedalRange> readSustain (const juce::ValueTree& clip);
+
+/** Replaces a MIDI clip's sustain-pedal ranges (undoable); normalises them first. */
+void writeSustain (juce::ValueTree clip, const std::vector<midi::PedalRange>&, juce::UndoManager*);
+
 /** An instrument track's SYNTH node as synth parameters (defaults for missing values). */
 synth::PolySynth::Params readSynthParams (const juce::ValueTree& synthNode);
 

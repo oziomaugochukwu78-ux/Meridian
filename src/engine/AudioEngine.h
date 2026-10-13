@@ -88,13 +88,16 @@ public:
         exact relative position (constant latency, no jitter). */
     void pushLiveMidi (int pitch, float velocity, bool noteOn, double timeSeconds) noexcept;
 
+    /** The keyboard's sustain pedal (CC 64), timed and routed like its notes. */
+    void pushLiveSustain (bool down, double timeSeconds) noexcept;
+
     /** A note captured on a record-armed instrument track while recording, at
         the timeline sample where it was played into the engine. */
     struct RecordedMidi
     {
         int trackId = 0;
         juce::int64 time = 0;
-        int pitch = 60;
+        int pitch = 60;         ///< or midi::sustainPedal (on = pedal down)
         float velocity = 0.0f;
         bool on = false;
     };

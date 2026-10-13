@@ -118,6 +118,17 @@ juce::var schema (std::initializer_list<Param> params)
                     { "velocity", makeObject ({ { "type", "number" }, { "description", "Loudness 0-1 (default 0.8)" } }) } }) },
                 { "required", juce::Array<juce::var> { "pitch", "start_beats", "length_beats" } } }));
         }
+        else if (juce::String (p.type) == "ranges")
+        {
+            // Stretches of a clip (the sustain pedal), in beats from the clip start.
+            set (property, "type", "array");
+            set (property, "items", makeObject ({
+                { "type", "object" },
+                { "properties", makeObject ({
+                    { "start_beats", makeObject ({ { "type", "number" }, { "description", "Pedal down, in beats from the clip start" } }) },
+                    { "length_beats", makeObject ({ { "type", "number" }, { "description", "How long it stays down, in beats" } }) } }) },
+                { "required", juce::Array<juce::var> { "start_beats", "length_beats" } } }));
+        }
         else
         {
             set (property, "type", p.type);
@@ -329,12 +340,15 @@ const std::vector<ToolInfo>& toolTable()
           "note number (60 = middle C, 62 = D, 64 = E, 65 = F, 67 = G, 69 = A, 71 = B, 72 = the next C). "
           "On drum tracks the pitch picks the drum (General MIDI): 36 kick, 37 side stick, 38 snare, 39 clap, "
           "42 closed hi-hat, 44 pedal hi-hat, 46 open hi-hat, 41 low tom, 45 mid tom, 48 high tom, 49 crash, "
-          "51 ride, 56 cowbell. Notes outside the clip are kept but not heard until the clip is lengthened.",
+          "51 ride, 56 cowbell. Notes outside the clip are kept but not heard until the clip is lengthened. "
+          "\"sustain\" holds the sustain pedal down over stretches of the clip (released keys keep ringing, "
+          "as on a piano); it replaces the clip's pedal.",
           schema ({ { "track", "track", "Instrument track number or name", true },
                     { "clip", "track", "Clip number (from list_clips) or name", true },
-                    { "notes", "notes", "Notes to add, e.g. [{\"pitch\": 60, \"start_beats\": 0, \"length_beats\": 1}]", true },
-                    { "replace", "boolean", "Remove the clip's existing notes first (default false)" } }) },
-        { "list_notes", "List notes", "The notes of a MIDI clip, in beats from the clip start.",
+                    { "notes", "notes", "Notes to add, e.g. [{\"pitch\": 60, \"start_beats\": 0, \"length_beats\": 1}] ([] for none)", true },
+                    { "replace", "boolean", "Remove the clip's existing notes first (default false)" },
+                    { "sustain", "ranges", "Where the sustain pedal is down, e.g. [{\"start_beats\": 0, \"length_beats\": 4}] ([] lifts it everywhere)" } }) },
+        { "list_notes", "List notes", "The notes of a MIDI clip, and where its sustain pedal is down, in beats from the clip start.",
           schema ({ { "track", "track", "Instrument track number or name", true },
                     { "clip", "track", "Clip number (from list_clips) or name", true } }) },
         { "set_synth", "Shape an instrument's sound",
@@ -1598,7 +1612,25 @@ RemoteTools::Result RemoteTools::addNotes (const juce::var& args)
         notes.push_back ({ (int) pitch, (float) velocity, offsetTicks + beatsToTicks (start), juce::jmax<int64_t> (1, beatsToTicks (length)) });
     }
 
+    std::vector<midi::PedalRange> sustain;
+    const bool setsSustain = args.hasProperty ("sustain");
+    if (setsSustain)
+    {
+        const auto* ranges = args["sustain"].getArray();
+        if (ranges == nullptr || ranges->size() > 10000)
+            return { false, {}, "\"sustain\" must be an array of at most 10000 {start_beats, length_beats}." };
+        for (const auto& r : *ranges)
+        {
+            const double start = r["start_beats"], length = r["length_beats"];
+            if (start < 0.0 || start > maxBeats || length <= 0.0 || length > maxBeats)
+                return { false, {}, "Each sustain range needs start_beats of 0 or more and length_beats of more than 0." };
+            sustain.push_back ({ offsetTicks + beatsToTicks (start), juce::jmax<int64_t> (1, beatsToTicks (length)) });
+        }
+    }
+
     auto* um = beginEdit ("Add Notes");
+    if (setsSustain)
+        midimodel::writeSustain (c, sustain, um);
     const bool replace = args.hasProperty ("replace") && (bool) args["replace"];
     if (replace)
     {
@@ -1636,7 +1668,11 @@ RemoteTools::Result RemoteTools::listNotes (const juce::var& args)
                                   { "start_beats", (double) (n.start - offsetTicks) / (double) midi::ticksPerQuarter },
                                   { "length_beats", (double) n.length / (double) midi::ticksPerQuarter },
                                   { "velocity", std::round (n.velocity * 1000.0f) / 1000.0 } }));
-    return { true, makeObject ({ { "clip", clip::name (c) }, { "notes", result } }), {} };
+    juce::Array<juce::var> pedal;
+    for (const auto& r : midimodel::readSustain (c))
+        pedal.add (makeObject ({ { "start_beats", (double) (r.start - offsetTicks) / (double) midi::ticksPerQuarter },
+                                 { "length_beats", (double) r.length / (double) midi::ticksPerQuarter } }));
+    return { true, makeObject ({ { "clip", clip::name (c) }, { "notes", result }, { "sustain", pedal } }), {} };
 }
 
 RemoteTools::Result RemoteTools::setSynth (const juce::var& args)

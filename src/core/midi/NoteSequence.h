@@ -64,4 +64,21 @@ private:
     std::vector<Note> notes;
 };
 
+/** In the engine's event streams (live input, clip events, recording) a "pitch"
+    of sustainPedal is the sustain pedal (MIDI CC 64): on = pedal down. */
+inline constexpr int sustainPedal = -1;
+
+/** A stretch of a clip with the sustain pedal held, in ticks like notes. */
+struct PedalRange
+{
+    int64_t start = 0;
+    int64_t length = 1;
+
+    int64_t end() const noexcept { return start + length; }
+};
+
+/** Sorted, each at least a tick long, starting at or after zero, with
+    overlapping or touching ranges merged (the pedal is either down or up). */
+std::vector<PedalRange> normalisedPedal (std::vector<PedalRange>);
+
 } // namespace meridian::midi

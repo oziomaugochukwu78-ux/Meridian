@@ -3,6 +3,7 @@
 // equal-tempered frequency (A4 = 440 Hz), amplitude velocity / 2, starting at
 // zero phase on its MIDI event's sample and stopping dead at the note-off: no
 // envelope, so the self test can see exactly where every note starts and ends.
+// The sustain pedal (CC 64) holds released notes until it lifts, stopping dead there.
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -27,6 +28,7 @@ public:
     void prepareToPlay (double rate, int) override
     {
         sampleRate = rate;
+        pedal = false;
         for (auto& v : voices)
             v = {};
     }
@@ -64,6 +66,7 @@ private:
     struct Voice
     {
         int note = -1;
+        bool sustained = false; // released, held by the pedal
         double phase = 0.0, increment = 0.0, amplitude = 0.0;
     };
 
@@ -75,6 +78,7 @@ private:
                 if (v.note < 0)
                 {
                     v.note = m.getNoteNumber();
+                    v.sustained = false;
                     v.phase = 0.0;
                     v.increment = 2.0 * juce::MathConstants<double>::pi * 440.0 * std::pow (2.0, (v.note - 69) / 12.0) / sampleRate;
                     v.amplitude = 0.5 * m.getFloatVelocity();
@@ -85,12 +89,29 @@ private:
         {
             for (auto& v : voices)
                 if (v.note == m.getNoteNumber())
-                    v.note = -1;
+                {
+                    if (pedal)
+                        v.sustained = true;
+                    else
+                        v.note = -1;
+                }
+        }
+        else if (m.isSustainPedalOn())
+        {
+            pedal = true;
+        }
+        else if (m.isSustainPedalOff())
+        {
+            pedal = false;
+            for (auto& v : voices)
+                if (v.sustained)
+                    v = {};
         }
         else if (m.isAllNotesOff() || m.isAllSoundOff())
         {
+            pedal = false;
             for (auto& v : voices)
-                v.note = -1;
+                v = {};
         }
     }
 
@@ -111,6 +132,7 @@ private:
     }
 
     double sampleRate = 48000.0;
+    bool pedal = false;
     std::array<Voice, 8> voices {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TestSynthProcessor)

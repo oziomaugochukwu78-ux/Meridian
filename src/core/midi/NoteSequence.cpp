@@ -71,4 +71,28 @@ int64_t NoteSequence::endTick() const noexcept
     return end;
 }
 
+std::vector<PedalRange> normalisedPedal (std::vector<PedalRange> ranges)
+{
+    for (auto& r : ranges)
+    {
+        if (r.start < 0)
+        {
+            r.length += r.start; // the part before zero is cut off
+            r.start = 0;
+        }
+        r.length = std::max<int64_t> (1, r.length);
+    }
+    std::sort (ranges.begin(), ranges.end(), [] (const PedalRange& a, const PedalRange& b) { return a.start < b.start; });
+
+    std::vector<PedalRange> merged;
+    for (const auto& r : ranges)
+    {
+        if (! merged.empty() && r.start <= merged.back().end())
+            merged.back().length = std::max (merged.back().end(), r.end()) - merged.back().start;
+        else
+            merged.push_back (r);
+    }
+    return merged;
+}
+
 } // namespace meridian::midi

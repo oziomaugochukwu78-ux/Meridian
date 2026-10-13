@@ -1,6 +1,7 @@
 #include "SessionRepair.h"
 
 #include "Automation.h"
+#include "MidiModel.h"
 #include "Routing.h"
 
 #include <dsp/FaderTaper.h>
@@ -13,6 +14,23 @@ namespace meridian
 {
 namespace
 {
+/** A SUSTAIN list as midimodel::writeSustain leaves it: PEDALs only, each at least a
+    tick long from zero on, sorted, with gaps between them (touching ones are merged). */
+bool sustainIsValid (const juce::ValueTree& list)
+{
+    juce::int64 previousEnd = -1;
+    for (const auto& p : list)
+    {
+        if (! p.hasType (ids::PEDAL) || ! p.hasProperty (ids::start) || ! p.hasProperty (ids::length))
+            return false;
+        const auto start = (juce::int64) p[ids::start], length = (juce::int64) p[ids::length];
+        if (start < 0 || length < 1 || start <= previousEnd)
+            return false;
+        previousEnd = start + length;
+    }
+    return true;
+}
+
 class Repairer
 {
 public:
@@ -301,11 +319,23 @@ private:
 
     void repairNotes (juce::ValueTree c, const juce::String& where)
     {
-        // Exactly one NOTES list, holding only valid NOTEs.
-        juce::ValueTree list;
+        // Exactly one NOTES list, holding only valid NOTEs; at most one SUSTAIN list.
+        juce::ValueTree list, sustain;
         for (int i = 0; i < c.getNumChildren(); ++i)
         {
-            if (! c.getChild (i).hasType (ids::NOTES))
+            if (c.getChild (i).hasType (ids::SUSTAIN))
+            {
+                if (sustain.isValid())
+                {
+                    note (where, "removed a duplicate <SUSTAIN> list");
+                    c.removeChild (i--, nullptr);
+                }
+                else
+                {
+                    sustain = c.getChild (i);
+                }
+            }
+            else if (! c.getChild (i).hasType (ids::NOTES))
             {
                 note (where, "removed an unknown <" + c.getChild (i).getType().toString() + "> element");
                 c.removeChild (i--, nullptr);
@@ -320,6 +350,17 @@ private:
                 c.removeChild (i--, nullptr);
             }
         }
+        if (sustain.isValid())
+        {
+            // Sorted, non-overlapping ranges of at least a tick: rewrite the list if it is not.
+            removeChildrenNotOfType (sustain, ids::PEDAL, where);
+            if (! sustainIsValid (sustain))
+            {
+                note (where, "sorted and merged the sustain-pedal ranges");
+                midimodel::writeSustain (c, midimodel::readSustain (c), nullptr);
+            }
+        }
+
         if (! list.isValid())
         {
             note (where, "added the missing <NOTES> list");
@@ -659,15 +700,24 @@ juce::String findSessionProblem (const Session& session)
             if (clip::isMidi (c) != instrument)             return clipName + " is the wrong kind of clip for its track";
             if (clip::isMidi (c))
             {
-                int lists = 0;
+                int lists = 0, sustainLists = 0;
                 for (const auto& child : c)
                 {
+                    if (child.hasType (ids::SUSTAIN))
+                    {
+                        ++sustainLists;
+                        if (! sustainIsValid (child))
+                            return clipName + " has invalid sustain-pedal ranges";
+                        continue;
+                    }
                     if (! child.hasType (ids::NOTES))
                         return clipName + " has an unknown <" + child.getType().toString() + "> element";
                     ++lists;
                 }
                 if (lists != 1)
                     return clipName + " has " + juce::String (lists) + " <NOTES> lists";
+                if (sustainLists > 1)
+                    return clipName + " has " + juce::String (sustainLists) + " <SUSTAIN> lists";
                 for (const auto& n : clip::notes (c))
                 {
                     if (! n.hasType (ids::NOTE))

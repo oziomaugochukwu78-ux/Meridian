@@ -146,6 +146,55 @@ TEST_CASE ("Attack and release take the time they are set to", "[synth]")
     CHECK (peak (release, 0, 480) > 0.9);                                     // no jump at note-off (no click)
 }
 
+TEST_CASE ("Sustain pedal: released keys ring at full level until the pedal lifts", "[synth]")
+{
+    auto p = pureSine();
+    p.release = 0.05;
+    synth::PolySynth s;
+    s.prepare (rate);
+    s.setParams (p);
+
+    // Pedal down, A4 pressed and released: it keeps sounding at its sustain level.
+    s.setSustain (true);
+    s.noteOn (69, 1.0f);
+    render (s, 4800);
+    s.noteOff (69);
+    const auto held = render (s, 24000);
+    CHECK (peak (held, 12000) == Approx (1.0).margin (0.01));
+    CHECK (s.getNumActiveVoices() == 1);
+
+    // A key still down when the pedal lifts keeps sounding; the released one stops.
+    s.noteOn (76, 1.0f);
+    render (s, 4800);
+    s.setSustain (false);
+    render (s, (int) (0.2 * rate)); // A4's 50 ms release is long over
+    CHECK (s.getNumActiveVoices() == 1);
+    const auto stillHeld = render (s, 9600);
+    CHECK (dsp::toneAmplitude (stillHeld.data(), 9600, 659.2551138, rate) == Approx (1.0).margin (0.01));
+    CHECK (dsp::toneAmplitude (stillHeld.data(), 9600, 440.0, rate) < 0.01); // A4 gone (what is left is E5's leakage)
+
+    // Pressing a sustained key again restarts it held by the key, not the pedal.
+    s.noteOff (76);
+    render (s, (int) (0.2 * rate));
+    CHECK (s.getNumActiveVoices() == 0);
+    s.setSustain (true);
+    s.noteOn (60, 1.0f);
+    s.noteOff (60);
+    s.noteOn (60, 1.0f); // re-struck under the pedal
+    s.setSustain (false);
+    render (s, (int) (0.2 * rate));
+    CHECK (s.getNumActiveVoices() == 1); // its key is down
+
+    // allNotesOff (stop, locate) lifts the pedal too: nothing can hang.
+    s.setSustain (true);
+    s.allNotesOff();
+    CHECK_FALSE (s.isSustainDown());
+    s.noteOn (62, 1.0f);
+    s.noteOff (62);
+    render (s, (int) (0.3 * rate));
+    CHECK (s.getNumActiveVoices() == 0);
+}
+
 TEST_CASE ("Polyphony is limited and voice stealing never drops the newest note", "[synth]")
 {
     synth::PolySynth s;
