@@ -1,6 +1,7 @@
 #include "TrackHeader.h"
 
 #include "model/Automation.h"
+#include "model/Playlists.h"
 #include "ui/Theme.h"
 
 namespace meridian
@@ -59,6 +60,11 @@ TrackHeader::TrackHeader (AppController& a, EditState& s, juce::ValueTree t)
     infoLabel.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (infoLabel);
 
+    playlistButton.setTooltip ("Playlist: switch takes, start a new or duplicate playlist, rename, delete, "
+                               "or comp the selected range from another playlist");
+    playlistButton.onClick = [this] { showPlaylistMenu(); };
+    addAndMakeVisible (playlistButton);
+
     addAndMakeVisible (meter);
 
     trackNode.addListener (this);
@@ -95,6 +101,10 @@ void TrackHeader::refresh()
                            + (aux || instrument ? juce::String() : track::channels (trackNode) == 2 ? "   stereo" : "   mono"),
                        juce::dontSendNotification);
     recordButton.setVisible (! track::isAux (trackNode)); // instruments record MIDI from the keyboard; buses record nothing
+
+    // Buses have no clips, so no playlists.
+    playlistButton.setVisible (! aux);
+    playlistButton.setButtonText (aux ? juce::String() : playlists::activeName (trackNode));
 
     meter.setNumChannels (track::channels (trackNode));
     repaint();
@@ -147,6 +157,7 @@ void TrackHeader::resized()
         b->setBounds (keys.removeFromLeft (28));
         keys.removeFromLeft (4);
     }
+    playlistButton.setBounds (keys);
 
     area.removeFromTop (4);
     infoLabel.setBounds (area.removeFromTop (18));
@@ -207,6 +218,125 @@ void TrackHeader::showMenu()
                             else if (result == 3)
                                 self.app.deleteTrack (self.trackNode); // destroys this header: nothing after this
                         });
+}
+
+//==============================================================================
+// Playlists
+
+juce::PopupMenu TrackHeader::buildPlaylistMenu() const
+{
+    juce::PopupMenu menu;
+    if (track::isAux (trackNode))
+        return menu;
+
+    // Item ids encode an index into playlists::names, so stop below the next block.
+    const auto all = playlists::names (trackNode);
+    const auto active = playlists::activeName (trackNode);
+    const int count = juce::jmin (all.size(), compFrom - deleteFrom);
+
+    menu.addSectionHeader ("Playlists");
+    for (int i = 0; i < count; ++i)
+        menu.addItem (switchTo + i, all[i], true, all[i] == active);
+
+    menu.addSeparator();
+    menu.addItem (newPlaylist, "New Playlist");
+    menu.addItem (duplicatePlaylist, "Duplicate Playlist");
+    menu.addItem (renamePlaylist, "Rename Playlist...");
+
+    // Comping copies the Edit selection's range, so it needs a range on this track.
+    const bool hasRange = editState.hasTimeRange() && editState.selectedTrackIds.contains (track::id (trackNode));
+    juce::PopupMenu comp, remove;
+    for (int i = 0; i < count; ++i)
+    {
+        if (all[i] == active)
+            continue;
+        comp.addItem (compFrom + i, all[i], hasRange);
+        remove.addItem (deleteFrom + i, all[i]);
+    }
+    menu.addSeparator();
+    menu.addSubMenu (hasRange ? "Comp Selection From" : "Comp Selection From (select a range on this track)", comp,
+                     hasRange && comp.getNumItems() > 0);
+    menu.addSubMenu ("Delete Playlist", remove, remove.getNumItems() > 0);
+    return menu;
+}
+
+void TrackHeader::showPlaylistMenu()
+{
+    buildPlaylistMenu().showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&playlistButton),
+                                       [safe = juce::Component::SafePointer<TrackHeader> (this)] (int result)
+                                       {
+                                           if (safe != nullptr && result != 0)
+                                               safe->runPlaylistItem (result);
+                                       });
+}
+
+void TrackHeader::runPlaylistItem (int item)
+{
+    auto* session = app.getSession();
+    auto* um = app.getUndoManager();
+    if (session == nullptr || um == nullptr || track::isAux (trackNode))
+        return;
+
+    const auto all = playlists::names (trackNode);
+    auto nameAt = [&all] (int index) { return juce::isPositiveAndBelow (index, all.size()) ? all[index] : juce::String(); };
+
+    // Undo names match the AI tool's, so the history reads the same whoever made the edit.
+    if (item == newPlaylist || item == duplicatePlaylist)
+    {
+        um->beginNewTransaction (item == newPlaylist ? "New Playlist" : "Duplicate Playlist");
+        playlists::create (*session, trackNode, item == duplicatePlaylist, um);
+    }
+    else if (item == renamePlaylist)
+    {
+        showRenamePlaylist();
+    }
+    else if (item >= compFrom)
+    {
+        const auto name = nameAt (item - compFrom);
+        if (name.isEmpty() || ! editState.hasTimeRange())
+            return;
+        um->beginNewTransaction ("Comp");
+        playlists::promote (*session, trackNode, name, editState.selectionStart, editState.selectionEnd, um);
+    }
+    else if (item >= deleteFrom)
+    {
+        if (const auto name = nameAt (item - deleteFrom); playlists::find (trackNode, name).isValid())
+        {
+            um->beginNewTransaction ("Delete Playlist");
+            playlists::remove (trackNode, name, um);
+        }
+    }
+    else if (item >= switchTo)
+    {
+        if (const auto name = nameAt (item - switchTo); playlists::find (trackNode, name).isValid())
+        {
+            um->beginNewTransaction ("Switch Playlist");
+            playlists::activate (trackNode, name, um);
+        }
+    }
+}
+
+void TrackHeader::showRenamePlaylist()
+{
+    const auto oldName = playlists::activeName (trackNode);
+    auto* window = new juce::AlertWindow ("Rename Playlist", {}, juce::MessageBoxIconType::NoIcon);
+    window->addTextEditor ("name", oldName);
+    window->addButton ("Rename", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    window->enterModalState (true, juce::ModalCallbackFunction::create (
+        [safe = juce::Component::SafePointer<TrackHeader> (this), oldName, window] (int result)
+        {
+            const auto newName = window->getTextEditorContents ("name").trim();
+            if (safe == nullptr || result != 1 || newName.isEmpty() || newName == oldName)
+                return;
+            auto& self = *safe;
+            auto* um = self.app.getUndoManager();
+            if (um == nullptr)
+                return;
+            um->beginNewTransaction ("Rename Playlist");
+            if (! playlists::rename (self.trackNode, oldName, newName, um) && self.app.showProblem)
+                self.app.showProblem ("Rename Playlist", "This track already has a playlist named \"" + newName + "\".");
+        }), true);
 }
 
 } // namespace meridian

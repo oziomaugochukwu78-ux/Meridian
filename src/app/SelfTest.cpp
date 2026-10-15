@@ -4,6 +4,7 @@
 #include "media/AudioImporter.h"
 #include "model/Automation.h"
 #include "model/MidiModel.h"
+#include "model/Playlists.h"
 #include "model/Routing.h"
 #include "model/SessionRepair.h"
 #include "media/TimeStretchEngine.h"
@@ -80,6 +81,7 @@ void SelfTest::start()
         testAutomation();
         testLoudnessAndExport();
         testTrackEditing();
+        testPlaylists();
         testPunchRecording();
         testTempoAndMeter();
         testPluginInstrument();
@@ -2619,6 +2621,165 @@ void SelfTest::testTrackEditing()
 }
 
 //==============================================================================
+// Playlists: alternate takes on one track, and comping one performance from
+// parts of several. Take 1 is a 1 kHz tone and take 2 a 500 Hz tone, so every
+// stretch of a render shows which take it came from.
+
+void SelfTest::testPlaylists()
+{
+    beginGroup ("Playlists and comping");
+    auto& tools = app.getRemoteTools();
+    auto call = [&tools] (const juce::String& tool, const juce::String& arguments) { return tools.call (tool, juce::JSON::parse (arguments)); };
+    auto* session = app.getSession();
+    auto& um = session->getUndoManager();
+    const auto end = clipStart + (juce::int64) (2.0 * sampleRate) + 4800;
+    const double expectedDb = toneDb + panCentreDb; // a mono test tone through a centred track
+
+    // Bit-exact comparisons need a memoryless master: the console's filters would carry
+    // take 1's audio into the comped range. Restored at the end.
+    auto state = session->getState();
+    const juce::var consoleBefore[] = { state[ids::consoleEnabled], state[ids::consoleDrive], state[ids::consoleCharacter], state[ids::consoleCurve] };
+    setConsole (false);
+
+    // Which take a stretch of the render holds: its 1 kHz and 500 Hz levels in dB.
+    // 12000 samples is a whole number of cycles of both, so neither leaks into the other.
+    auto takeLevels = [this] (const juce::AudioBuffer<float>& audio, juce::int64 from)
+    {
+        const auto* p = audio.getReadPointer (0, (int) from);
+        return std::pair { db (dsp::toneAmplitude (p, 12000, 1000.0, sampleRate)), db (dsp::toneAmplitude (p, 12000, 500.0, sampleRate)) };
+    };
+    auto largestDifference = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b, juce::int64 from, juce::int64 to)
+    {
+        if (a.getNumSamples() != b.getNumSamples() || a.getNumChannels() != b.getNumChannels())
+            return 1.0;
+        double worst = 0.0;
+        for (int ch = 0; ch < a.getNumChannels(); ++ch)
+            for (auto i = (int) from; i < (int) to; ++i)
+                worst = std::max (worst, (double) std::abs (a.getSample (ch, i) - b.getSample (ch, i)));
+        return worst;
+    };
+
+    clearTracks();
+    auto t = addToneTrack ("Vocal", 1, media.getChildFile ("tone1k_mono.wav"), clipStart);
+    um.clearUndoHistory();
+    expect ("a track starts with one playlist, named after the track (Vocal.01)",
+            playlists::names (t) == juce::StringArray { "Vocal.01" } && playlists::activeName (t) == "Vocal.01",
+            playlists::names (t).joinIntoString (", "));
+
+    const auto take1 = readAudio (bounce ("playlist_take1", 0, end).file);
+
+    // New: an empty playlist becomes active; take 1 is kept, and silent.
+    auto r = call ("playlist", R"({"track":"Vocal","action":"new"})");
+    const auto empty = bounce ("playlist_new", 0, end);
+    expect ("New Playlist: Vocal.02 becomes active and empty, so the track is silent; Vocal.01 is kept",
+            r.ok && playlists::activeName (t) == "Vocal.02" && track::clips (t).getNumChildren() == 0
+                && playlists::find (t, "Vocal.01").isValid() && db (empty.left.peak) < silentDb,
+            r.error + playlists::names (t).joinIntoString (", ") + ", peak " + fmt (db (empty.left.peak)) + " dB");
+
+    // Take 2, recorded onto the new playlist.
+    const auto tone500 = media.getChildFile ("tone500_mono.wav");
+    std::unique_ptr<juce::AudioFormatReader> reader (app.getFormatManager().createReaderFor (tone500));
+    const auto takeLength = reader != nullptr ? reader->lengthInSamples : 0;
+    session->addClip (t, tone500, clipStart, 0, takeLength, takeLength, "Take 2", nullptr);
+    const auto take2 = readAudio (bounce ("playlist_take2", 0, end).file);
+    const auto [take2At1k, take2At500] = takeLevels (take2, clipStart + 12000);
+    expect ("the new playlist plays only its own take (500 Hz at the expected level, no 1 kHz)",
+            std::abs (take2At500 - expectedDb) < 0.05 && take2At1k < -100.0,
+            "500 Hz " + fmt (take2At500) + " dB, 1 kHz " + fmt (take2At1k) + " dB");
+
+    // Switch back: take 1 plays again, to the bit; take 2 waits in Vocal.02.
+    r = call ("playlist", R"({"track":"Vocal","action":"switch","name":"Vocal.01"})");
+    const auto switched = readAudio (bounce ("playlist_switch", 0, end).file);
+    const auto stored = playlists::find (t, "Vocal.02").getChildWithName (ids::CLIPS);
+    expect ("Switch: Vocal.01 plays take 1 again, identical to the bit; Vocal.02 keeps take 2",
+            r.ok && playlists::activeName (t) == "Vocal.01" && juce::exactlyEqual (largestDifference (switched, take1, 0, end), 0.0)
+                && stored.getNumChildren() == 1,
+            r.error + "largest difference " + juce::String (largestDifference (switched, take1, 0, end)));
+
+    // Comp 1.0 s to 1.5 s of take 2 onto take 1 (0.5 s into each take).
+    const juce::int64 compStart = 48000, compEnd = 72000;
+    r = call ("playlist", R"({"track":"Vocal","action":"comp","name":"Vocal.02","start_seconds":1.0,"end_seconds":1.5})");
+    const auto comped = readAudio (bounce ("playlist_comp", 0, end).file);
+    const double inside = largestDifference (comped, take2, compStart, compEnd);
+    const double before = largestDifference (comped, take1, 0, compStart);
+    const double after = largestDifference (comped, take1, compEnd, end);
+    expect ("Comp: the range plays take 2 and the rest take 1, each identical to the bit, switching on the exact samples",
+            r.ok && track::clips (t).getNumChildren() == 3 && juce::exactlyEqual (inside, 0.0)
+                && juce::exactlyEqual (before, 0.0) && juce::exactlyEqual (after, 0.0),
+            r.error + juce::String (track::clips (t).getNumChildren()) + " clips; differences " + juce::String (before) + " / "
+                + juce::String (inside) + " / " + juce::String (after));
+    const auto source = stored.getChild (0);
+    expect ("comping copies and never moves: Vocal.02 keeps its whole take, and the session stays valid",
+            stored.getNumChildren() == 1 && clip::start (source) == clipStart && clip::length (source) == takeLength
+                && findSessionProblem (*session).isEmpty(),
+            findSessionProblem (*session));
+
+    um.undo();
+    const auto undone = readAudio (bounce ("playlist_comp_undo", 0, end).file);
+    expect ("undo takes the whole comp back in one step: take 1 plays unchanged",
+            track::clips (t).getNumChildren() == 1 && juce::exactlyEqual (largestDifference (undone, take1, 0, end), 0.0),
+            juce::String (track::clips (t).getNumChildren()) + " clips");
+    um.redo();
+
+    // Duplicate, rename and delete.
+    r = call ("playlist", R"({"track":"Vocal","action":"duplicate"})");
+    juce::Array<int> copyIds;
+    for (const auto& c : track::clips (t))
+        copyIds.add (clip::id (c));
+    bool freshIds = copyIds.size() == 3;
+    for (const auto& c : playlists::find (t, "Vocal.01").getChildWithName (ids::CLIPS))
+        freshIds = freshIds && ! copyIds.contains (clip::id (c));
+    const auto duplicated = readAudio (bounce ("playlist_duplicate", 0, end).file);
+    expect ("Duplicate: Vocal.03 is a copy of the comp with fresh clip ids, and plays it to the bit",
+            r.ok && playlists::activeName (t) == "Vocal.03" && freshIds
+                && juce::exactlyEqual (largestDifference (duplicated, comped, 0, end), 0.0),
+            r.error + playlists::names (t).joinIntoString (", "));
+
+    r = call ("playlist", R"({"track":"Vocal","action":"rename","name":"Vocal.03","new_name":"Vocal Comp"})");
+    const auto taken = call ("playlist", R"({"track":"Vocal","action":"rename","name":"Vocal Comp","new_name":"Vocal.01"})");
+    expect ("Rename: the active playlist becomes \"Vocal Comp\"; a name already in use is refused",
+            r.ok && playlists::activeName (t) == "Vocal Comp" && ! taken.ok, r.error + " / " + taken.error);
+
+    const auto activeRefused = call ("playlist", R"({"track":"Vocal","action":"delete","name":"Vocal Comp"})");
+    r = call ("playlist", R"({"track":"Vocal","action":"delete","name":"Vocal.02"})");
+    expect ("Delete: an alternate is removed; the active playlist is refused",
+            r.ok && ! activeRefused.ok && playlists::names (t) == juce::StringArray { "Vocal Comp", "Vocal.01" },
+            r.error + " / " + playlists::names (t).joinIntoString (", "));
+    const auto busRefused = call ("create_track", R"({"kind":"aux","name":"Bus"})").ok
+                                && ! call ("playlist", R"({"track":"Bus","action":"new"})").ok;
+    expect ("aux tracks have no clips, so the tool refuses playlists on them", busRefused, {});
+
+    // Every playlist survives a save and reload, with its clips and their audio files.
+    const auto saved = app.saveSession();
+    juce::String error;
+    const auto loaded = saved.wasOk() ? Session::load (session->getSessionFile(), error) : nullptr;
+    if (loaded != nullptr)
+    {
+        const auto lt = loaded->getTrack (0);
+        // Vocal.01 was stored holding the comp: three clips from two files.
+        const auto alternate = playlists::find (lt, "Vocal.01").getChildWithName (ids::CLIPS);
+        bool filesFound = alternate.getNumChildren() == 3;
+        for (const auto& c : alternate)
+            filesFound = filesFound && loaded->resolveStoredPath (c[ids::file].toString()).existsAsFile();
+        expect ("save and reload keep every playlist, the active one, and the alternates' clips and files",
+                playlists::activeName (lt) == "Vocal Comp" && playlists::names (lt) == playlists::names (t)
+                    && track::clips (lt).getNumChildren() == 3 && filesFound && findSessionProblem (*loaded).isEmpty(),
+                playlists::names (lt).joinIntoString (", ") + "; " + findSessionProblem (*loaded));
+    }
+    else
+    {
+        expect ("save and reload keep every playlist, the active one, and the alternates' clips and files", false,
+                saved.getErrorMessage() + error);
+    }
+
+    clearTracks();
+    state.setProperty (ids::consoleEnabled, consoleBefore[0], nullptr);
+    state.setProperty (ids::consoleDrive, consoleBefore[1], nullptr);
+    state.setProperty (ids::consoleCharacter, consoleBefore[2], nullptr);
+    state.setProperty (ids::consoleCurve, consoleBefore[3], nullptr);
+}
+
+//==============================================================================
 // Loudness (EBU R128) of bounces, normalisation, dither and FLAC.
 
 void SelfTest::testLoudnessAndExport()
@@ -3605,6 +3766,7 @@ void SelfTest::timerCallback()
                 {
                     testUserInterface();
                     testPianoRoll();
+                    testPlaylistSelector();
                     buildShowcaseSession(); // for the screenshots
                     phase = 4;
                 }
@@ -3626,6 +3788,7 @@ void SelfTest::timerCallback()
                 finishRecordingTest();
                 testUserInterface();
                 testPianoRoll();
+                testPlaylistSelector();
                 buildShowcaseSession();
                 ticks = 0;
                 phase = 4;
@@ -4198,6 +4361,86 @@ void SelfTest::testUserInterface()
             juce::String (session->getNumTracks()) + " tracks");
 
     main.showWindow (WindowKind::edit);
+}
+
+//==============================================================================
+// The track header's playlist selector, driven through its menu items (the
+// self test has no mouse for pop-up menus; the items are what a click runs).
+
+void SelfTest::testPlaylistSelector()
+{
+    beginGroup ("Edit window: playlist selector");
+    auto* session = app.getSession();
+    auto& editView = main.getEditView();
+    auto& view = editView.getEditState();
+    main.showWindow (WindowKind::edit);
+
+    clearTracks();
+    auto t = addToneTrack ("Take", 1, media.getChildFile ("tone1k_mono.wav"), clipStart);
+    session->addTrack ("Aux", 2, nullptr, Session::TrackKind::aux);
+    auto* header = editView.getHeader (0);
+    auto* lane = editView.getLane (0);
+    expect ("each audio track header shows its active playlist", header != nullptr && header->getPlaylistButtonText() == "Take.01",
+            header != nullptr ? header->getPlaylistButtonText() : juce::String ("no header"));
+    if (header == nullptr || lane == nullptr)
+        return;
+
+    auto clipsShown = [lane]
+    {
+        int n = 0;
+        while (lane->getClipComponent (n) != nullptr)
+            ++n;
+        return n;
+    };
+    auto enabledItems = [] (const juce::PopupMenu& menu)
+    {
+        juce::Array<int> found;
+        for (juce::PopupMenu::MenuItemIterator it (menu, true); it.next();)
+            if (it.getItem().itemID != 0 && it.getItem().isEnabled)
+                found.add (it.getItem().itemID);
+        return found;
+    };
+
+    header->runPlaylistItem (TrackHeader::newPlaylist);
+    expect ("New Playlist from the header: the button reads Take.02 and the lane empties",
+            header->getPlaylistButtonText() == "Take.02" && clipsShown() == 0,
+            header->getPlaylistButtonText() + ", " + juce::String (clipsShown()) + " clips shown");
+
+    session->addClip (t, media.getChildFile ("tone500_mono.wav"), clipStart, 0, 48000, 96000, "Take 2", nullptr);
+    view.setTimeSelection (clipStart + 12000, clipStart + 24000, {}); // a range on another track (none): comping stays off
+    auto items = enabledItems (header->buildPlaylistMenu());
+    expect ("the menu lists both playlists and offers Delete for the other, but not Comp without a range on this track",
+            items.contains (TrackHeader::switchTo + 0) && items.contains (TrackHeader::switchTo + 1)
+                && items.contains (TrackHeader::deleteFrom + 0) && ! items.contains (TrackHeader::deleteFrom + 1)
+                && ! items.contains (TrackHeader::compFrom + 0)
+                && items.contains (TrackHeader::newPlaylist) && items.contains (TrackHeader::duplicatePlaylist),
+            juce::String (items.size()) + " enabled items");
+
+    header->runPlaylistItem (TrackHeader::switchTo + 0); // names are sorted: 0 = Take.01
+    expect ("choosing Take.01 switches back: the lane shows take 1's clip",
+            header->getPlaylistButtonText() == "Take.01" && clipsShown() == 1
+                && clip::length (track::clips (t).getChild (0)) == 96000,
+            header->getPlaylistButtonText() + ", " + juce::String (clipsShown()) + " clips shown");
+
+    view.setTimeSelection (clipStart + 12000, clipStart + 24000, { track::id (t) });
+    header->runPlaylistItem (TrackHeader::compFrom + 1); // 1 = Take.02
+    expect ("Comp Selection From Take.02 replaces the selected range: three clips, the middle one from take 2",
+            clipsShown() == 3 && track::clips (t).getNumChildren() == 3
+                && clip::start (track::clips (t).getChild (2)) == clipStart + 12000
+                && clip::length (track::clips (t).getChild (2)) == 12000
+                && clip::offset (track::clips (t).getChild (2)) == 12000,
+            juce::String (track::clips (t).getNumChildren()) + " clips");
+    snapshot (*header, "playlist_selector.png");
+
+    session->getUndoManager().undo();
+    expect ("one undo removes the comp", track::clips (t).getNumChildren() == 1, juce::String (track::clips (t).getNumChildren()) + " clips");
+
+    auto* auxHeader = editView.getHeader (1);
+    expect ("aux tracks show no playlist selector and offer no playlist items",
+            auxHeader != nullptr && auxHeader->getPlaylistButtonText().isEmpty() && auxHeader->buildPlaylistMenu().getNumItems() == 0,
+            {});
+    view.clearSelection();
+    clearTracks();
 }
 
 void SelfTest::snapshot (juce::Component& component, const juce::String& fileName)

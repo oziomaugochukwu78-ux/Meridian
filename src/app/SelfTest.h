@@ -105,6 +105,7 @@ private:
     void testAutomation();
     void testLoudnessAndExport();
     void testTrackEditing();
+    void testPlaylists();
     void testPunchRecording();
     void testTempoAndMeter();
     void testPluginInstrument();
@@ -126,6 +127,7 @@ private:
     void finishRecordingTest();
     void testUserInterface();
     void testPianoRoll();
+    void testPlaylistSelector();
     void captureScreens();
     void finish();
 

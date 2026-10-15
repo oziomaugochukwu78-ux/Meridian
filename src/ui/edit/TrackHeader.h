@@ -50,6 +50,8 @@ private:
     void refresh();
     void toggleProperty (const juce::Identifier&, const juce::String& undoName);
     void showMenu();
+    void showPlaylistMenu();
+    void showRenamePlaylist();
 
     AppController& app;
     EditState& editState;
