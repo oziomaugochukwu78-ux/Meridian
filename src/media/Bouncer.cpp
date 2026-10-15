@@ -1,4 +1,5 @@
 #include "Bouncer.h"
+#include "Mp3Writer.h"
 
 #include "AudioImporter.h"
 
@@ -11,8 +12,16 @@ namespace meridian
 {
 
 std::unique_ptr<juce::AudioFormatWriter> createBounceWriter (const juce::File& file, double sampleRate, int numChannels,
-                                                            int bitDepth, const juce::String& format, juce::String& error)
+                                                            int bitDepth, const juce::String& format, juce::String& error, int mp3Kbps)
 {
+    if (format == "mp3")
+    {
+        file.deleteFile();
+        auto writer = createMp3Writer (file.createOutputStream(), sampleRate, numChannels, mp3Kbps, error);
+        if (writer == nullptr && error.isEmpty())
+            error = "Could not create " + file.getFullPathName() + ".";
+        return writer;
+    }
     if (format != "flac")
         return createSessionWriter (file, sampleRate, numChannels, bitDepth, format == "aiff", error);
 
@@ -135,11 +144,15 @@ BounceResult renderBounce (AudioEngine& engine, const BounceRequest& request, co
     const auto firstPassFile = request.normalise ? request.destination.getSiblingFile (request.destination.getFileNameWithoutExtension()
                                                                                        + ".unnormalised.wav")
                                                  : request.destination;
+    // MP3 takes floats: nothing is quantised or dithered before the encoder.
+    const bool mp3 = format == "mp3";
+    const int bits = mp3 ? 32 : request.bitDepth;
     FileOutput output;
     output.writer = request.normalise ? createBounceWriter (firstPassFile, request.sampleRate, 2, 32, "wav", result.error)
-                                      : createBounceWriter (request.destination, request.sampleRate, 2, request.bitDepth, format, result.error);
-    output.bits = request.normalise ? 32 : request.bitDepth;
-    output.dither = request.dither && ! request.normalise;
+                                      : createBounceWriter (request.destination, request.sampleRate, 2, bits, format, result.error,
+                                                            request.mp3Kbps);
+    output.bits = request.normalise ? 32 : bits;
+    output.dither = request.dither && ! request.normalise && ! mp3;
     output.shaped = request.noiseShaping;
     if (output.writer == nullptr)
         return result;
@@ -221,9 +234,10 @@ BounceResult renderBounce (AudioEngine& engine, const BounceRequest& request, co
         formats.registerBasicFormats();
         std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (firstPassFile));
         FileOutput finalOutput;
-        finalOutput.writer = createBounceWriter (request.destination, request.sampleRate, 2, request.bitDepth, format, result.error);
-        finalOutput.bits = request.bitDepth;
-        finalOutput.dither = request.dither;
+        finalOutput.writer = createBounceWriter (request.destination, request.sampleRate, 2, bits, format, result.error,
+                                                 request.mp3Kbps);
+        finalOutput.bits = bits;
+        finalOutput.dither = request.dither && ! mp3;
         finalOutput.shaped = request.noiseShaping;
         if (reader == nullptr || finalOutput.writer == nullptr)
             return fail (result.error.isNotEmpty() ? result.error : juce::String ("Could not read the first pass back."));

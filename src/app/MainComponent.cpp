@@ -197,7 +197,9 @@ void MainComponent::showBounceDialog()
         return;
 
     const auto suggested = app.makeSessionBounceRequest();
-    chooser = std::make_unique<juce::FileChooser> ("Bounce Mix", suggested.destination, suggested.aiff ? "*.aif" : "*.wav");
+    // The format follows the name typed: .wav, .aif, .flac or .mp3 (320 kbps); otherwise the session's.
+    chooser = std::make_unique<juce::FileChooser> ("Bounce Mix (type .mp3 or .flac to change the format)", suggested.destination,
+                                                   "*.wav;*.aif;*.aiff;*.flac;*.mp3");
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                               | juce::FileBrowserComponent::warnAboutOverwriting,
                           [this, suggested] (const juce::FileChooser& fc)
@@ -207,7 +209,18 @@ void MainComponent::showBounceDialog()
                                   return;
 
                               auto request = suggested;
-                              request.destination = file.withFileExtension (suggested.aiff ? ".aif" : ".wav");
+                              const auto extension = file.getFileExtension().toLowerCase();
+                              if (extension == ".mp3" || extension == ".flac" || extension == ".wav" || extension == ".aif" || extension == ".aiff")
+                              {
+                                  request.format = extension == ".aiff" ? juce::String ("aiff") : extension.substring (1).replace ("aif", "aiff");
+                                  request.destination = file;
+                                  if (request.format == "flac" && request.bitDepth == 32)
+                                      request.bitDepth = 24;
+                              }
+                              else
+                              {
+                                  request.destination = file.withFileExtension (suggested.aiff ? ".aif" : ".wav");
+                              }
                               const auto started = app.startBounce (request, [] (const BounceResult& result)
                               {
                                   if (! result.ok)

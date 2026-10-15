@@ -1,4 +1,5 @@
 #include "RemoteTools.h"
+#include "media/Mp3Writer.h"
 #include "media/StripSilence.h"
 #include "model/Groups.h"
 
@@ -472,7 +473,9 @@ const std::vector<ToolInfo>& toolTable()
           "normalize_lufs gains the whole mix to that loudness (e.g. -14 for streaming), never past ceiling_dbtp.",
           schema ({ { "start_seconds", "number", "Optional start (default 0)" },
                     { "end_seconds", "number", "Optional end (default: end of the last clip + 1 s)" },
-                    { "format", "string", "File format (default: the session's)", false, { "wav", "aiff", "flac" } },
+                    { "format", "string", "File format (default: the session's). mp3: for sending and streaming previews",
+                      false, { "wav", "aiff", "flac", "mp3" } },
+                    { "mp3_kbps", "integer", "MP3 bitrate: 128, 192, 256 or 320 (default 320)" },
                     { "bit_depth", "integer", "16, 24 or 32 (float; not FLAC). Default: the session's" },
                     { "dither", "boolean", "TPDF dither when writing 16 or 24 bits (default: on for 16-bit)" },
                     { "noise_shaping", "boolean", "With dither: move its noise away from 2-5 kHz, where hearing is most "
@@ -2276,8 +2279,16 @@ RemoteTools::Result RemoteTools::bounce (const juce::var& args)
         request.format = args["format"].toString();
         if (request.format == "flac" && request.bitDepth == 32)
             return { false, {}, "FLAC stores 16 or 24 bits; give bit_depth 16 or 24." };
+        if (request.format == "mp3" && ! canWriteMp3())
+            return { false, {}, "This build of Meridian cannot write MP3 (it was built without LAME)." };
         request.destination = request.destination.getParentDirectory().getNonexistentChildFile (
             request.destination.getFileNameWithoutExtension(), request.format == "aiff" ? ".aif" : "." + request.format, false);
+    }
+    if (args.hasProperty ("mp3_kbps"))
+    {
+        request.mp3Kbps = args["mp3_kbps"];
+        if (request.mp3Kbps != 128 && request.mp3Kbps != 192 && request.mp3Kbps != 256 && request.mp3Kbps != 320)
+            return { false, {}, "mp3_kbps must be 128, 192, 256 or 320." };
     }
     if (args.hasProperty ("dither"))
         request.dither = args["dither"];

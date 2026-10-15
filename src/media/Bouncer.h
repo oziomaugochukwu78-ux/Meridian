@@ -20,7 +20,8 @@ struct BounceRequest
     double sampleRate = 48000.0;
     int bitDepth = 24;              ///< 16, 24 or 32 (float)
     bool aiff = false;              ///< (older form of format = "aiff")
-    juce::String format;            ///< "wav", "aiff" or "flac" (FLAC: 16 or 24 bits); empty = from `aiff`
+    juce::String format;            ///< "wav", "aiff", "flac" (16 or 24 bits) or "mp3"; empty = from `aiff`
+    int mp3Kbps = 320;              ///< MP3: constant bitrate, 32-320 kbps (bitDepth and dither do not apply)
 
     /** TPDF dither when writing 16 or 24 bits (dsp::Dither; seeded, so reproducible). */
     bool dither = false;
@@ -54,9 +55,9 @@ struct BounceResult
     bool limitedByCeiling = false;   ///< the target was not reached: the true peak would have passed the ceiling
 };
 
-/** Creates a writer: format "wav", "aiff" or "flac"; bitDepth 16, 24 or 32 (float; not FLAC). */
+/** Creates a writer: format "wav", "aiff", "flac" or "mp3"; bitDepth 16, 24 or 32 (float; not FLAC; ignored for MP3). */
 std::unique_ptr<juce::AudioFormatWriter> createBounceWriter (const juce::File&, double sampleRate, int numChannels, int bitDepth,
-                                                            const juce::String& format, juce::String& error);
+                                                            const juce::String& format, juce::String& error, int mp3Kbps = 320);
 
 /** Renders [start, end) through `offlineEngine`, which must already be
     prepared, in offline mode, and hold the session's graph.

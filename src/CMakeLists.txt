@@ -73,6 +73,8 @@ target_sources(Meridian PRIVATE
     media/AudioImporter.h
     media/Bouncer.cpp
     media/Bouncer.h
+    media/Mp3Writer.cpp
+    media/Mp3Writer.h
     media/StripSilence.cpp
     media/StripSilence.h
     media/TimeStretchEngine.cpp
@@ -151,6 +153,9 @@ target_compile_definitions(Meridian PRIVATE
     JUCE_PLUGINHOST_AU=$<BOOL:${APPLE}>
     JUCE_ASIO=$<AND:$<BOOL:${WIN32}>,$<BOOL:${MERIDIAN_ENABLE_ASIO}>>
     MERIDIAN_WITH_RUBBERBAND=$<BOOL:${MERIDIAN_WITH_RUBBERBAND}>
+    MERIDIAN_WITH_LAME=$<BOOL:${MERIDIAN_WITH_LAME}>
+    # Reading MP3 (import, and the self test's check of exported MP3s): JUCE's own decoder.
+    JUCE_USE_MP3AUDIOFORMAT=1
     # Reference renders for the self test's null tests (see SelfTest::testGoldenRenders).
     MERIDIAN_GOLDEN_DIR="${PROJECT_SOURCE_DIR}/tests/golden")
 
@@ -168,6 +173,9 @@ target_link_libraries(Meridian
 
 if(MERIDIAN_WITH_RUBBERBAND)
     target_link_libraries(Meridian PRIVATE Meridian::rubberband)
+endif()
+if(MERIDIAN_WITH_LAME)
+    target_link_libraries(Meridian PRIVATE Meridian::lame)
 endif()
 
 # The self test loads the test plug-in from the build tree.

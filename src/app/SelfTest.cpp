@@ -3142,7 +3142,7 @@ void SelfTest::testPlaylists()
 
 void SelfTest::testLoudnessAndExport()
 {
-    beginGroup ("Loudness and export (EBU R128, normalising, dither, FLAC)");
+    beginGroup ("Loudness and export (EBU R128, normalising, dither, FLAC, MP3)");
     clearTracks();
     addToneTrack ("Stereo Tone", 2, media.getChildFile ("tone1k_stereo.wav"), clipStart); // -6.02 dBFS per channel
     const auto end = clipStart + (juce::int64) (2.0 * sampleRate) + 4800;
@@ -3255,6 +3255,58 @@ void SelfTest::testLoudnessAndExport()
     expect ("FLAC 24-bit export reads back as the mix, within half a 24-bit step (rounded, not truncated)",
             flac.ok && flacAudio.getNumSamples() == exact.getNumSamples() && worst <= 0.5 / 8388608.0 + 1.0e-9,
             flac.error + " worst " + juce::String (worst * 8388608.0, 3) + " steps");
+
+    // MP3, 320 kbps (LAME): lossy, so it is measured: aligned past the encoder delay,
+    // the tone must come back at its level and pitch with the coding noise far below it.
+    request.format = "mp3";
+    request.mp3Kbps = 320;
+    request.destination = output.getChildFile ("bounces").getChildFile ("export.mp3");
+    const auto mp3 = app.bounceNow (request);
+    const auto mp3Audio = readAudio (mp3.file);
+    int lag = -1;
+    double best = 0.0;
+    const int probe = (int) clipStart + 24000; // inside the tone
+    for (int l = 0; mp3Audio.getNumSamples() > probe + 4800 + 4000 && l < 4000; ++l)
+    {
+        double sum = 0.0;
+        for (int i = 0; i < 4800; ++i)
+            sum += (double) mp3Audio.getSample (0, probe + l + i) * exact.getSample (0, probe + i);
+        if (sum > best)
+        {
+            best = sum;
+            lag = l;
+        }
+    }
+    double signalPower = 0.0, noisePower = 0.0;
+    const int from = (int) clipStart + 12000, to = (int) clipStart + 84000; // steady tone, away from its edges
+    for (int ch = 0; lag >= 0 && ch < 2; ++ch)
+        for (int i = from; i < to && i + lag < mp3Audio.getNumSamples(); ++i)
+        {
+            const double x = exact.getSample (ch, i), y = mp3Audio.getSample (juce::jmin (ch, mp3Audio.getNumChannels() - 1), i + lag);
+            signalPower += x * x;
+            noisePower += (y - x) * (y - x);
+        }
+    const double snr = noisePower > 0.0 ? 10.0 * std::log10 (signalPower / noisePower) : 200.0;
+    const double mp3Level = lag >= 0 ? db (dsp::measureLevels (mp3Audio.getReadPointer (0, from + lag), to - from).rms) : -999.0;
+    const double exactLevel = db (dsp::measureLevels (exact.getReadPointer (0, from), to - from).rms);
+    const double mp3Frequency = lag >= 0 ? dsp::estimateFrequency (mp3Audio.getReadPointer (0, from + lag), to - from, sampleRate) : 0.0;
+    expect ("MP3 320 kbps export decodes to the mix: the tone at its level (+/-0.05 dB) and pitch, coding noise 60+ dB below it",
+            mp3.ok && lag >= 0 && std::abs (mp3Level - exactLevel) < 0.05 && std::abs (mp3Frequency - 1000.0) < 0.5 && snr > 60.0,
+            mp3.error + " delay " + juce::String (lag) + " samples, level " + fmt (mp3Level - exactLevel, 3) + " dB, "
+                + fmt (mp3Frequency, 2) + " Hz, SNR " + fmt (snr, 1) + " dB");
+    juce::MemoryBlock mp3Bytes;
+    mp3.file.loadFileAsData (mp3Bytes);
+    juce::String head; // the letters and digits of the first 400 bytes
+    for (size_t i = 0; i < std::min<size_t> (mp3Bytes.getSize(), 400); ++i)
+        if (const auto c = static_cast<const char*> (mp3Bytes.getData())[i]; juce::CharacterFunctions::isLetterOrDigit (c))
+            head << juce::String::charToString ((juce::juce_wchar) (unsigned char) c);
+    const double seconds = (double) exact.getNumSamples() / sampleRate;
+    const double kbps = (double) mp3Bytes.getSize() * 8.0 / seconds / 1000.0;
+    expect ("the MP3 is 320 kbps (from its size) and starts with the LAME header (exact length for players)",
+            std::abs (kbps - 320.0) < 25.0 && head.contains ("Info") && head.contains ("LAME"),
+            fmt (kbps, 1) + " kbps");
+    const auto badRate = app.getRemoteTools().call ("bounce", juce::JSON::parse (R"({"format":"mp3","mp3_kbps":100})"));
+    expect ("the bounce tool refuses an MP3 bitrate it does not offer", ! badRate.ok && badRate.error.contains ("mp3_kbps"), badRate.error);
 
     // The live master meter: the engine's 100 ms blocks must give exactly what an
     // offline measurement of the same output gives. (A bare engine whose only

@@ -25,6 +25,9 @@ install(FILES "${juce_SOURCE_DIR}/modules/juce_audio_processors_headless/format_
 if(MERIDIAN_WITH_RUBBERBAND)
     install(FILES "${rubberband_SOURCE_DIR}/COPYING" DESTINATION licenses RENAME RubberBand-COPYING.txt COMPONENT app)
 endif()
+if(MERIDIAN_WITH_LAME)
+    install(FILES "${lame_SOURCE_DIR}/COPYING" DESTINATION licenses RENAME LAME-COPYING.txt COMPONENT app)
+endif()
 
 set(CPACK_INSTALL_CMAKE_PROJECTS "${CMAKE_BINARY_DIR};${PROJECT_NAME};app;/")
 
