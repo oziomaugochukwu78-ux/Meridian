@@ -82,6 +82,7 @@ void SelfTest::start()
         testLoopClickMarkers();
         testMidiInput();
         testAutomation();
+        testTrimMode();
         testLoudnessAndExport();
         testTrackEditing();
         testPlaylists();
@@ -640,6 +641,30 @@ void SelfTest::testConsolePresets()
     state.setProperty (ids::consoleDrive, before[1], nullptr);
     state.setProperty (ids::consoleCharacter, before[2], nullptr);
     state.setProperty (ids::consoleCurve, before[3], nullptr);
+}
+
+//==============================================================================
+// Trim mode: the fader is a dB offset on the volume automation.
+
+void SelfTest::testTrimMode()
+{
+    beginGroup ("Automation: Trim mode");
+    auto* session = app.getSession();
+    clearTracks();
+    auto t = addToneTrack ("Trim", 1, media.getChildFile ("tone1k_mono.wav"), clipStart);
+    automation::addPoint (automation::getOrCreateVolumeLane (t, nullptr), 0, -6.0, nullptr);
+    t.setProperty (ids::volumeDb, 3.0, nullptr);
+    const auto end = clipStart + (juce::int64) (2.0 * sampleRate) + 4800;
+
+    t.setProperty (ids::automationMode, "read", nullptr);
+    const double readPeak = db (bounce ("trim_read", 0, end).left.peak);
+    const auto r = app.getRemoteTools().call ("set_track", juce::JSON::parse (R"({"track":"Trim","automation_mode":"trim"})"));
+    const double trimPeak = db (bounce ("trim_trim", 0, end).left.peak);
+    expect ("Read plays the lane (-6 dB) and ignores the fader; Trim adds the fader (+3 dB) to it: exactly -3 dB",
+            r.ok && std::abs (readPeak - (toneDb + panCentreDb - 6.0)) < 0.02 && std::abs (trimPeak - (toneDb + panCentreDb - 3.0)) < 0.02,
+            r.error + "read " + fmt (readPeak) + " dB, trim " + fmt (trimPeak) + " dB");
+    expect ("a session with a track in Trim mode is valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+    clearTracks();
 }
 
 void SelfTest::testSessionRoundTrip()

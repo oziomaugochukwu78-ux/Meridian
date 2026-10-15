@@ -104,6 +104,7 @@ private:
     void testLoopClickMarkers();
     void testMidiInput();
     void testAutomation();
+    void testTrimMode();
     void testLoudnessAndExport();
     void testTrackEditing();
     void testPlaylists();

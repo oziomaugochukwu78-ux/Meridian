@@ -71,7 +71,7 @@ Acceptance: MIDI timing jitter of zero samples in offline renders, and at most o
 **Automation**
 - done: pan, mute, send level and plug-in parameters; write modes (Write, Touch, Latch)
 - done: drawing volume, pan, mute, send and plug-in lanes in the Edit window (view selector in the track header)
-- still to do: trim mode, plug-in control touch from plug-in windows
+- done: trim mode (the fader as a dB offset on the volume lane); still to do: coalescing a trim pass into the lane, plug-in control touch from plug-in windows
 
 **Built-in processing**
 - done: Meridian EQ, Compressor, Limiter (true peak), Gate, De-Esser, Delay, Reverb, Tuner; gain-reduction meters for the dynamics

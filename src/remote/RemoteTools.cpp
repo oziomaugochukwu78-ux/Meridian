@@ -223,8 +223,9 @@ const std::vector<ToolInfo>& toolTable()
                     { "solo", "boolean", "Solo" },
                     { "record_arm", "boolean", "Record-enable: audio tracks record their input, instrument tracks record MIDI from the keyboard (and play it live)" },
                     { "input", "integer", "Audio input channel, 1-based (0 = no input)" },
-                    { "automation_mode", "string", "off, read (play the lanes), touch / latch / write (record control moves while playing)",
-                      false, { "off", "read", "touch", "latch", "write" } } }) },
+                    { "automation_mode", "string", "off, read (play the lanes), touch / latch / write (record control moves while playing), "
+                                                  "trim (play the lanes, with the fader as a dB offset on the volume lane)",
+                      false, { "off", "read", "touch", "latch", "write", "trim" } } }) },
         { "duplicate_track", "Duplicate a track",
           "Copy a track (clips, automation, sends, plug-ins with their settings) to a new track right after it, "
           "named <name>.dup1. Audio files are shared, not copied.",

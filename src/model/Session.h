@@ -174,13 +174,13 @@ namespace track
     inline bool solo (const juce::ValueTree& t)               { return t.getProperty (ids::solo, false); }
     inline bool recordArm (const juce::ValueTree& t)          { return t.getProperty (ids::recordArm, false); }
     inline int inputChannel (const juce::ValueTree& t)        { return t.getProperty (ids::inputChannel, 0); } ///< first device input, -1 = none
-    /** "off", "read", "touch", "latch" or "write". */
+    /** "off", "read", "touch", "latch", "write" or "trim" (the fader offsets the volume lane). */
     inline juce::String automationMode (const juce::ValueTree& t) { return t.getProperty (ids::automationMode, "read").toString(); }
     /** Lanes play back in Read, Touch and Latch (Write records over them; Off ignores them). */
     inline bool automationRead (const juce::ValueTree& t)
     {
         const auto mode = automationMode (t);
-        return mode == "read" || mode == "touch" || mode == "latch";
+        return mode == "read" || mode == "touch" || mode == "latch" || mode == "trim";
     }
     inline juce::ValueTree clips (const juce::ValueTree& t)   { return t.getChildWithName (ids::CLIPS); }
     /** The track's alternate playlists (see Playlists.h); the active one is clips (t). */

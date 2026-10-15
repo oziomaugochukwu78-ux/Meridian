@@ -129,6 +129,7 @@ void EngineBridge::syncTrackState (const juce::ValueTree& t)
     s.soloed.store (track::solo (t));
     s.recordArmed.store (track::recordArm (t));
     s.automationRead.store (track::automationRead (t));
+    s.volumeTrim.store (track::automationMode (t) == "trim");
 }
 
 void EngineBridge::addTrackResources (const juce::ValueTree& t)

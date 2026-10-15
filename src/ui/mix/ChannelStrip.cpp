@@ -11,7 +11,7 @@ namespace
 {
 constexpr int sectionHeader = 13;
 constexpr int slotHeight = 17;
-constexpr const char* automationModes[] = { "off", "read", "touch", "latch", "write" };
+constexpr const char* automationModes[] = { "off", "read", "touch", "latch", "write", "trim" };
 
 juce::String formatDb (double db)
 {

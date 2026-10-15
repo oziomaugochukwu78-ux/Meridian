@@ -33,7 +33,8 @@ struct TrackRealtimeState
     std::atomic<bool> muted { false };
     std::atomic<bool> soloed { false };
     std::atomic<bool> recordArmed { false };
-    std::atomic<bool> automationRead { true };   ///< play the automation lanes (Read, Touch and Latch modes)
+    std::atomic<bool> automationRead { true };   ///< play the automation lanes (Read, Touch, Latch and Trim modes)
+    std::atomic<bool> volumeTrim { false };      ///< Trim mode: the fader is a dB offset on the volume lane
 
     /** Controls the user is holding (Touch/Latch): while held, the engine follows
         the control instead of its lane. Bits: touchVolume, touchPan, touchMute, touchSend (slot). */
@@ -64,6 +65,8 @@ struct TrackRealtimeState
     dsp::LinearRamp panLeftRamp;
     dsp::LinearRamp panRightRamp;
     bool rampsInitialised = false;
+    double trimDb = 0.0;          ///< Trim mode: the offset applied at the end of the last block
+    bool trimInitialised = false;
 
 private:
     static void raiseTo (std::atomic<float>& slot, float value) noexcept

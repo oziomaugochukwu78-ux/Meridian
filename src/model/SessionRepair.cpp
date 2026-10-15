@@ -264,7 +264,7 @@ private:
         if (aux && track::recordArm (t)) // (instrument tracks arm to record MIDI)
             set (t, ids::recordArm, false, where, "record-arm (an aux track cannot record)");
         if (t.hasProperty (ids::automationMode)
-            && ! juce::StringArray { "off", "read", "touch", "latch", "write" }.contains (track::automationMode (t)))
+            && ! juce::StringArray { "off", "read", "touch", "latch", "write", "trim" }.contains (track::automationMode (t)))
             set (t, ids::automationMode, "read", where, "automation mode");
 
         repairSynth (t, where, instrument);
@@ -759,7 +759,7 @@ juce::String findSessionProblem (const Session& session)
         if (track::isAux (t) && track::recordArm (t))
             return name + " is record-armed but an aux track cannot record";
         if (t.hasProperty (ids::automationMode)
-            && ! juce::StringArray { "off", "read", "touch", "latch", "write" }.contains (track::automationMode (t)))
+            && ! juce::StringArray { "off", "read", "touch", "latch", "write", "trim" }.contains (track::automationMode (t)))
             return name + " has an unknown automation mode";
 
         int synths = 0;
