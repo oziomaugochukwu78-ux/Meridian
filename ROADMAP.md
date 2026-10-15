@@ -41,7 +41,7 @@ To finish before the feature work below:
 
 | Item | Acceptance |
 |---|---|
-| Soak test, extended: 2 hours, then 8 hours, of playback with automation and plug-ins. A 20-minute run passed every check, but memory crept by about 0.05–0.15 MB per minute, with one 2.6 MB step; a longer run must show whether that creep is a leak or allocator behaviour | 0 budget overruns; memory flat over the second half; dropouts attributable to Meridian: none |
+| Soak test, extended: 2 hours, then 8 hours, of playback with automation and plug-ins. A 20-minute run passed every check, but memory crept by about 0.05–0.15 MB per minute, with one 2.6 MB step. A 60-minute Release run (2026-10-15) then passed with memory flat over its second half (68.84 → 69.02 MB), 0 overruns and a worst callback of 49.6 % of the buffer period, so the creep was start-up allocation, not a leak; the 2- and 8-hour runs remain | 0 budget overruns; memory flat over the second half; dropouts attributable to Meridian: none |
 | Real-time safety tooling: Clang RealtimeSanitizer (`-fsanitize=realtime`) in CI, on top of the existing ASan/UBSan job | No reports across the whole self test |
 | Comparison with another DAW: the same session rendered in Ardour (open source) and null-tested against Meridian | Residual below -90 dBFS for gain, pan law and summing scenarios (pan laws are matched explicitly) |
 | Plug-in compatibility suite: load, process, save and restore state for a list of popular free VST3 plug-ins, each in a crash-protected child process | No crashes; restored state renders identically |
