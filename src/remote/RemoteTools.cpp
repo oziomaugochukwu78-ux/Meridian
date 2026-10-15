@@ -400,6 +400,8 @@ const std::vector<ToolInfo>& toolTable()
                     { "format", "string", "File format (default: the session's)", false, { "wav", "aiff", "flac" } },
                     { "bit_depth", "integer", "16, 24 or 32 (float; not FLAC). Default: the session's" },
                     { "dither", "boolean", "TPDF dither when writing 16 or 24 bits (default: on for 16-bit)" },
+                    { "noise_shaping", "boolean", "With dither: move its noise away from 2-5 kHz, where hearing is most "
+                                                  "sensitive (less audible hiss on 16-bit files; default off)" },
                     { "normalize_lufs", "number", "Integrated loudness to reach, e.g. -14 (streaming) or -23 (broadcast)" },
                     { "ceiling_dbtp", "number", "True-peak ceiling for normalising (default -1 dBTP)" } }) },
         { "undo", "Undo", "Undo the last edit (including edits made by AI tools).", schema ({}) },
@@ -1837,6 +1839,8 @@ RemoteTools::Result RemoteTools::bounce (const juce::var& args)
     }
     if (args.hasProperty ("dither"))
         request.dither = args["dither"];
+    if (args.hasProperty ("noise_shaping"))
+        request.noiseShaping = args["noise_shaping"];
     if (args.hasProperty ("normalize_lufs"))
     {
         request.normalise = true;

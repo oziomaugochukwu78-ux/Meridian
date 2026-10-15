@@ -25,6 +25,10 @@ struct BounceRequest
     /** TPDF dither when writing 16 or 24 bits (dsp::Dither; seeded, so reproducible). */
     bool dither = false;
 
+    /** With dither: shape its noise away from 2-5 kHz, where hearing is most
+        sensitive (dsp::Dither::quantiseShaped). For 16-bit delivery. */
+    bool noiseShaping = false;
+
     /** Loudness normalisation: the whole mix is gained to targetLufs
         (integrated, EBU R128), but never so far that the true peak passes
         ceilingDbtp; then the result says it was limited by the ceiling.

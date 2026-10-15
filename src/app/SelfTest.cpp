@@ -13,6 +13,7 @@
 #include "plugins/BuiltinEffects.h"
 
 #include <dsp/Biquad.h>
+#include <dsp/Dither.h>
 #include <dsp/Loudness.h>
 #include "ui/dialogs/DashboardComponent.h"
 #include "ui/dialogs/NewTracksComponent.h"
@@ -2862,6 +2863,26 @@ void SelfTest::testLoudnessAndExport()
     const double errorRatio = onGrid ? std::sqrt (errorPower / exact.getNumSamples()) / (lsb / 2.0) : 0.0;
     expect ("16-bit bounce with TPDF dither: on the 16-bit grid, error exactly LSB/2 RMS (the dither's design)",
             dithered.ok && onGrid && std::abs (errorRatio - 1.0) < 0.03, "error " + fmt (errorRatio, 3) + " x LSB/2");
+
+    // The same with noise shaping: the error is the dither's, filtered, so its power
+    // is LSB^2/4 times the filter's sum f_k^2 (the spectrum is checked in the unit tests).
+    request.noiseShaping = true;
+    request.destination = output.getChildFile ("bounces").getChildFile ("dither16_shaped.wav");
+    const auto shaped = app.bounceNow (request);
+    const auto shapedAudio = readAudio (shaped.file);
+    double shapedPower = 0.0;
+    bool shapedOnGrid = shapedAudio.getNumSamples() == exact.getNumSamples();
+    for (int i = 0; shapedOnGrid && i < exact.getNumSamples(); ++i)
+    {
+        const double y = shapedAudio.getSample (0, i);
+        shapedOnGrid = std::abs (y * 32768.0 - std::round (y * 32768.0)) < 1.0e-6;
+        shapedPower += std::pow (y - exact.getSample (0, i), 2.0);
+    }
+    const double shapedRatio = shapedOnGrid ? std::sqrt (shapedPower / exact.getNumSamples()) / (lsb / 2.0) : 0.0;
+    expect ("16-bit bounce with noise-shaped dither: on the grid, error exactly sqrt(4.61) x LSB/2 RMS (the shaping filter's gain)",
+            shaped.ok && shapedOnGrid && std::abs (shapedRatio / std::sqrt (dsp::Dither::shapedNoisePowerGain) - 1.0) < 0.03,
+            "error " + fmt (shapedRatio, 3) + " x LSB/2, expected " + fmt (std::sqrt (dsp::Dither::shapedNoisePowerGain), 3));
+    request.noiseShaping = false;
 
     // FLAC, 24-bit: lossless, so it reads back as the mix within 24-bit rounding.
     request.bitDepth = 24;

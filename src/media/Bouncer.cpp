@@ -50,6 +50,7 @@ struct FileOutput
     std::unique_ptr<juce::AudioFormatWriter> writer;
     int bits = 24;
     bool dither = false;
+    bool shaped = false;  ///< with dither: noise shaping
     dsp::Dither ditherLeft { 0x1234567u }, ditherRight { 0x89abcdefu };
     std::vector<int> integers[2];
 
@@ -74,7 +75,9 @@ struct FileOutput
             auto& d = ch == 0 ? ditherLeft : ditherRight;
             for (int i = 0; i < count; ++i)
             {
-                const float q = dither ? d.quantise (x[i], bits) : dsp::Dither::round (x[i], bits);
+                const float q = ! dither ? dsp::Dither::round (x[i], bits)
+                              : shaped   ? d.quantiseShaped (x[i], bits)
+                                         : d.quantise (x[i], bits);
                 out[(size_t) i] = (int) ((juce::int64) std::llround ((double) q * steps) * justify);
             }
             channels[ch] = out.data();
@@ -137,6 +140,7 @@ BounceResult renderBounce (AudioEngine& engine, const BounceRequest& request, co
                                       : createBounceWriter (request.destination, request.sampleRate, 2, request.bitDepth, format, result.error);
     output.bits = request.normalise ? 32 : request.bitDepth;
     output.dither = request.dither && ! request.normalise;
+    output.shaped = request.noiseShaping;
     if (output.writer == nullptr)
         return result;
 
@@ -220,6 +224,7 @@ BounceResult renderBounce (AudioEngine& engine, const BounceRequest& request, co
         finalOutput.writer = createBounceWriter (request.destination, request.sampleRate, 2, request.bitDepth, format, result.error);
         finalOutput.bits = request.bitDepth;
         finalOutput.dither = request.dither;
+        finalOutput.shaped = request.noiseShaping;
         if (reader == nullptr || finalOutput.writer == nullptr)
             return fail (result.error.isNotEmpty() ? result.error : juce::String ("Could not read the first pass back."));
 

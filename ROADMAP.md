@@ -79,7 +79,8 @@ Acceptance: MIDI timing jitter of zero samples in offline renders, and at most o
 
 **Loudness and delivery**
 - done: LUFS, loudness range and true-peak meters (ITU-R BS.1770-4 / EBU R128), checked against the EBU Tech 3341/3342 signals; TPDF dither; FLAC export; normalisation to a loudness target under a true-peak ceiling
-- still to do: noise-shaped dither; MP3 export (needs an encoder library, e.g. LAME)
+- done: noise-shaped dither (Lipshitz 3-tap, measured in the unit tests)
+- still to do: MP3 export (needs an encoder library, e.g. LAME)
 
 **Presets, layers 1 and 2** (see the design below)
 - smart defaults
