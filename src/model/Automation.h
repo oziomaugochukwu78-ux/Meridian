@@ -69,4 +69,15 @@ void clear (juce::ValueTree track, juce::UndoManager*);
 /** The automated value at `time` (held flat outside the breakpoints). */
 double valueAt (const std::vector<Point>&, juce::int64 time);
 
+/** The lane an Edit-window track shows: `wanted` if the track has that control
+    ("volume", "pan", "mute", or "send:<slot>" while the send exists), else "volume". */
+juce::String shownParameter (const juce::ValueTree& track, const juce::String& wanted);
+
+/** Short lane name for the track header: "volume", "pan", "mute", "send A". */
+juce::String shortName (const juce::String& parameter);
+
+/** The control's own setting, which plays while it has no automation: fader dB,
+    pan, mute (0/1) or send level dB. */
+double staticValue (const juce::ValueTree& track, const juce::String& parameter);
+
 } // namespace meridian::automation

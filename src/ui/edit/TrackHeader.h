@@ -11,14 +11,16 @@ namespace meridian
 {
 
 /** The left-hand header of an Edit-window track: colour, name, record/solo/
-    mute keys, fader readout, a meter and (tracks with clips) the playlist
-    selector. Right-click for track options.
+    mute keys, fader readout, a meter, the automation view selector (which
+    lane the Pencil draws: volume, pan, mute or a send) and (tracks with clips)
+    the playlist selector. Right-click for track options.
 
     The playlist selector shows the active playlist; its menu switches
     playlists, makes a new or duplicate one, renames or deletes them, and
     comps the Edit selection from another playlist onto the active one. */
 class TrackHeader final : public juce::Component,
-                          private juce::ValueTree::Listener
+                          private juce::ValueTree::Listener,
+                          private juce::ChangeListener
 {
 public:
     TrackHeader (AppController&, EditState&, juce::ValueTree track);
@@ -45,9 +47,18 @@ public:
     juce::PopupMenu buildPlaylistMenu() const;
     juce::String getPlaylistButtonText() const { return playlistButton.getButtonText(); }
 
+    /** The automation view selector: which lane the track shows and the Pencil draws.
+        buildViewMenu's item ids: 1 volume, 2 pan, 3 mute, 10 + slot for send A..E. */
+    juce::PopupMenu buildViewMenu() const;
+    void runViewItem (int item);
+    juce::String getViewButtonText() const { return viewButton.getButtonText(); }
+
 private:
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
+    void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override;
+    void changeListenerCallback (juce::ChangeBroadcaster*) override { updateViewButton(); } // EditState changed
     void refresh();
+    void updateViewButton();
     void toggleProperty (const juce::Identifier&, const juce::String& undoName);
     void showMenu();
     void showPlaylistMenu();
@@ -61,6 +72,7 @@ private:
     juce::TextButton recordButton { "R" }, soloButton { "S" }, muteButton { "M" };
     juce::Label infoLabel;
     juce::TextButton playlistButton;
+    juce::TextButton viewButton;
     LevelMeter meter;
 };
 

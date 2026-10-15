@@ -46,9 +46,10 @@ private:
     void layoutClips();
     int playheadX() const;
 
-    // Volume automation (Pencil tool)
-    float dbToY (double db) const;
-    double yToDb (float y) const;
+    // Automation (Pencil tool): the lane the track header's view selector shows.
+    juce::String shownParameter() const;
+    float valueToY (double value) const;
+    double yToValue (float y) const;
     void paintAutomation (juce::Graphics&);
     void pencilDown (const juce::MouseEvent&);
     void pencilDrag (const juce::MouseEvent&);

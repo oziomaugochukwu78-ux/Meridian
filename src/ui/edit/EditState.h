@@ -8,6 +8,7 @@
 #include <juce_events/juce_events.h>
 
 #include <cmath>
+#include <map>
 
 namespace meridian
 {
@@ -108,6 +109,23 @@ public:
         selectedClip = std::move (clip);
         sendChangeMessage();
     }
+
+    // Automation view -------------------------------------------------------------------
+    /** The automation lane a track shows, and the Pencil draws ("volume", "pan",
+        "mute", "send:<slot>"), by track id. View state only: not saved, not undoable. */
+    juce::String automationViewFor (int trackId) const
+    {
+        const auto it = automationViews.find (trackId);
+        return it != automationViews.end() ? it->second : juce::String ("volume");
+    }
+
+    void setAutomationView (int trackId, const juce::String& parameter)
+    {
+        automationViews[trackId] = parameter;
+        sendChangeMessage();
+    }
+
+    std::map<int, juce::String> automationViews;
 
     void clearSelection()
     {

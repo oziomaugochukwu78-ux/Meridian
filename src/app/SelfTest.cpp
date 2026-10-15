@@ -3768,6 +3768,7 @@ void SelfTest::timerCallback()
                     testPianoRoll();
                     testPlaylistSelector();
                     testEditModes();
+                    testAutomationLanes();
                     buildShowcaseSession(); // for the screenshots
                     phase = 4;
                 }
@@ -3791,6 +3792,7 @@ void SelfTest::timerCallback()
                 testPianoRoll();
                 testPlaylistSelector();
                 testEditModes();
+                testAutomationLanes();
                 buildShowcaseSession();
                 ticks = 0;
                 phase = 4;
@@ -4580,6 +4582,100 @@ void SelfTest::testEditModes()
     expect ("each spot is one undo step", clip::start (c) == 96000, starts());
 
     commands.invokeDirectly (commands::slipMode, false);
+    clearTracks();
+}
+
+//==============================================================================
+// Automation lanes in the Edit window: the header's view selector picks the
+// lane, and the Pencil draws on it in that lane's own scale.
+
+void SelfTest::testAutomationLanes()
+{
+    beginGroup ("Edit window: automation lanes (Pencil, simulated mouse)");
+    auto* session = app.getSession();
+    auto& editView = main.getEditView();
+    auto& view = editView.getEditState();
+    auto& tools = app.getRemoteTools();
+    main.showWindow (WindowKind::edit);
+
+    clearTracks();
+    auto t = addToneTrack ("Lanes", 1, media.getChildFile ("tone1k_mono.wav"), clipStart);
+    session->addTrack ("Verb", 2, nullptr, Session::TrackKind::aux);
+    view.setView (0, 400.0);
+    auto* header = editView.getHeader (0);
+    auto* lane = editView.getLane (0);
+    if (header == nullptr || lane == nullptr)
+    {
+        expect ("the track has a header and a lane", false, {});
+        return;
+    }
+
+    auto itemIds = [] (const juce::PopupMenu& menu)
+    {
+        juce::Array<int> found;
+        for (juce::PopupMenu::MenuItemIterator it (menu); it.next();)
+            if (it.getItem().itemID != 0)
+                found.add (it.getItem().itemID);
+        return found;
+    };
+    expect ("each track header shows its automation view, volume by default; the menu offers volume, pan and mute",
+            header->getViewButtonText() == "volume" && itemIds (header->buildViewMenu()) == juce::Array<int> { 1, 2, 3 },
+            header->getViewButtonText());
+
+    const float h = (float) lane->getHeight();
+    auto click = [this, lane] (float x, float y) { drag (*lane, { x, y }, { 0.0f, 0.0f }); };
+    auto pointsOf = [&t] (const juce::String& parameter) { return automation::points (automation::lane (t, parameter)); };
+    view.setTool (EditTool::pencil);
+
+    // Pan: the top is hard left, the bottom hard right.
+    header->runViewItem (2);
+    click (100.0f, 4.0f);
+    click (200.0f, h - 4.0f);
+    const auto pan = pointsOf ("pan");
+    expect ("Pan view: Pencil clicks at the top and bottom write hard left at 40000 and hard right at 80000; volume is untouched",
+            header->getViewButtonText() == "pan" && pan.size() == 2 && pan[0].time == 40000 && juce::exactlyEqual (pan[0].value, -1.0)
+                && pan[1].time == 80000 && juce::exactlyEqual (pan[1].value, 1.0) && pointsOf ("volume").empty(),
+            juce::String ((int) pan.size()) + " points");
+
+    // The drawn lane plays: before its first point it holds hard left.
+    setConsole (false);
+    const auto panned = readAudio (bounce ("lane_pan", 0, 40000).file);
+    setConsole (true, 6.0, 0.35);
+    const auto left = dsp::measureLevels (panned.getReadPointer (0, (int) clipStart), 12000);
+    const auto right = dsp::measureLevels (panned.getReadPointer (1, (int) clipStart), 12000);
+    expect ("and it plays: hard left puts the whole tone on the left and nothing on the right",
+            std::abs (db (left.peak) - toneDb) < 0.05 && db (right.peak) < silentDb,
+            "left " + fmt (db (left.peak)) + " dB, right " + fmt (db (right.peak)) + " dB");
+
+    // Created after that bounce: the bus would put the tone on both sides.
+    tools.call ("set_send", juce::JSON::parse (R"({"track":"Lanes","slot":"A","bus":"Verb","level_db":-10})"));
+    expect ("a track with a send also offers that send's level", itemIds (header->buildViewMenu()).contains (10), {});
+
+    // Mute: steps only, muted at the top.
+    header->runViewItem (3);
+    click (150.0f, 6.0f);
+    click (250.0f, h * 0.6f);
+    const auto mute = pointsOf ("mute");
+    expect ("Mute view: the Pencil writes exact steps (1 = muted near the top, 0 below the middle)",
+            header->getViewButtonText() == "mute" && mute.size() == 2 && juce::exactlyEqual (mute[0].value, 1.0)
+                && juce::exactlyEqual (mute[1].value, 0.0),
+            juce::String ((int) mute.size()) + " points");
+
+    // Send A: the fader's scale.
+    header->runViewItem (10);
+    const float yMinus6 = 4.0f + (h - 8.0f) * (float) (1.0 - dsp::FaderTaper::dbToPosition (-6.0));
+    click (300.0f, yMinus6);
+    const auto sendPoints = pointsOf ("send:0");
+    expect ("Send A view: a click at the fader scale's -6 dB writes -6 dB on the send lane",
+            header->getViewButtonText() == "send A" && sendPoints.size() == 1 && std::abs (sendPoints[0].value + 6.0) < 0.01,
+            sendPoints.empty() ? juce::String ("no point") : fmt (sendPoints[0].value) + " dB");
+    snapshot (*lane, "automation_lane_send.png");
+
+    // Removing the send takes its view with it.
+    tools.call ("remove_send", juce::JSON::parse (R"({"track":"Lanes","slot":"A"})"));
+    expect ("removing the send returns the view to volume", header->getViewButtonText() == "volume", header->getViewButtonText());
+
+    view.setTool (EditTool::smart);
     clearTracks();
 }
 

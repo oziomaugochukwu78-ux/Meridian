@@ -77,8 +77,9 @@ void TrackLane::valueTreePropertyChanged (juce::ValueTree& tree, const juce::Ide
         layoutClips();
     else if (tree == trackNode && property == ids::colour)
         rebuildClips();
-    else if (tree.hasType (ids::POINT) || (tree == trackNode && (property == ids::automationMode || property == ids::volumeDb)))
-        repaint(); // automation line
+    else if (tree.hasType (ids::POINT) || tree.hasType (ids::SEND)
+             || (tree == trackNode && (property == ids::automationMode || property == ids::volumeDb || property == ids::pan || property == ids::mute)))
+        repaint(); // automation line, or the guide showing the control's own setting
 }
 
 void TrackLane::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree&)
@@ -184,48 +185,81 @@ void TrackLane::paintOverChildren (juce::Graphics& g)
 }
 
 //==============================================================================
-// Volume automation: same scale as the mixer fader (0 dB at 75 % of the height)
+// Automation. Each lane has its own vertical scale:
+//   volume, sends   the mixer fader's taper (0 dB at 75 % of the height)
+//   pan             left at the top, right at the bottom, centre in the middle
+//   mute            muted at the top, unmuted at the bottom; drawn as steps
 
-float TrackLane::dbToY (double db) const
+juce::String TrackLane::shownParameter() const
 {
-    const float usable = (float) getHeight() - 8.0f;
-    return 4.0f + usable * (float) (1.0 - dsp::FaderTaper::dbToPosition (db));
+    return automation::shownParameter (trackNode, editState.automationViewFor (track::id (trackNode)));
 }
 
-double TrackLane::yToDb (float y) const
+float TrackLane::valueToY (double value) const
 {
+    const auto parameter = shownParameter();
+    const double position = parameter == "pan"  ? (1.0 - value) * 0.5
+                          : parameter == "mute" ? value
+                                                : dsp::FaderTaper::dbToPosition (value);
+    const float usable = (float) getHeight() - 8.0f;
+    return 4.0f + usable * (float) (1.0 - position);
+}
+
+double TrackLane::yToValue (float y) const
+{
+    const auto parameter = shownParameter();
     const float usable = juce::jmax (1.0f, (float) getHeight() - 8.0f);
-    return dsp::FaderTaper::positionToDb (juce::jlimit (0.0, 1.0, 1.0 - (double) (y - 4.0f) / usable));
+    const double position = juce::jlimit (0.0, 1.0, 1.0 - (double) (y - 4.0f) / usable);
+    if (parameter == "pan")
+        return 1.0 - 2.0 * position;
+    if (parameter == "mute")
+        return position >= 0.5 ? 1.0 : 0.0;
+    return dsp::FaderTaper::positionToDb (position);
 }
 
 void TrackLane::paintAutomation (juce::Graphics& g)
 {
     const bool pencil = editState.tool == EditTool::pencil;
-    const auto pts = automation::points (automation::volumeLane (trackNode));
+    const auto parameter = shownParameter();
+    const auto pts = automation::points (automation::lane (trackNode, parameter));
     if (pts.empty() && ! pencil)
         return;
 
     const bool active = track::automationRead (trackNode);
     const auto colour = (active ? theme::automation : theme::textDim).withAlpha (pts.empty() ? 0.5f : 0.95f);
 
+    if (pencil)
+    {
+        g.setColour (colour);
+        g.setFont (theme::font (11.0f));
+        g.drawText (automation::shortName (parameter), 6, 2, 80, 14, juce::Justification::centredLeft);
+    }
+
     if (pts.empty())
     {
-        // Pencil over an unautomated track: show where the fader is, as a guide.
-        const float y = dbToY (track::volumeDb (trackNode));
+        // Pencil over an unautomated control: show where it is set, as a guide.
+        const float y = valueToY (automation::staticValue (trackNode, parameter));
         const float dashes[] = { 4.0f, 4.0f };
         g.setColour (colour);
         g.drawDashedLine (juce::Line<float> (0.0f, y, (float) getWidth(), y), dashes, 2, 1.0f);
         return;
     }
 
+    // Mute changes in steps (the engine never ramps between its breakpoints).
+    const bool stepped = parameter == "mute";
     juce::Path line;
-    line.startNewSubPath (0.0f, dbToY (automation::valueAt (pts, editState.xToSample (0.0))));
+    float lastY = valueToY (automation::valueAt (pts, editState.xToSample (0.0)));
+    line.startNewSubPath (0.0f, lastY);
     for (const auto& p : pts)
     {
         const auto x = (float) juce::jlimit (-10.0, getWidth() + 10.0, editState.sampleToX (p.time));
-        line.lineTo (x, dbToY (p.value));
+        const auto y = valueToY (p.value);
+        if (stepped)
+            line.lineTo (x, lastY);
+        line.lineTo (x, y);
+        lastY = y;
     }
-    line.lineTo ((float) getWidth(), dbToY (pts.back().value));
+    line.lineTo ((float) getWidth(), lastY);
 
     g.setColour (colour);
     g.strokePath (line, juce::PathStrokeType (1.6f));
@@ -234,7 +268,7 @@ void TrackLane::paintAutomation (juce::Graphics& g)
     {
         const auto x = (float) editState.sampleToX (p.time);
         if (x >= -4.0f && x <= getWidth() + 4.0f)
-            g.fillRect (juce::Rectangle<float> (x - 2.5f, dbToY (p.value) - 2.5f, 5.0f, 5.0f));
+            g.fillRect (juce::Rectangle<float> (x - 2.5f, valueToY (p.value) - 2.5f, 5.0f, 5.0f));
     }
 }
 
@@ -245,7 +279,7 @@ void TrackLane::pencilDown (const juce::MouseEvent& e)
         return;
 
     um->beginNewTransaction ("Draw Automation");
-    auto lane = automation::getOrCreateVolumeLane (trackNode, um);
+    auto lane = automation::getOrCreateLane (trackNode, shownParameter(), um);
     const auto time = std::max<juce::int64> (0, editState.xToSample (e.position.x));
     const auto tolerance = (juce::int64) (6.0 * editState.samplesPerPixel);
 
@@ -255,7 +289,7 @@ void TrackLane::pencilDown (const juce::MouseEvent& e)
     for (const auto& p : lane)
     {
         const auto distance = std::abs ((juce::int64) p[ids::time] - time);
-        if (distance < nearestDistance && std::abs (dbToY ((double) p[ids::value]) - e.position.y) < 8.0f)
+        if (distance < nearestDistance && std::abs (valueToY ((double) p[ids::value]) - e.position.y) < 8.0f)
         {
             nearestDistance = distance;
             nearest = p;
@@ -277,7 +311,7 @@ void TrackLane::pencilDown (const juce::MouseEvent& e)
         return;
     }
 
-    automation::addPoint (lane, time, yToDb (e.position.y), um);
+    automation::addPoint (lane, time, yToValue (e.position.y), um);
     lastDrawnTime = time;
     lastDrawnX = e.position.x;
     pencilAction = PencilAction::draw;
@@ -294,7 +328,7 @@ void TrackLane::pencilDrag (const juce::MouseEvent& e)
     if (pencilAction == PencilAction::movePoint && draggedPoint.isValid())
     {
         draggedPoint.setProperty (ids::time, time, um);
-        draggedPoint.setProperty (ids::value, yToDb (e.position.y), um);
+        draggedPoint.setProperty (ids::value, yToValue (e.position.y), um);
         return;
     }
 
@@ -302,12 +336,12 @@ void TrackLane::pencilDrag (const juce::MouseEvent& e)
         return; // thin freehand strokes to a point every few pixels
 
     // Freehand: what the stroke passes over is replaced.
-    auto lane = automation::volumeLane (trackNode);
+    auto lane = automation::lane (trackNode, shownParameter());
     if (time > lastDrawnTime)
         automation::removeRange (lane, lastDrawnTime + 1, time, um);
     else
         automation::removeRange (lane, time, lastDrawnTime - 1, um);
-    automation::addPoint (lane, time, yToDb (e.position.y), um);
+    automation::addPoint (lane, time, yToValue (e.position.y), um);
     lastDrawnTime = time;
     lastDrawnX = e.position.x;
 }

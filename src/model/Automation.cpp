@@ -1,4 +1,5 @@
 #include "Automation.h"
+#include "Routing.h"
 
 #include <algorithm>
 #include <cmath>
@@ -160,6 +161,34 @@ double valueAt (const std::vector<Point>& pts, juce::int64 time)
     const auto& a = *(next - 1);
     const double fraction = (double) (time - a.time) / (double) std::max<juce::int64> (1, b.time - a.time);
     return a.value + fraction * (b.value - a.value);
+}
+
+juce::String shownParameter (const juce::ValueTree& track, const juce::String& wanted)
+{
+    if (wanted == "pan" || wanted == "mute")
+        return wanted;
+    if (const int slot = sendTarget (wanted); slot >= 0 && routing::findSend (track, slot).isValid())
+        return wanted;
+    return "volume";
+}
+
+juce::String shortName (const juce::String& parameter)
+{
+    if (const int slot = sendTarget (parameter); slot >= 0)
+        return "send " + juce::String::charToString ((juce::juce_wchar) ('A' + slot));
+    return parameter;
+}
+
+double staticValue (const juce::ValueTree& track, const juce::String& parameter)
+{
+    if (parameter == "pan")
+        return track::pan (track);
+    if (parameter == "mute")
+        return track::mute (track) ? 1.0 : 0.0;
+    if (const int slot = sendTarget (parameter); slot >= 0)
+        if (const auto s = routing::findSend (track, slot); s.isValid())
+            return send::levelDb (s);
+    return track::volumeDb (track);
 }
 
 } // namespace meridian::automation

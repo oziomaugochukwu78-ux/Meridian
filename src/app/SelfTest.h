@@ -129,6 +129,7 @@ private:
     void testPianoRoll();
     void testPlaylistSelector();
     void testEditModes();
+    void testAutomationLanes();
     void captureScreens();
     void finish();
 

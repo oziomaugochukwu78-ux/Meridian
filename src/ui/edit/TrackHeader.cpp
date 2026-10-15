@@ -65,14 +65,28 @@ TrackHeader::TrackHeader (AppController& a, EditState& s, juce::ValueTree t)
     playlistButton.onClick = [this] { showPlaylistMenu(); };
     addAndMakeVisible (playlistButton);
 
+    viewButton.setTooltip ("Automation view: which lane this track shows and the Pencil draws");
+    viewButton.onClick = [this]
+    {
+        buildViewMenu().showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&viewButton),
+                                       [safe = juce::Component::SafePointer<TrackHeader> (this)] (int result)
+                                       {
+                                           if (safe != nullptr && result != 0)
+                                               safe->runViewItem (result);
+                                       });
+    };
+    addAndMakeVisible (viewButton);
+
     addAndMakeVisible (meter);
 
     trackNode.addListener (this);
+    editState.addChangeListener (this);
     refresh();
 }
 
 TrackHeader::~TrackHeader()
 {
+    editState.removeChangeListener (this);
     trackNode.removeListener (this);
 }
 
@@ -80,6 +94,48 @@ void TrackHeader::valueTreePropertyChanged (juce::ValueTree& tree, const juce::I
 {
     if (tree == trackNode)
         refresh();
+}
+
+void TrackHeader::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree&, int)
+{
+    if (parent.hasType (ids::SENDS))
+        updateViewButton(); // a removed send's lane falls back to volume
+}
+
+void TrackHeader::updateViewButton()
+{
+    const auto text = automation::shortName (automation::shownParameter (trackNode, editState.automationViewFor (track::id (trackNode))));
+    if (viewButton.getButtonText() != text)
+        viewButton.setButtonText (text);
+}
+
+juce::PopupMenu TrackHeader::buildViewMenu() const
+{
+    const auto shown = automation::shownParameter (trackNode, editState.automationViewFor (track::id (trackNode)));
+    juce::PopupMenu menu;
+    menu.addSectionHeader ("Automation lane");
+    menu.addItem (1, "Volume", true, shown == "volume");
+    menu.addItem (2, "Pan", true, shown == "pan");
+    menu.addItem (3, "Mute", true, shown == "mute");
+    for (const auto& s : track::sends (trackNode))
+    {
+        const int slot = send::slot (s);
+        if (! juce::isPositiveAndBelow (slot, Session::maxSends))
+            continue;
+        const auto parameter = automation::sendParameter (slot);
+        menu.addItem (10 + slot, "Send " + juce::String::charToString ((juce::juce_wchar) ('A' + slot)) + " level", true, shown == parameter);
+    }
+    return menu;
+}
+
+void TrackHeader::runViewItem (int item)
+{
+    const auto parameter = item == 2 ? juce::String ("pan")
+                         : item == 3 ? juce::String ("mute")
+                         : item >= 10 ? automation::sendParameter (item - 10)
+                                      : juce::String ("volume");
+    editState.setAutomationView (track::id (trackNode), automation::shownParameter (trackNode, parameter));
+    updateViewButton(); // now, not when the (asynchronous) change message arrives
 }
 
 void TrackHeader::refresh()
@@ -105,6 +161,7 @@ void TrackHeader::refresh()
     // Buses have no clips, so no playlists.
     playlistButton.setVisible (! aux);
     playlistButton.setButtonText (aux ? juce::String() : playlists::activeName (trackNode));
+    updateViewButton();
 
     meter.setNumChannels (track::channels (trackNode));
     repaint();
@@ -160,7 +217,10 @@ void TrackHeader::resized()
     playlistButton.setBounds (keys);
 
     area.removeFromTop (4);
-    infoLabel.setBounds (area.removeFromTop (18));
+    auto info = area.removeFromTop (18);
+    viewButton.setBounds (info.removeFromRight (58));
+    info.removeFromRight (4);
+    infoLabel.setBounds (info);
 }
 
 void TrackHeader::mouseDown (const juce::MouseEvent& e)
