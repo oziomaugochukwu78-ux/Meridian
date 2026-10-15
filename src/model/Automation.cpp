@@ -195,4 +195,18 @@ double staticValue (const juce::ValueTree& track, const juce::String& parameter)
     return track::volumeDb (track);
 }
 
+bool coalesceTrim (juce::ValueTree track, juce::UndoManager* um)
+{
+    auto lane = volumeLane (track);
+    const double trim = track::volumeDb (track);
+    if (! lane.isValid() || juce::exactlyEqual (trim, 0.0))
+        return false;
+    auto pts = points (lane);
+    for (auto& p : pts)
+        p.value = p.value <= -144.0 ? p.value : p.value + trim; // silence stays silence
+    setPoints (lane, pts, um); // clamps to the lane's range
+    track.setProperty (ids::volumeDb, 0.0, um);
+    return true;
+}
+
 } // namespace meridian::automation

@@ -664,6 +664,24 @@ void SelfTest::testTrimMode()
             r.ok && std::abs (readPeak - (toneDb + panCentreDb - 6.0)) < 0.02 && std::abs (trimPeak - (toneDb + panCentreDb - 3.0)) < 0.02,
             r.error + "read " + fmt (readPeak) + " dB, trim " + fmt (trimPeak) + " dB");
     expect ("a session with a track in Trim mode is valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+
+    // Coalesce Trim: the offset goes into the lane, the fader back to 0 dB, and it plays the same.
+    const auto trimmed = readAudio (bounce ("trim_before_coalesce", 0, end).file);
+    auto& um = session->getUndoManager();
+    um.beginNewTransaction ("Coalesce Trim");
+    const bool coalesced = automation::coalesceTrim (t, &um);
+    const auto pts = automation::points (automation::volumeLane (t));
+    const auto after = readAudio (bounce ("trim_coalesced", 0, end).file);
+    double difference = after.getNumSamples() == trimmed.getNumSamples() ? 0.0 : 1.0;
+    for (int i = 0; i < after.getNumSamples() && i < trimmed.getNumSamples(); ++i)
+        difference = std::max (difference, (double) std::abs (after.getSample (0, i) - trimmed.getSample (0, i)));
+    expect ("Coalesce Trim writes the offset into the lane (-6 + 3 = -3 dB), the fader returns to 0 dB, and the mix is unchanged",
+            coalesced && pts.size() == 1 && juce::exactlyEqual (pts[0].value, -3.0) && juce::exactlyEqual (track::volumeDb (t), 0.0)
+                && difference < 1.0e-6,
+            "largest difference " + juce::String (difference));
+    um.undo();
+    expect ("one undo puts the lane and the fader back",
+            juce::exactlyEqual (automation::points (automation::volumeLane (t))[0].value, -6.0) && juce::exactlyEqual (track::volumeDb (t), 3.0), {});
     clearTracks();
 }
 

@@ -263,6 +263,9 @@ void TrackHeader::showMenu()
     menu.addItem (1, "Rename...");
     menu.addItem (2, track::channels (trackNode) == 1 ? "Make Stereo" : "Make Mono", track::isAudio (trackNode));
     menu.addItem (4, "Clear Volume Automation", automation::volumeLane (trackNode).isValid());
+    menu.addItem (8, "Coalesce Trim (write the fader's offset into the volume lane)",
+                  track::automationMode (trackNode) == "trim" && automation::volumeLane (trackNode).isValid()
+                      && ! juce::exactlyEqual (track::volumeDb (trackNode), 0.0));
     menu.addSeparator();
     const auto* session = app.getSession();
     const int index = session != nullptr ? session->indexOfTrack (trackNode) : -1;
@@ -290,6 +293,11 @@ void TrackHeader::showMenu()
                             {
                                 um->beginNewTransaction ("Clear Automation");
                                 automation::clear (self.trackNode, um);
+                            }
+                            else if (result == 8 && um != nullptr)
+                            {
+                                um->beginNewTransaction ("Coalesce Trim");
+                                automation::coalesceTrim (self.trackNode, um);
                             }
                             else if (result == 5)
                                 self.app.duplicateTrack (self.trackNode);

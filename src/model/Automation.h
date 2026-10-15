@@ -66,6 +66,12 @@ bool removeNear (juce::ValueTree lane, juce::int64 time, juce::int64 tolerance, 
 /** Removes the volume lane. */
 void clear (juce::ValueTree track, juce::UndoManager*);
 
+/** Coalesce Trim: adds the fader's dB (the Trim mode offset) to every volume
+    breakpoint and returns the fader to 0 dB, so the track plays the same with
+    the trim written into its lane. False (nothing changed) without a volume
+    lane or with the fader at 0 dB. */
+bool coalesceTrim (juce::ValueTree track, juce::UndoManager*);
+
 /** The automated value at `time` (held flat outside the breakpoints). */
 double valueAt (const std::vector<Point>&, juce::int64 time);
 
