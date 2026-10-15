@@ -1,5 +1,7 @@
 #include "Session.h"
 
+#include "ConsolePresets.h"
+
 #include "SessionRepair.h"
 
 namespace meridian
@@ -76,6 +78,11 @@ std::unique_ptr<Session> Session::createNew (const juce::File& parentFolder, con
     auto s = settings;
     s.name = safeName;
     std::unique_ptr<Session> session (new Session (folder.getChildFile (safeName + fileExtension), createEmptyState (s)));
+
+    // A new session starts on the gentlest measured console colour (ROADMAP "smart
+    // defaults"). Only here: sessions saved without console settings keep the old defaults.
+    if (const auto* warm = consolepresets::find ("Warm Tape"))
+        consolepresets::apply (session->getState(), *warm, nullptr);
 
     if (! session->save (error))
         return nullptr;

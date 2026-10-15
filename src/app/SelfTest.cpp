@@ -252,6 +252,8 @@ bool SelfTest::createSession()
     expect ("create a 48 kHz session", result.wasOk(), result.getErrorMessage());
     if (result.failed())
         return false;
+    expect ("a new session starts with the console on Warm Tape (the gentlest measured preset)",
+            consolepresets::current (app.getSession()->getState()) == "Warm Tape", consolepresets::current (app.getSession()->getState()));
 
     setConsole (false); // exact-level checks need the clean bus; the console is tested on its own
     return true;
