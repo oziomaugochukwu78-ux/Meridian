@@ -41,6 +41,12 @@ juce::ValueTree trimmedCopy (const juce::ValueTree& c, juce::int64 start, juce::
     // A cut edge has no fade (as Separate leaves it); a kept fade still fits the clip.
     copy.setProperty (ids::fadeIn, from > s ? juce::int64 (0) : std::min (clip::fadeIn (c), length), nullptr);
     copy.setProperty (ids::fadeOut, to < e ? juce::int64 (0) : std::min (clip::fadeOut (c), length), nullptr);
+    if (from > s)
+        for (const auto& id : { ids::fadeInShape, ids::crossfadeIn, ids::extendedIn })
+            copy.removeProperty (id, nullptr);
+    if (to < e)
+        for (const auto& id : { ids::fadeOutShape, ids::extendedOut })
+            copy.removeProperty (id, nullptr);
     return copy;
 }
 

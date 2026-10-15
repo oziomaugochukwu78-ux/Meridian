@@ -3,6 +3,7 @@
 #include "CommandIds.h"
 #include "media/AudioImporter.h"
 #include "model/Automation.h"
+#include "model/Fades.h"
 #include "model/ConsolePresets.h"
 #include "model/MidiModel.h"
 #include "model/Playlists.h"
@@ -4212,6 +4213,7 @@ void SelfTest::timerCallback()
                     testPlaylistSelector();
                     testEditModes();
                     testClipboard();
+                    testCrossfades();
                     testAutomationLanes();
                     testMixSections();
                     testTempoRuler();
@@ -4239,6 +4241,7 @@ void SelfTest::timerCallback()
                 testPlaylistSelector();
                 testEditModes();
                 testClipboard();
+                testCrossfades();
                 testAutomationLanes();
                 testMixSections();
                 testTempoRuler();
@@ -4939,6 +4942,116 @@ void SelfTest::testPlaylistSelector()
 // Shuffle and Spot edit modes, with the simulated mouse. Three clips butted
 // together, A [0.5 s, 1 s), B [1 s, 1.5 s), C [1.5 s, 2 s), and a volume
 // breakpoint inside C at 1.6 s, so every check is an exact sample position.
+
+void SelfTest::testCrossfades()
+{
+    beginGroup ("Edit window: fades, crossfades and batch fades");
+    auto* session = app.getSession();
+    auto& um = session->getUndoManager();
+    auto& view = main.getEditView().getEditState();
+    auto& commands = main.getCommandManager();
+    auto& settings = app.getSettings();
+    const bool previousShape = settings.getBoolValue ("crossfadeEqualGain", false);
+    main.showWindow (WindowKind::edit);
+    commands.invokeDirectly (commands::slipMode, false);
+
+    clearTracks();
+    const auto tone = media.getChildFile ("tone1k_mono.wav");
+    auto t = session->addTrack ("Crossfade", 1, nullptr);
+    auto a = session->addClip (t, tone, 24000, 0, 48000, 96000, "Take", nullptr);
+    setConsole (false);
+    const auto whole = readAudio (bounce ("xfade_whole", 0, 96000).file);
+    auto b = session->splitClip (a, 48000, nullptr);
+    um.clearUndoHistory();
+
+    auto maxDifference = [] (const juce::AudioBuffer<float>& x, const juce::AudioBuffer<float>& y)
+    {
+        double worst = x.getNumSamples() == y.getNumSamples() ? 0.0 : 1.0;
+        for (int i = 0; i < std::min (x.getNumSamples(), y.getNumSamples()); ++i)
+            worst = std::max (worst, (double) std::abs (x.getSample (0, i) - y.getSample (0, i)));
+        return worst;
+    };
+    auto describe = [] (const juce::ValueTree& c)
+    {
+        return juce::String (clip::start (c)) + ".." + juce::String (clip::end (c)) + " in " + juce::String (clip::fadeIn (c))
+               + " out " + juce::String (clip::fadeOut (c));
+    };
+
+    // Equal gain, inside one take: the crossfade is seamless (nulls against the unedited clip).
+    settings.setValue ("crossfadeEqualGain", true);
+    view.setTimeSelection (47000, 49000, { track::id (t) });
+    commands.invokeDirectly (commands::fadeSelection, false);
+    expect ("Fade/Crossfade (Ctrl+F) over a join: both clips extend into their handles and fade over the selection",
+            clip::end (a) == 49000 && clip::fadeOut (a) == 2000 && clip::start (b) == 47000 && clip::fadeIn (b) == 2000
+                && clip::offset (b) == 23000 && fades::isCrossfadeIn (b) && um.getUndoDescription() == "Fade/Crossfade",
+            describe (a) + " | " + describe (b));
+    const auto gainXfade = readAudio (bounce ("xfade_equal_gain", 0, 96000).file);
+    const double seam = maxDifference (gainXfade, whole);
+    expect ("an equal-gain crossfade inside one take is seamless: it nulls against the unedited clip", seam < 1.0e-6,
+            "largest difference " + juce::String (seam));
+    um.undo();
+    expect ("one undo gives back the butted clips exactly",
+            clip::end (a) == 48000 && clip::start (b) == 48000 && clip::offset (b) == 24000 && clip::fadeIn (b) == 0
+                && ! fades::isCrossfadeIn (b),
+            describe (a) + " | " + describe (b));
+
+    // Equal power: right for different material; on the same take it shows the expected +3 dB in the middle.
+    settings.setValue ("crossfadeEqualGain", false);
+    commands.invokeDirectly (commands::fadeSelection, false);
+    const auto powerXfade = readAudio (bounce ("xfade_equal_power", 0, 96000).file);
+    const auto middle = dsp::measureLevels (powerXfade.getReadPointer (0, 48000 - 48), 96);
+    const auto steady = dsp::measureLevels (powerXfade.getReadPointer (0, 30000), 4800);
+    const double bump = db (middle.peak) - db (steady.peak);
+    expect ("an equal-power crossfade keeps the power of uncorrelated sides: +3.01 dB at its centre for one take",
+            std::abs (bump - 3.01) < 0.05, fmt (bump) + " dB");
+
+    // Remove Fades on the incoming clip undoes the crossfade.
+    um.beginNewTransaction ("Remove Fades");
+    fades::removeFades (b, &um);
+    expect ("Remove Fades on a crossfaded clip puts both clips back to butting at the join",
+            clip::end (a) == 48000 && clip::fadeOut (a) == 0 && clip::start (b) == 48000 && clip::fadeIn (b) == 0,
+            describe (a) + " | " + describe (b));
+
+    // Batch fades: a selection over several edges gives each a 10 ms fade.
+    view.setTimeSelection (0, 96000, { track::id (t) });
+    commands.invokeDirectly (commands::fadeSelection, false);
+    expect ("batch fades: 10 ms on the free start and end, and a 10 ms crossfade centred on the join",
+            clip::fadeIn (a) == 480 && clip::fadeOut (a) == 480 && clip::end (a) == 48240 && clip::start (b) == 47760
+                && clip::fadeIn (b) == 480 && clip::fadeOut (b) == 480,
+            describe (a) + " | " + describe (b));
+    const auto batch = readAudio (bounce ("xfade_batch", 0, 96000).file);
+    const auto atStart = dsp::measureLevels (batch.getReadPointer (0, 24000), 48);
+    const auto settled = dsp::measureLevels (batch.getReadPointer (0, 24480), 480);
+    expect ("and the fade-in plays: the first millisecond is far quieter than after the fade",
+            db (atStart.peak) < db (settled.peak) - 12.0, fmt (db (atStart.peak)) + " vs " + fmt (db (settled.peak)) + " dB");
+
+    // A join with no audio past either edge cannot be crossfaded, and says so.
+    auto t2 = session->addTrack ("No Handles", 1, nullptr);
+    auto full = session->addClip (t2, tone, 0, 0, 96000, 96000, "Whole File", nullptr);
+    auto next = session->addClip (t2, tone, 96000, 0, 48000, 96000, "From The Top", nullptr);
+    juce::StringArray problems;
+    const auto previousHandler = app.showProblem;
+    app.showProblem = [&problems] (const juce::String& title, const juce::String& message) { problems.add (title + ": " + message); };
+    view.setTimeSelection (95000, 97000, { track::id (t2) });
+    commands.invokeDirectly (commands::fadeSelection, false);
+    app.showProblem = previousHandler;
+    expect ("a join with no audio past either edge is left alone, with an explanation",
+            clip::end (full) == 96000 && clip::start (next) == 96000 && problems.size() == 1 && problems[0].contains ("past the join"),
+            problems.joinIntoString (" | "));
+
+    // Separating inside a crossfaded clip keeps the crossfade on the part that has it.
+    view.setTimeSelection (60000, 60000, { track::id (t) });
+    auto right = session->splitClip (b, 60000, &um);
+    expect ("Separate keeps the crossfade on the left part only, and the session stays valid",
+            fades::isCrossfadeIn (b) && right.isValid() && ! fades::isCrossfadeIn (right) && clip::fadeIn (right) == 0
+                && findSessionProblem (*session).isEmpty(),
+            describe (b) + " | " + describe (right) + " " + findSessionProblem (*session));
+
+    settings.setValue ("crossfadeEqualGain", previousShape);
+    setConsole (true, 6.0, 0.35);
+    view.clearSelection();
+    clearTracks();
+}
 
 void SelfTest::testClipboard()
 {

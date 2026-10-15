@@ -314,7 +314,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& c)
 {
     using namespace commands;
     c.addArray ({ dashboard, openSession, saveSession, saveSessionAs, importAudio, bounceMix,
-                  undo, redo, cutSelection, copySelection, pasteClipboard, duplicateSelection, separateClip, deleteSelection, elasticAudio, zoomIn, zoomOut,
+                  undo, redo, cutSelection, copySelection, pasteClipboard, duplicateSelection, fadeSelection, crossfadeEqualGain, separateClip, deleteSelection, elasticAudio, zoomIn, zoomOut,
                   shuffleMode, slipMode, spotMode, gridMode, trimTool, selectorTool, grabberTool, smartTool, pencilTool,
                   newTracks, deleteTrack,
                   playStop, record, returnToZero, loopPlayback, punchRecording, clickToggle, countInOff, countIn1Bar, countIn2Bars, addMarker,
@@ -374,6 +374,13 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                                info.addDefaultKeypress ('v', cmd); info.setActive (hasSession && ! editView.getClipboard().isEmpty()); break;
         case duplicateSelection: info.setInfo ("Duplicate", "Put a copy of the selection right after it", "Edit", 0);
                                info.addDefaultKeypress ('d', cmd); info.setActive (hasSession && editView.hasSelectionToCopy()); break;
+        case fadeSelection:    info.setInfo ("Fade/Crossfade", "Fade or crossfade the clip edges in the selection "
+                                             "(one edge: over the selection; several: 10 ms batch fades)", "Edit", 0);
+                               info.addDefaultKeypress ('f', cmd); info.setActive (hasSession && edit.hasTimeRange()); break;
+        case crossfadeEqualGain: info.setInfo ("Fades: Equal Gain (for edits inside one take)",
+                                             "New fades are linear, so a crossfade inside one recording is seamless; "
+                                             "off: equal power, for joining different material", "Edit", 0);
+                               info.setTicked (app.getSettings().getBoolValue ("crossfadeEqualGain", false)); break;
         case separateClip:     info.setInfo ("Separate Clip", "Split clips at the selection or cursor", "Edit", 0);
                                info.addDefaultKeypress ('e', cmd); info.setActive (hasSession); break;
         case deleteSelection:  info.setInfo ("Delete", "Delete the selected clip or time range", "Edit", 0);
@@ -495,6 +502,11 @@ bool MainComponent::perform (const InvocationInfo& info)
         case copySelection:   editView.copySelection(); break;
         case pasteClipboard:  editView.pasteClipboard(); break;
         case duplicateSelection: editView.duplicateSelection(); break;
+        case fadeSelection:   editView.fadeSelection(); break;
+        case crossfadeEqualGain:
+            app.getSettings().setValue ("crossfadeEqualGain", ! app.getSettings().getBoolValue ("crossfadeEqualGain", false));
+            commandManager.commandStatusChanged();
+            break;
         case separateClip:    editView.separateAtSelection(); break;
         case deleteSelection: editView.deleteSelection(); break;
         case elasticAudio:    editView.openElasticDialog ({}); break;
@@ -639,6 +651,8 @@ juce::PopupMenu MainComponent::getMenuForIndex (int index, const juce::String&)
             add (cutSelection); add (copySelection); add (pasteClipboard); add (duplicateSelection);
             menu.addSeparator();
             add (separateClip); add (deleteSelection);
+            menu.addSeparator();
+            add (fadeSelection); add (crossfadeEqualGain);
             menu.addSeparator();
             add (elasticAudio);
             menu.addSeparator();

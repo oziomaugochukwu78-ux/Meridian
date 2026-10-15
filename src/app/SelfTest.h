@@ -134,6 +134,7 @@ private:
     void testPlaylistSelector();
     void testEditModes();
     void testClipboard();
+    void testCrossfades();
     void testAutomationLanes();
     void testMixSections();
     void testTempoRuler();

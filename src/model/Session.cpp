@@ -436,9 +436,15 @@ juce::ValueTree Session::splitClip (juce::ValueTree c, juce::int64 position, juc
     right.setProperty (ids::offset, clip::offset (c) + (position - s), nullptr);
     right.setProperty (ids::length, e - position, nullptr);
     right.setProperty (ids::fadeIn, 0, nullptr);
+    // A crossfade stays with the side that keeps its edge.
+    right.removeProperty (ids::fadeInShape, nullptr);
+    right.removeProperty (ids::crossfadeIn, nullptr);
+    right.removeProperty (ids::extendedIn, nullptr);
 
     c.setProperty (ids::length, position - s, um);
     c.setProperty (ids::fadeOut, 0, um);
+    c.removeProperty (ids::fadeOutShape, um);
+    c.removeProperty (ids::extendedOut, um);
 
     // Insert directly above the original so the z-order of other clips is unchanged.
     auto parent = c.getParent();

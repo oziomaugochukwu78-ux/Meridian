@@ -30,6 +30,8 @@ enum : juce::CommandID
     copySelection,
     pasteClipboard,
     duplicateSelection,
+    fadeSelection,
+    crossfadeEqualGain,
 
     // Tools and modes
     slipMode = 0x12100,

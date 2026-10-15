@@ -53,6 +53,8 @@ public:
         repeating it lays copies end to end. Leaves the clipboard alone. */
     void duplicateSelection();
     bool hasSelectionToCopy() const;
+    /** Fade/Crossfade (Ctrl+F) over the time selection on the selected tracks. */
+    void fadeSelection();
     const clipboard::Contents& getClipboard() const noexcept { return clipboardContents; }
     void openElasticDialog (juce::ValueTree clip);
     void zoomBy (double factor);

@@ -1,4 +1,5 @@
 #include "ClipComponent.h"
+#include "model/Fades.h"
 
 #include "media/TimeStretchEngine.h"
 #include "model/MidiModel.h"
@@ -223,7 +224,22 @@ void ClipComponent::paint (juce::Graphics& g)
         g.setColour (theme::text.withAlpha (0.6f));
         g.strokePath (shade, juce::PathStrokeType (1.0f));
     };
-    drawFade (clip::fadeIn (clipNode), true);
+    if (fades::isCrossfadeIn (clipNode) && clip::fadeIn (clipNode) > 0)
+    {
+        // A crossfade: an X over the span where both clips play.
+        const float w = (float) ((double) clip::fadeIn (clipNode) / editState.samplesPerPixel);
+        const auto area = juce::Rectangle<float> (clipRect.getX(), (float) nameBarHeight, w, clipRect.getBottom() - (float) nameBarHeight);
+        g.setColour (juce::Colours::black.withAlpha (0.25f));
+        g.fillRect (area);
+        g.setColour (theme::text.withAlpha (0.75f));
+        g.drawLine (area.getX(), area.getBottom(), area.getRight(), area.getY(), 1.2f);
+        g.drawLine (area.getX(), area.getY(), area.getRight(), area.getBottom(), 1.2f);
+        g.drawRect (area, 1.0f);
+    }
+    else
+    {
+        drawFade (clip::fadeIn (clipNode), true);
+    }
     drawFade (clip::fadeOut (clipNode), false);
 
     // Clip gain: a line where it is set (when not 0 dB), and the handle with its value.
@@ -603,7 +619,9 @@ void ClipComponent::showMenu()
     }
     menu.addItem (1, "Elastic Audio: Time / Pitch...", isTimeStretchAvailable() && ! midi);
     menu.addSeparator();
-    menu.addItem (2, "Remove Fades", ! midi && (clip::fadeIn (clipNode) > 0 || clip::fadeOut (clipNode) > 0));
+    menu.addItem (2, "Remove Fades", ! midi && (clip::fadeIn (clipNode) > 0 || clip::fadeOut (clipNode) > 0
+                                               || (juce::int64) clipNode.getProperty (ids::extendedIn, 0) > 0
+                                               || (juce::int64) clipNode.getProperty (ids::extendedOut, 0) > 0));
     menu.addItem (3, "Delete Clip");
 
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMousePosition(),
@@ -627,8 +645,7 @@ void ClipComponent::showMenu()
                             else if (result == 2)
                             {
                                 um->beginNewTransaction ("Remove Fades");
-                                clipCopy.setProperty (ids::fadeIn, 0, um);
-                                clipCopy.setProperty (ids::fadeOut, 0, um);
+                                fades::removeFades (clipCopy, um); // crossfades too: the clips butt again
                             }
                             else if (result == 3)
                             {

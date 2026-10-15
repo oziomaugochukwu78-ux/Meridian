@@ -1,4 +1,5 @@
 #include "EditView.h"
+#include "model/Fades.h"
 #include "model/MidiModel.h"
 #include "model/Shuffle.h"
 
@@ -356,6 +357,25 @@ void EditView::deleteSelection (const juce::String& actionName)
         if (shuffling)
             shuffle::closeRange (t, state.selectionStart, state.selectionEnd, &um);
     }
+}
+
+void EditView::fadeSelection()
+{
+    auto* session = app.getSession();
+    if (session == nullptr || ! state.hasTimeRange())
+        return;
+    auto& um = session->getUndoManager();
+    um.beginNewTransaction ("Fade/Crossfade");
+    const auto shape = app.getSettings().getBoolValue ("crossfadeEqualGain", false) ? fades::Shape::equalGain
+                                                                                     : fades::Shape::equalPower;
+    const auto batch = (juce::int64) std::llround (fades::defaultBatchSeconds * session->getSampleRate());
+    int impossible = 0;
+    for (auto t : tracksForEdit())
+        impossible += fades::apply (t, state.selectionStart, state.selectionEnd, shape, batch, &um).impossible;
+    if (impossible > 0 && app.showProblem)
+        app.showProblem ("Fade/Crossfade", juce::String (impossible) + (impossible == 1 ? " join" : " joins")
+                                           + " could not be crossfaded: neither clip has recorded audio past the join to fade over. "
+                                             "Trim the clips back a little, then try again.");
 }
 
 bool EditView::hasSelectionToCopy() const

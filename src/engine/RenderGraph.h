@@ -69,6 +69,8 @@ struct ClipSegment
     juce::int64 clipEnd = 0;
     juce::int64 fadeIn = 0;
     juce::int64 fadeOut = 0;
+    bool fadeInLinear = false;      ///< equal-gain (linear) shape instead of equal-power
+    bool fadeOutLinear = false;
 
     std::shared_ptr<ClipStream> stream;
 };

@@ -503,7 +503,10 @@ void EngineBridge::buildSegments (const juce::ValueTree& t, TrackRender& render,
         for (int j = i + 1; j < numClips && ! visible.empty(); ++j)
         {
             const auto above = clipsNode.getChild (j);
-            subtract (visible, clip::start (above), clip::end (above));
+            // A crossfade's incoming clip lets this one play on under its fade-in.
+            const auto coveredFrom = clip::start (above)
+                                     + ((bool) above.getProperty (ids::crossfadeIn, false) ? clip::fadeIn (above) : 0);
+            subtract (visible, coveredFrom, clip::end (above));
         }
 
         const auto file = session->resolveStoredPath (c[ids::file].toString());
@@ -531,6 +534,8 @@ void EngineBridge::buildSegments (const juce::ValueTree& t, TrackRender& render,
             seg.clipEnd = end;
             seg.fadeIn = juce::jlimit<juce::int64> (0, end - start, clip::fadeIn (c));
             seg.fadeOut = juce::jlimit<juce::int64> (0, end - start, clip::fadeOut (c));
+            seg.fadeInLinear = c[ids::fadeInShape].toString() == "gain";
+            seg.fadeOutLinear = c[ids::fadeOutShape].toString() == "gain";
             seg.stream = std::move (stream);
             render.segments.push_back (std::move (seg));
         }

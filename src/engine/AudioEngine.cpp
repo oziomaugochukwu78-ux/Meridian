@@ -561,10 +561,17 @@ void AudioEngine::renderSegments (TrackRender& t, const BlockContext& ctx) noexc
                 double g = 1.0;
                 const auto sinceStart = time - seg.clipStart;
                 if (seg.fadeIn > 0 && sinceStart < seg.fadeIn)
-                    g *= std::sin (halfPi * ((double) sinceStart + 0.5) / (double) seg.fadeIn);
+                {
+                    const double x = ((double) sinceStart + 0.5) / (double) seg.fadeIn;
+                    g *= seg.fadeInLinear ? x : std::sin (halfPi * x);
+                }
                 const auto untilEnd = seg.clipEnd - time;
                 if (seg.fadeOut > 0 && untilEnd <= seg.fadeOut)
-                    g *= std::sin (halfPi * ((double) untilEnd - 0.5) / (double) seg.fadeOut);
+                {
+                    // Mirrors the fade-in, so a crossfade's two gains sum to 1 (linear) or their powers do (sine).
+                    const double x = ((double) untilEnd - 0.5) / (double) seg.fadeOut;
+                    g *= seg.fadeOutLinear ? x : std::sin (halfPi * x);
+                }
 
                 for (int ch = 0; ch < t.numChannels; ++ch)
                     scratch[ch][i] *= (float) g;

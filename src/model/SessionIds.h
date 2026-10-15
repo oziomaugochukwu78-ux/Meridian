@@ -16,6 +16,7 @@
                inputChannel automationMode outputBus playlist
           CLIPS                              (the active playlist: what plays and is edited)
             CLIP  id name file start length offset sourceLength gainDb fadeIn fadeOut
+                  fadeInShape fadeOutShape crossfadeIn extendedIn extendedOut
           PLAYLISTS                          (optional: the other playlists, see model/Playlists.h)
             PLAYLIST  name
               CLIPS ...
@@ -155,6 +156,11 @@ MERIDIAN_ID (sourceLength)
 MERIDIAN_ID (gainDb)
 MERIDIAN_ID (fadeIn)
 MERIDIAN_ID (fadeOut)
+MERIDIAN_ID (fadeInShape)
+MERIDIAN_ID (fadeOutShape)
+MERIDIAN_ID (crossfadeIn)
+MERIDIAN_ID (extendedIn)
+MERIDIAN_ID (extendedOut)
 
 // INSERT
 MERIDIAN_ID (slot)
