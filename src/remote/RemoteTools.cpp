@@ -1,4 +1,5 @@
 #include "RemoteTools.h"
+#include "media/StripSilence.h"
 #include "model/Groups.h"
 
 #include "app/AppController.h"
@@ -422,6 +423,18 @@ const std::vector<ToolInfo>& toolTable()
                     { "drive_db", "number", "Console drive, -12 to +24 dB (how early saturation starts; below 0 only colours)" },
                     { "character", "number", "Console asymmetry 0-1 (more = more 2nd harmonic warmth)" },
                     { "curve", "string", "Saturation curve", false, { "tanh", "cubic" } } }) },
+        { "strip_silence", "Strip silence from a track",
+          "Removes the quiet parts of an audio track's clips (between takes, pauses between sentences, a drum mic's "
+          "bleed), leaving one clip for each audible stretch. Only audio below the threshold goes, so what remains "
+          "plays exactly as before. Defaults: threshold -48 dB, quiet stretches under 0.25 s kept, 5 ms kept before "
+          "and 50 ms after each stretch; the whole track unless start/end are given.",
+          schema ({ { "track", "track", trackHelp, true },
+                    { "start_seconds", "number", "Range start (default: the session start)" },
+                    { "end_seconds", "number", "Range end (default: the end of the last clip)" },
+                    { "threshold_db", "number", "Quieter than this is silence (-120 to 0, default -48)" },
+                    { "min_silence_seconds", "number", "Shorter quiet stretches are kept (default 0.25)" },
+                    { "pad_before_seconds", "number", "Kept before each audible stretch (default 0.005)" },
+                    { "pad_after_seconds", "number", "Kept after it (default 0.05)" } }) },
         { "group", "Group tracks",
           "Mix and edit groups. create: the tracks move together: faders relatively (same change in dB), mute, solo, "
           "record arm and automation mode (links mix), and selection, so edits apply to all of them (links edit). "
@@ -645,6 +658,7 @@ RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var
     if (name == "set_up")             return setUp (args);
     if (name == "list_presets")       return listPresets (args);
     if (name == "group")              return group (args);
+    if (name == "strip_silence")      return stripSilence (args);
     if (name == "set_master")         return setMaster (args);
     if (name == "bounce")             return bounce (args);
     if (name == "undo")               return undoRedo (args, true);
@@ -1975,6 +1989,46 @@ const std::vector<Recipe>& setUpRecipes()
     return recipes;
 }
 } // namespace
+
+RemoteTools::Result RemoteTools::stripSilence (const juce::var& args)
+{
+    juce::String error;
+    auto t = findTrack (args["track"], error);
+    if (! t.isValid())
+        return { false, {}, error };
+    if (! track::isAudio (t))
+        return { false, {}, "Strip Silence works on audio tracks; \"" + track::name (t) + "\" has no audio clips." };
+
+    auto* session = app.getSession();
+    const double rate = session->getSampleRate();
+    juce::int64 start = 0, end = 0;
+    for (const auto& c : track::clips (t))
+        end = std::max (end, clip::end (c));
+    if (args.hasProperty ("start_seconds"))
+        start = std::max<juce::int64> (0, (juce::int64) std::llround ((double) args["start_seconds"] * rate));
+    if (args.hasProperty ("end_seconds"))
+        end = (juce::int64) std::llround ((double) args["end_seconds"] * rate);
+    if (end <= start)
+        return { false, {}, "Nothing to strip: the range is empty (or the track has no clips)." };
+
+    stripsilence::Params p;
+    auto number = [&args] (const char* key, double lo, double hi, double fallback)
+    {
+        return args.hasProperty (key) ? juce::jlimit (lo, hi, (double) args[key]) : fallback;
+    };
+    p.thresholdDb = number ("threshold_db", -120.0, 0.0, p.thresholdDb);
+    p.minSilenceSeconds = number ("min_silence_seconds", 0.001, 10.0, p.minSilenceSeconds);
+    p.padBeforeSeconds = number ("pad_before_seconds", 0.0, 2.0, p.padBeforeSeconds);
+    p.padAfterSeconds = number ("pad_after_seconds", 0.0, 5.0, p.padAfterSeconds);
+
+    const auto r = stripsilence::apply (*session, app.getFormatManager(), t, start, end, p, app.getUndoManager());
+    juce::Array<juce::var> unreadable;
+    for (const auto& name : r.unreadable)
+        unreadable.add (name);
+    return { true, makeObject ({ { "track", track::name (t) }, { "clips", r.clipsMade },
+                                 { "removed_seconds", std::round ((double) r.samplesRemoved / rate * 1000.0) / 1000.0 },
+                                 { "unreadable_clips", unreadable } }), {} };
+}
 
 RemoteTools::Result RemoteTools::group (const juce::var& args)
 {

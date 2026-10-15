@@ -31,6 +31,7 @@ enum : juce::CommandID
     pasteClipboard,
     duplicateSelection,
     fadeSelection,
+    stripSilence,
     crossfadeEqualGain,
     nudgeEarlier,
     nudgeLater,

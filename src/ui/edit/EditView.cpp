@@ -367,6 +367,27 @@ void EditView::deleteSelection (const juce::String& actionName)
     }
 }
 
+stripsilence::Result EditView::stripSilence (const stripsilence::Params& params)
+{
+    stripsilence::Result total;
+    auto* session = app.getSession();
+    if (session == nullptr || ! state.hasTimeRange())
+        return total;
+    auto& um = session->getUndoManager();
+    um.beginNewTransaction ("Strip Silence");
+    for (auto t : tracksForEdit())
+    {
+        if (! track::isAudio (t))
+            continue;
+        const auto r = stripsilence::apply (*session, app.getFormatManager(), t, state.selectionStart, state.selectionEnd, params, &um);
+        total.clipsAnalysed += r.clipsAnalysed;
+        total.clipsMade += r.clipsMade;
+        total.samplesRemoved += r.samplesRemoved;
+        total.unreadable.addArray (r.unreadable);
+    }
+    return total;
+}
+
 void EditView::fadeSelection()
 {
     auto* session = app.getSession();

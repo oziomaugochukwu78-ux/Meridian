@@ -42,6 +42,8 @@ add_library(meridian_core STATIC
     dsp/SaturationCurve.cpp
     dsp/SaturationCurve.h
     dsp/SignalAnalysis.cpp
+    dsp/SilenceDetector.cpp
+    dsp/SilenceDetector.h
     dsp/SignalAnalysis.h
     dsp/SimdConfig.h
     dsp/StereoDelay.cpp

@@ -311,6 +311,48 @@ void MainComponent::showRemoteControlInfo()
 }
 
 //==============================================================================
+void MainComponent::showStripSilenceDialog()
+{
+    if (app.getSession() == nullptr || ! editView.getEditState().hasTimeRange())
+        return;
+    auto& settings = app.getSettings();
+    const stripsilence::Params defaults;
+    auto* w = new juce::AlertWindow ("Strip Silence", "Remove what is quieter than the threshold from the clips in the selection. "
+                                     "Quiet stretches shorter than the minimum stay (pauses inside a phrase).",
+                                     juce::MessageBoxIconType::NoIcon, this);
+    w->addTextEditor ("threshold", settings.getValue ("stripThresholdDb", juce::String (defaults.thresholdDb)), "Threshold (dB):");
+    w->addTextEditor ("minimum", settings.getValue ("stripMinSilenceMs", juce::String (defaults.minSilenceSeconds * 1000.0)), "Minimum silence (ms):");
+    w->addTextEditor ("before", settings.getValue ("stripPadBeforeMs", juce::String (defaults.padBeforeSeconds * 1000.0)), "Keep before (ms):");
+    w->addTextEditor ("after", settings.getValue ("stripPadAfterMs", juce::String (defaults.padAfterSeconds * 1000.0)), "Keep after (ms):");
+    w->addButton ("Strip", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w] (int result)
+    {
+        if (result != 1)
+            return;
+        auto& s = app.getSettings();
+        auto number = [w] (const char* field, double lo, double hi, double fallback)
+        {
+            const auto text = w->getTextEditorContents (field).trim();
+            const double v = text.getDoubleValue();
+            return text.isNotEmpty() && std::isfinite (v) ? juce::jlimit (lo, hi, v) : fallback;
+        };
+        stripsilence::Params p;
+        p.thresholdDb = number ("threshold", -120.0, 0.0, p.thresholdDb);
+        p.minSilenceSeconds = number ("minimum", 1.0, 10000.0, p.minSilenceSeconds * 1000.0) / 1000.0;
+        p.padBeforeSeconds = number ("before", 0.0, 2000.0, p.padBeforeSeconds * 1000.0) / 1000.0;
+        p.padAfterSeconds = number ("after", 0.0, 5000.0, p.padAfterSeconds * 1000.0) / 1000.0;
+        s.setValue ("stripThresholdDb", p.thresholdDb);
+        s.setValue ("stripMinSilenceMs", p.minSilenceSeconds * 1000.0);
+        s.setValue ("stripPadBeforeMs", p.padBeforeSeconds * 1000.0);
+        s.setValue ("stripPadAfterMs", p.padAfterSeconds * 1000.0);
+        const auto r = editView.stripSilence (p);
+        if (! r.unreadable.isEmpty())
+            showMessage (juce::MessageBoxIconType::WarningIcon, "Strip Silence",
+                         "These clips were left alone because their audio could not be read: " + r.unreadable.joinIntoString (", "));
+    }), true);
+}
+
 void MainComponent::showGroupDialog()
 {
     auto* session = app.getSession();
@@ -339,7 +381,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& c)
 {
     using namespace commands;
     c.addArray ({ dashboard, openSession, saveSession, saveSessionAs, importAudio, bounceMix,
-                  undo, redo, cutSelection, copySelection, pasteClipboard, duplicateSelection, fadeSelection, crossfadeEqualGain, nudgeEarlier, nudgeLater, nudge1ms, nudge10ms, nudge100ms, nudge1s, separateClip, deleteSelection, elasticAudio, zoomIn, zoomOut,
+                  undo, redo, cutSelection, copySelection, pasteClipboard, duplicateSelection, fadeSelection, stripSilence, crossfadeEqualGain, nudgeEarlier, nudgeLater, nudge1ms, nudge10ms, nudge100ms, nudge1s, separateClip, deleteSelection, elasticAudio, zoomIn, zoomOut,
                   shuffleMode, slipMode, spotMode, gridMode, trimTool, selectorTool, grabberTool, smartTool, pencilTool,
                   newTracks, deleteTrack, groupTracks,
                   playStop, record, returnToZero, loopPlayback, punchRecording, clickToggle, countInOff, countIn1Bar, countIn2Bars, addMarker,
@@ -402,6 +444,9 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
         case fadeSelection:    info.setInfo ("Fade/Crossfade", "Fade or crossfade the clip edges in the selection "
                                              "(one edge: over the selection; several: 10 ms batch fades)", "Edit", 0);
                                info.addDefaultKeypress ('f', cmd); info.setActive (hasSession && edit.hasTimeRange()); break;
+        case stripSilence:     info.setInfo ("Strip Silence...", "Remove the quiet parts of the clips in the selection, "
+                                             "leaving a clip for each audible stretch", "Edit", 0);
+                               info.addDefaultKeypress ('u', cmd); info.setActive (hasSession && edit.hasTimeRange()); break;
         case crossfadeEqualGain: info.setInfo ("Fades: Equal Gain (for edits inside one take)",
                                              "New fades are linear, so a crossfade inside one recording is seamless; "
                                              "off: equal power, for joining different material", "Edit", 0);
@@ -552,6 +597,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case pasteClipboard:  editView.pasteClipboard(); break;
         case duplicateSelection: editView.duplicateSelection(); break;
         case fadeSelection:   editView.fadeSelection(); break;
+        case stripSilence:    showStripSilenceDialog(); break;
         case crossfadeEqualGain:
             app.getSettings().setValue ("crossfadeEqualGain", ! app.getSettings().getBoolValue ("crossfadeEqualGain", false));
             commandManager.commandStatusChanged();
@@ -709,6 +755,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int index, const juce::String&)
             add (separateClip); add (deleteSelection);
             menu.addSeparator();
             add (fadeSelection); add (crossfadeEqualGain);
+            add (stripSilence);
             menu.addSeparator();
             add (nudgeEarlier); add (nudgeLater);
             {

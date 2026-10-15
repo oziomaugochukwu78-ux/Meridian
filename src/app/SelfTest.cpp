@@ -4034,8 +4034,8 @@ void SelfTest::testMcpTools()
     if (toolArray != nullptr)
         for (const auto& tool : *toolArray)
             allDescribed = allDescribed && tool["inputSchema"].isObject() && tool["description"].toString().length() > 20;
-    expect ("tools/list describes all 47 tools, each with a description and a JSON schema",
-            allDescribed && toolArray->size() == 47, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
+    expect ("tools/list describes all 48 tools, each with a description and a JSON schema",
+            allDescribed && toolArray->size() == 48, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
 
     auto r = toolCall ("get_status", "{}");
     expect ("get_status returns the session and tracks", ! failed (r) && callText (r).contains ("\"Vocal\""), callText (r).substring (0, 160));
@@ -4216,6 +4216,7 @@ void SelfTest::timerCallback()
                     testClipboard();
                     testCrossfades();
                     testGroups();
+                    testStripSilence();
                     testAutomationLanes();
                     testMixSections();
                     testTempoRuler();
@@ -4245,6 +4246,7 @@ void SelfTest::timerCallback()
                 testClipboard();
                 testCrossfades();
                 testGroups();
+                testStripSilence();
                 testAutomationLanes();
                 testMixSections();
                 testTempoRuler();
@@ -4945,6 +4947,81 @@ void SelfTest::testPlaylistSelector()
 // Shuffle and Spot edit modes, with the simulated mouse. Three clips butted
 // together, A [0.5 s, 1 s), B [1 s, 1.5 s), C [1.5 s, 2 s), and a volume
 // breakpoint inside C at 1.6 s, so every check is an exact sample position.
+
+void SelfTest::testStripSilence()
+{
+    beginGroup ("Strip Silence");
+    auto* session = app.getSession();
+    auto& um = session->getUndoManager();
+    auto& view = main.getEditView().getEditState();
+    auto& tools = app.getRemoteTools();
+    auto call = [&tools] (const juce::String& tool, const juce::String& arguments) { return tools.call (tool, juce::JSON::parse (arguments)); };
+
+    // 2.5 s: a 1 kHz tone at -12 dBFS over 0-0.5 s, 1.0-1.5 s and 1.55-2.05 s (a 50 ms pause), silence elsewhere.
+    const auto file = media.getChildFile ("bursts.wav");
+    {
+        juce::String error;
+        auto writer = createSessionWriter (file, sampleRate, 1, 32, false, error);
+        juce::AudioBuffer<float> buffer (1, 120000);
+        buffer.clear();
+        for (const auto& [from, to] : { std::pair { 0, 24000 }, std::pair { 48000, 72000 }, std::pair { 74400, 98400 } })
+            for (int i = from; i < to; ++i)
+                buffer.setSample (0, i, (float) (0.25 * std::sin (juce::MathConstants<double>::twoPi * 1000.0 * i / sampleRate)));
+        if (writer != nullptr)
+            writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples());
+    }
+
+    clearTracks();
+    auto t = session->addTrack ("Podcast", 1, nullptr);
+    session->addClip (t, file, 24000, 0, 120000, 120000, "Bursts", nullptr);
+    um.clearUndoHistory();
+    setConsole (false);
+    const auto original = readAudio (bounce ("strip_before", 0, 168000).file);
+
+    auto clipsOf = [&t]
+    {
+        juce::Array<juce::ValueTree> sorted;
+        for (const auto& c : track::clips (t))
+            sorted.add (c);
+        std::sort (sorted.begin(), sorted.end(), [] (const juce::ValueTree& x, const juce::ValueTree& y) { return clip::start (x) < clip::start (y); });
+        juce::String s;
+        for (const auto& c : sorted)
+            s << clip::start (c) << ".." << clip::end (c) << " ";
+        return s.trim();
+    };
+
+    auto r = call ("strip_silence", R"({"track":"Podcast"})");
+    // Region 1: samples 1..24000 (sin(0) is 0), padded 5 ms before (clipped at the clip start) and 50 ms after.
+    // Region 2: 48001..98400, the 50 ms pause kept, padded the same way.
+    expect ("strip_silence leaves one clip per audible stretch, with the pads, and keeps the short pause",
+            r.ok && clipsOf() == "24000..50400 71761..124800" && (int) r.data["clips"] == 2,
+            clipsOf() + " " + r.error);
+    const auto stripped = readAudio (bounce ("strip_after", 0, 168000).file);
+    double worst = stripped.getNumSamples() == original.getNumSamples() ? 0.0 : 1.0;
+    for (int i = 0; i < std::min (stripped.getNumSamples(), original.getNumSamples()); ++i)
+        worst = std::max (worst, (double) std::abs (stripped.getSample (0, i) - original.getSample (0, i)));
+    expect ("only silence went: the stripped track nulls against the original", worst < 1.0e-7, "largest difference " + juce::String (worst));
+    um.undo();
+    expect ("one undo gives the whole clip back", clipsOf() == "24000..144000", clipsOf());
+
+    // From the Edit window, over part of the clip: only that part is stripped.
+    view.setTimeSelection (96000, 168000, { track::id (t) });
+    const auto result = main.getEditView().stripSilence ({});
+    expect ("Strip Silence on a selection strips inside it only (the clip before it is untouched)",
+            clipsOf() == "24000..96000 98161..124800" && result.clipsMade == 1 && um.getUndoDescription() == "Strip Silence",
+            clipsOf());
+    um.undo();
+
+    r = call ("strip_silence", R"({"track":"Podcast","threshold_db":-6})");
+    expect ("a threshold above the material removes the whole clip", r.ok && track::clips (t).getNumChildren() == 0, clipsOf());
+    um.undo();
+    r = call ("strip_silence", R"({"track":"Podcast","start_seconds":3,"end_seconds":2})");
+    expect ("an empty range is refused", ! r.ok && r.error.contains ("empty"), r.error);
+    expect ("a session after Strip Silence is valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+    setConsole (true, 6.0, 0.35);
+    view.clearSelection();
+    clearTracks();
+}
 
 void SelfTest::testGroups()
 {

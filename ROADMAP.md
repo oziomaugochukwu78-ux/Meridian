@@ -69,7 +69,7 @@ are recorded so nobody adds them by accident.
 | Nudge (move clips by a step from the keyboard) | assumed | 0.5 | done |
 | Mix and edit groups | assumed | 3 | done (relative faders, switches, automation mode, selection; AI tool) |
 | MP3 export | Bounce | 1.5 | to do |
-| Strip Silence; batch fades | yes | 2.5 | batch fades done; Strip Silence to do |
+| Strip Silence; batch fades | yes | 2.5 | done (Strip Silence: threshold, minimum silence, pads; AI tool) |
 | Folder tracks | yes (32 routing folders) | 3 | to do |
 | Track Freeze and Commit | yes | 2 | to do |
 | Track Presets | yes | 1.5 | to do |

@@ -9,6 +9,7 @@
 
 #include "app/AppController.h"
 #include "model/EditClipboard.h"
+#include "media/StripSilence.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -53,6 +54,8 @@ public:
         repeating it lays copies end to end. Leaves the clipboard alone. */
     void duplicateSelection();
     bool hasSelectionToCopy() const;
+    /** Strip Silence over the time selection on the selected audio tracks, one undo step. */
+    stripsilence::Result stripSilence (const stripsilence::Params&);
     /** Fade/Crossfade (Ctrl+F) over the time selection on the selected tracks. */
     void fadeSelection();
     /** Nudge (, and .): moves the selected clip, or the clips wholly inside the

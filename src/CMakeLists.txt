@@ -73,6 +73,8 @@ target_sources(Meridian PRIVATE
     media/AudioImporter.h
     media/Bouncer.cpp
     media/Bouncer.h
+    media/StripSilence.cpp
+    media/StripSilence.h
     media/TimeStretchEngine.cpp
     media/TimeStretchEngine.h
 

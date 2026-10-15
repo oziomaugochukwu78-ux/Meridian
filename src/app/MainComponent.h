@@ -61,6 +61,7 @@ private:
     void openSessionFromDisk();
     void showSaveAsDialog();
     void showGroupDialog();
+    void showStripSilenceDialog();
     void offerRecovery (const juce::File& backup);
     void showRemoteControlInfo();
 

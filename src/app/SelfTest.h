@@ -136,6 +136,7 @@ private:
     void testClipboard();
     void testCrossfades();
     void testGroups();
+    void testStripSilence();
     void testAutomationLanes();
     void testMixSections();
     void testTempoRuler();
