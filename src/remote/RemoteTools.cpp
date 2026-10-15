@@ -348,7 +348,9 @@ const std::vector<ToolInfo>& toolTable()
           schema ({ { "bpm", "number", "Tempo, 20-999 BPM", true },
                     { "at_bar", "integer", "Bar where the change starts, 1-based (default: the start)" },
                     { "at_beat", "number", "Beat within that bar, 1-based (default 1)" },
-                    { "clear_changes", "boolean", "Remove all tempo and time-signature changes first" } }) },
+                    { "clear_changes", "boolean", "Remove all tempo and time-signature changes first" },
+                    { "ramp", "boolean", "true: glide linearly from this tempo to the next change's (an accelerando or "
+                                         "ritardando); false: hold it until the next change (the default)" } }) },
         { "set_meter", "Set the time signature",
           "Time signature from a bar on, e.g. 3/4 or 6/8 (beats are the denominator's notes: eighths in 6/8). "
           "The click accents the first beat of each bar, and bars, the grid and count-ins follow it.",
@@ -1632,6 +1634,8 @@ RemoteTools::Result RemoteTools::setTempo (const juce::var& args)
         tick = meter.barToTicks (bar - 1) + (juce::int64) std::llround ((beat - 1.0) * (double) midi::MeterMap::ticksPerBeat (m));
     }
     midimodel::setTempoChange (session, tick, bpm, um);
+    if (args.hasProperty ("ramp"))
+        midimodel::setTempoRamp (session, tick, (bool) args["ramp"], um);
     return { true, describeTempoMap(), {} };
 }
 
@@ -1655,7 +1659,7 @@ juce::var RemoteTools::describeTempoMap() const
     for (const auto& c : tempo.getChanges())
     {
         const auto p = meter.positionOf (c.tick);
-        tempos.add (makeObject ({ { "bar", (int) p.bar + 1 }, { "beat", p.beat + 1 }, { "bpm", c.bpm },
+        tempos.add (makeObject ({ { "bar", (int) p.bar + 1 }, { "beat", p.beat + 1 }, { "bpm", c.bpm }, { "ramp", c.ramp },
                                   { "seconds", std::round (tempo.ticksToSeconds (c.tick) * 1000.0) / 1000.0 } }));
     }
     for (const auto& c : meter.getChanges())

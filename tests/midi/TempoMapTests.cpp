@@ -3,6 +3,10 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
+#include <cstdint>
+#include <utility>
+
 using namespace meridian::midi;
 using Catch::Approx;
 
@@ -88,4 +92,54 @@ TEST_CASE ("Tempo changes replace, sort and clamp", "[tempo]")
     map.setTempo (0.0);
     CHECK (map.getChanges().size() == 1);
     CHECK (map.bpmAt (0) == Approx (TempoMap::minBpm));
+}
+
+TEST_CASE ("Tempo ramp: 120 to 240 BPM over 4 beats takes exactly 2 ln 2 seconds, and the tempo glides linearly", "[tempo]")
+{
+    TempoMap map (120.0);
+    map.addChange (0, 120.0, true);
+    map.addChange (3840, 240.0);
+
+    // seconds = 60 / (TPQ k) ln (b1 / b0), with k = 120 BPM / 3840 ticks: (60 / 30) ln 2.
+    CHECK (map.ticksToSeconds (3840) == Approx (2.0 * std::log (2.0)).epsilon (1.0e-12));
+    CHECK (map.bpmAt (1920) == Approx (180.0));
+    CHECK (map.bpmAt (3840) == Approx (240.0));
+    // After the ramp the new tempo holds: one more beat is a quarter second.
+    CHECK (map.ticksToSeconds (3840 + 960) - map.ticksToSeconds (3840) == Approx (0.25).epsilon (1.0e-12));
+
+    // Faster than the start tempo and slower than the end one, all the way through.
+    for (int64_t t = 960; t < 3840; t += 960)
+    {
+        CHECK (map.ticksToSeconds (t) < (double) t / 960.0 * 0.5);
+        CHECK (map.ticksToSeconds (t) > (double) t / 960.0 * 0.25);
+    }
+}
+
+TEST_CASE ("Tempo ramp: ticks, seconds and samples round-trip exactly, speeding up and slowing down", "[tempo]")
+{
+    for (const auto [from, to] : { std::pair { 60.0, 180.0 }, std::pair { 200.0, 70.0 } })
+    {
+        TempoMap map (from);
+        map.addChange (0, from, true);
+        map.addChange (7680, to);
+        for (int64_t tick = 0; tick <= 12000; tick += 37)
+        {
+            CHECK (map.secondsToTicks (map.ticksToSeconds (tick)) == tick);
+            CHECK (map.samplesToTicks (map.ticksToSamples (tick, 48000.0), 48000.0) == tick);
+        }
+    }
+}
+
+TEST_CASE ("Tempo ramp: setRamp switches a change between gliding and holding; the last change cannot ramp", "[tempo]")
+{
+    TempoMap map (100.0);
+    map.addChange (1920, 200.0);
+    const double held = map.ticksToSeconds (1920);
+    CHECK (map.setRamp (0, true));
+    CHECK (map.ticksToSeconds (1920) < held);
+    CHECK (map.setRamp (0, false));
+    CHECK (map.ticksToSeconds (1920) == Approx (held));
+    CHECK (map.setRamp (1920, true)); // nothing after it: it holds
+    CHECK (map.bpmAt (100000) == Approx (200.0));
+    CHECK_FALSE (map.setRamp (999, true));
 }

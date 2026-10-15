@@ -12,9 +12,11 @@ inline constexpr int64_t ticksPerQuarter = 960;
 /** Converts between musical time (ticks) and real time (seconds, samples).
 
     MIDI notes are stored in ticks, so changing the tempo moves them with the
-    music, as in every DAW. The map is piecewise constant: a list of tempo
-    changes, the first always at tick 0. Conversions in both directions are
-    exact to within rounding to the nearest tick or sample.
+    music, as in every DAW. The map is a list of tempo changes, the first
+    always at tick 0. A change either holds its tempo until the next, or
+    ramps: the tempo glides linearly (in BPM per tick) to the next change's.
+    Conversions in both directions are exact (closed forms, no stepping) to
+    within rounding to the nearest tick or sample.
 
     Not thread-safe: the engine renders from its own copy. */
 class TempoMap
@@ -26,6 +28,7 @@ public:
     {
         int64_t tick = 0;
         double bpm = 120.0;
+        bool ramp = false; ///< glide linearly to the next change's tempo (ignored on the last)
     };
 
     explicit TempoMap (double bpm = 120.0);
@@ -34,7 +37,10 @@ public:
     void setTempo (double bpm);
 
     /** Adds a tempo change, replacing any change at the same tick. */
-    void addChange (int64_t tick, double bpm);
+    void addChange (int64_t tick, double bpm, bool ramp = false);
+
+    /** Makes the change at `tick` ramp to the next one (or hold). False if there is no change there. */
+    bool setRamp (int64_t tick, bool ramp);
 
     const std::vector<Change>& getChanges() const noexcept { return changes; }
 
@@ -60,6 +66,13 @@ public:
 
 private:
     static double secondsPerTick (double bpm) noexcept { return 60.0 / (bpm * (double) ticksPerQuarter); }
+
+    /** Segment i: [changes[i].tick, next change), its end tempo (the next change's if it ramps). */
+    double segmentEndBpm (size_t i) const noexcept;
+    /** Seconds from the start of segment i to `ticks` into it (exact under a ramp). */
+    double secondsInto (size_t i, double ticks) const noexcept;
+    /** The inverse: ticks into segment i after `seconds` (not rounded). */
+    double ticksInto (size_t i, double seconds) const noexcept;
 
     std::vector<Change> changes; // sorted by tick, first at tick 0
 };

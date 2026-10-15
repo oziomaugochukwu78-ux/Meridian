@@ -54,7 +54,7 @@
       MARKERS
         MARKER  number name start      (start in samples)
       TEMPO_MAP                        (tempo changes after the start; SESSION.tempo is the first)
-        TEMPO  tick bpm
+        TEMPO  tick bpm ramp           (ramp: glide to the next change's tempo; SESSION.tempoRamp for the first)
       METER_MAP                        (time signatures; 4/4 unless changed)
         METER  bar numerator denominator
 
@@ -121,6 +121,8 @@ MERIDIAN_ID (countInBars)
 MERIDIAN_ID (number)       // MARKER: 1, 2, 3... (unique in the session)
 MERIDIAN_ID (tick)         // TEMPO: where the change happens, in ticks (960 per quarter note)
 MERIDIAN_ID (bpm)
+MERIDIAN_ID (ramp)
+MERIDIAN_ID (tempoRamp)
 MERIDIAN_ID (bar)          // METER: the 0-based bar the change starts
 MERIDIAN_ID (numerator)
 MERIDIAN_ID (denominator)

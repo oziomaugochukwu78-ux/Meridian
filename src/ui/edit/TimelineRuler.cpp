@@ -340,7 +340,12 @@ std::vector<TimelineRuler::TempoMark> TimelineRuler::tempoMarks() const
     {
         juce::StringArray parts;
         if (m.hasTempo)
-            parts.add (formatBpm (tempo.bpmAt (m.tick)) + " bpm");
+        {
+            for (const auto& c : tempo.getChanges())
+                if (c.tick == m.tick)
+                    m.ramp = c.ramp && &c != &tempo.getChanges().back();
+            parts.add (formatBpm (tempo.bpmAt (m.tick)) + " bpm" + (m.ramp ? " (ramp)" : ""));
+        }
         if (m.hasMeter)
         {
             const auto& sig = meter.meterAt (m.bar);
@@ -402,6 +407,17 @@ bool TimelineRuler::setTempoAtBar (juce::int64 bar, double bpm, int numerator, i
     return true;
 }
 
+bool TimelineRuler::setRampAt (juce::int64 tick, bool ramp)
+{
+    auto* s = getSession ? getSession() : nullptr;
+    auto* um = undoManager ? undoManager() : nullptr;
+    if (s == nullptr)
+        return false;
+    if (um != nullptr)
+        um->beginNewTransaction ("Tempo Ramp");
+    return midimodel::setTempoRamp (*s, tick, ramp, um);
+}
+
 bool TimelineRuler::deleteTempoChange (juce::int64 tick, juce::int64 bar)
 {
     auto* s = getSession ? getSession() : nullptr;
@@ -453,6 +469,7 @@ void TimelineRuler::showTempoMenu (const TempoMark& mark)
 {
     juce::PopupMenu menu;
     menu.addItem ("Edit Tempo / Time Signature...", [this, bar = mark.bar] { showTempoDialog (bar); });
+    menu.addItem ("Ramp to Next Change", mark.hasTempo, mark.ramp, [this, mark] { setRampAt (mark.tick, ! mark.ramp); });
     menu.addItem ("Delete This Change", mark.tick > 0, false,
                   [this, mark] { deleteTempoChange (mark.hasTempo ? mark.tick : 0, mark.hasMeter ? mark.bar : 0); });
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this));

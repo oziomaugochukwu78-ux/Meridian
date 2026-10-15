@@ -6,9 +6,10 @@ namespace meridian::midimodel
 midi::TempoMap tempoMap (const Session& session)
 {
     midi::TempoMap map (session.getTempo());
+    map.setRamp (0, (bool) session.getState().getProperty (ids::tempoRamp, false));
     for (const auto& change : session.getState().getChildWithName (ids::TEMPO_MAP))
         if (change.hasType (ids::TEMPO) && (juce::int64) change[ids::tick] > 0)
-            map.addChange ((juce::int64) change[ids::tick], (double) change[ids::bpm]);
+            map.addChange ((juce::int64) change[ids::tick], (double) change[ids::bpm], (bool) change.getProperty (ids::ramp, false));
     return map;
 }
 
@@ -68,6 +69,20 @@ void setMeterChange (Session& session, juce::int64 bar, int numerator, int denom
     change.setProperty (ids::denominator, valid.denominator, um);
 }
 
+bool setTempoRamp (Session& session, juce::int64 tick, bool ramp, juce::UndoManager* um)
+{
+    if (tick <= 0)
+    {
+        session.getState().setProperty (ids::tempoRamp, ramp, um);
+        return true;
+    }
+    auto change = session.getState().getChildWithName (ids::TEMPO_MAP).getChildWithProperty (ids::tick, tick);
+    if (! change.isValid())
+        return false;
+    change.setProperty (ids::ramp, ramp, um);
+    return true;
+}
+
 bool removeTempoChange (Session& session, juce::int64 tick, juce::UndoManager* um)
 {
     auto map = session.getState().getChildWithName (ids::TEMPO_MAP);
@@ -90,6 +105,7 @@ bool removeMeterChange (Session& session, juce::int64 bar, juce::UndoManager* um
 
 void clearTempoAndMeterChanges (Session& session, juce::UndoManager* um)
 {
+    session.getState().setProperty (ids::tempoRamp, false, um);
     for (const auto* type : { &ids::TEMPO_MAP, &ids::METER_MAP })
         if (auto node = session.getState().getChildWithName (*type); node.isValid())
             session.getState().removeChild (node, um);

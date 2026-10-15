@@ -19,7 +19,8 @@ class Session;
 
     The Tempo ruler shows the starting tempo and time signature and every
     change. Double-click it to add a change at the start of that bar;
-    right-click a change to edit or delete it. Each edit is one undo step. */
+    right-click a change to edit it, make it ramp to the next one, or delete
+    it. Each edit is one undo step. */
 class TimelineRuler final : public juce::Component,
                             private juce::ChangeListener,
                             private juce::ValueTree::Listener
@@ -38,6 +39,8 @@ public:
         `bar` (0-based), as one undo step. Used by the Tempo ruler's dialog; public
         for the self test. False without a session. */
     bool setTempoAtBar (juce::int64 bar, double bpm, int numerator, int denominator);
+    /** Makes the tempo at `tick` glide to the next change's (or hold), as one undo step. */
+    bool setRampAt (juce::int64 tick, bool ramp);
     /** Deletes the tempo change at `tick` and the time signature at `bar` (either may be absent). */
     bool deleteTempoChange (juce::int64 tick, juce::int64 bar);
     /** The Tempo ruler's labels, left to right (for the self test). */
@@ -68,6 +71,7 @@ private:
         juce::int64 tick = 0;
         juce::int64 bar = 0;
         bool hasTempo = false, hasMeter = false;
+        bool ramp = false; ///< the tempo glides to the next change's
         juce::String label;
     };
     std::vector<TempoMark> tempoMarks() const;

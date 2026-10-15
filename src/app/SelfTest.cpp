@@ -4965,6 +4965,43 @@ void SelfTest::testTempoRuler()
             ruler.getTempoLabels().joinIntoString (" | "));
     expect ("tempo edits leave the session valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
 
+    // A ramp: 120 BPM gliding to 240 over bar 1 (four beats) takes 2 ln 2 s, so bar 2
+    // starts at 1.3863 s; a note there sounds on exactly that sample.
+    session->getState().setProperty (ids::tempo, 120.0, nullptr);
+    ruler.setTempoAtBar (1, 240.0, 4, 4);
+    ruler.setRampAt (0, true);
+    const auto rampEnd = (int) std::llround (2.0 * std::log (2.0) * sampleRate);
+    expect ("Ramp to Next Change: the ruler shows the ramp, and bar 2 starts after exactly 2 ln 2 s",
+            ruler.getTempoLabels() == juce::StringArray { "120 bpm (ramp) 4/4", "240 bpm" }
+                && midimodel::tempoMap (*session).ticksToSamples (3840, sampleRate) == rampEnd,
+            ruler.getTempoLabels().joinIntoString (" | ") + "; bar 2 at "
+                + juce::String (midimodel::tempoMap (*session).ticksToSamples (3840, sampleRate)) + ", expected " + juce::String (rampEnd));
+
+    auto& tools = app.getRemoteTools();
+    tools.call ("create_track", juce::JSON::parse (R"({"kind":"instrument","name":"Ramp"})"));
+    tools.call ("add_midi_clip", juce::JSON::parse (R"({"track":"Ramp","start_beat":0,"length_beats":8})"));
+    tools.call ("add_notes", juce::JSON::parse (R"({"track":"Ramp","clip":1,"notes":[{"pitch":69,"start_beats":4,"length_beats":1,"velocity":1}]})"));
+    {
+        // On the clean bus: the console's linear-phase oversampling filter (61 samples)
+        // would ring ahead of the attack and blur where it starts.
+        setConsole (false);
+        const auto audio = readAudio (bounce ("tempo_ramp_note", 0, (juce::int64) (2.0 * sampleRate)).file);
+        setConsole (true, 6.0, 0.35);
+        int onset = -1;
+        for (int i = 0; i < audio.getNumSamples() && onset < 0; ++i)
+            if (! juce::exactlyEqual (audio.getSample (0, i), 0.0f))
+                onset = i;
+        // As in the tempo-map test: the synth's oversampling filter rings up to 16 samples ahead.
+        expect ("a note on bar 2 after the ramp sounds at exactly 2 ln 2 s",
+                onset >= rampEnd - synth::PolySynth::getLatencySamples() && onset <= rampEnd,
+                "first sound at " + juce::String (onset) + ", bar 2 at " + juce::String (rampEnd));
+    }
+    clearTracks();
+    ruler.setRampAt (0, false);
+    expect ("Ramp to Next Change toggles off again: bar 2 is back at 2 s",
+            midimodel::tempoMap (*session).ticksToSamples (3840, sampleRate) == (juce::int64) (2.0 * sampleRate),
+            juce::String (midimodel::tempoMap (*session).ticksToSamples (3840, sampleRate)));
+
     session->getState().setProperty (ids::tempo, 120.0, nullptr);
     midimodel::clearTempoAndMeterChanges (*session, nullptr);
     um.clearUndoHistory();
