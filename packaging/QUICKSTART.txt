@@ -2,7 +2,8 @@ MERIDIAN - QUICK START
 ======================
 
 Meridian is a digital audio workstation (DAW): a program for recording,
-arranging and mixing audio. This is an early version (see ROADMAP.md).
+editing, mixing and exporting music, podcasts and voice-overs. This is an
+early release (see ROADMAP.md for what comes next).
 
 
 1. RUN IT
@@ -11,17 +12,19 @@ Double-click Meridian.exe. Nothing needs installing: the program is
 self-contained, and you can keep this folder anywhere.
 
 The Dashboard opens. On the "Create" tab, name a new session (a project)
-and click Create; "Create From Template" starts with ready-made tracks.
-The "Recent" tab and "Open from Disk..." open sessions you made before.
-Sessions are saved in Documents\Meridian Sessions\ by default.
+and click Create; "Create From Template" starts with ready-made tracks,
+effects and routing (Hip-Hop, Electronic, Band Tracking, Singer-Songwriter,
+Podcast, Voice-Over, Film...). The "Recent" tab and "Open from Disk..."
+open sessions you made before. Sessions are saved in
+Documents\Meridian Sessions\ by default.
 (The Dashboard comes back with Ctrl+N; Ctrl+O opens a session.)
 
 
 2. THE TWO WINDOWS
 ------------------
-Edit window   your tracks and audio clips laid out on a timeline
-Mix window    a mixing console: one channel strip per track, with faders,
-              pan, mute (M), solo (S) and record (R)
+Edit window   your tracks and clips on a timeline (audio and MIDI)
+Mix window    a mixing console: one channel strip per track, with inserts,
+              sends, faders, pan, mute (M), solo (S) and record (R)
 
 Switch between them with Ctrl+=.
 
@@ -31,48 +34,81 @@ Switch between them with Ctrl+=.
 Space            play / stop
 Home             back to the start
 Ctrl+Shift+I     import audio files (or drag them onto the Edit window)
-Ctrl+Shift+N     add new tracks
+Ctrl+Shift+N     add new tracks (audio, instrument, aux)
 F12              record on the tracks whose R button is on
 Ctrl+S           save
 Ctrl+Z           undo (everything can be undone, including AI edits)
-Ctrl+Alt+B       bounce: mix the whole session down to one audio file,
-                 saved in the session's "Bounced Files" folder
+Ctrl+Alt+B       bounce: mix down to one file. Type a name ending in
+                 .wav, .flac or .mp3 to choose the format.
+
+Editing (click in a track to place the cursor, drag to select a range):
+Ctrl+X / C / V   cut, copy, paste (clips and their automation)
+Ctrl+D           duplicate the selection right after itself
+Ctrl+E           separate (split) clips at the cursor or selection
+Ctrl+F           fade or crossfade the clip edges in the selection
+Ctrl+U           Strip Silence: remove the quiet parts of clips
+, and .          nudge the selection earlier / later
+Ctrl+G           group the selected tracks (faders, mutes and edits together)
+F1 - F4          Shuffle, Slip, Spot and Grid edit modes
 
 Hover over a clip to use the Smart Tool:
   top half      select a time range
   bottom half   move the clip
   edges         trim the clip
   top corners   fade in / fade out
+Double-click a MIDI clip to edit its notes.
 
 
 4. SOUND SETTINGS
 -----------------
 Setup > Playback Engine chooses the audio device and buffer size.
 If playback crackles, choose a larger buffer size.
+Setup > Plug-in Manager scans your VST3 plug-ins.
 
 
-5. CONTROLLING MERIDIAN WITH AN AI
-----------------------------------
-While Meridian runs, it accepts commands on this computer only, at
-http://127.0.0.1:47800/mcp. This uses MCP (Model Context Protocol), the
-standard way for AI apps to use tools.
+5. MAKE MUSIC WITH CLAUDE
+-------------------------
+Claude (or any AI app that supports MCP) can drive Meridian: create
+tracks, write notes, add effects, mix and export. It works on this
+computer only, and every AI edit can be undone with Ctrl+Z.
 
-Any MCP-capable AI app on this computer can connect, for example:
+Claude Desktop (the free plan works):
+  1. Install Node.js (the LTS version) from https://nodejs.org
+  2. Start Meridian.
+  3. In Claude Desktop: Settings > Developer > Edit Config, and put this
+     in claude_desktop_config.json:
 
-  Claude Code:     claude mcp add --transport http meridian http://127.0.0.1:47800/mcp
-  Claude Desktop:  add an MCP server with command "npx" and the arguments
-                   "mcp-remote http://127.0.0.1:47800/mcp"
+     {
+       "mcpServers": {
+         "meridian": { "command": "npx",
+                       "args": ["-y", "mcp-remote", "http://127.0.0.1:47800/mcp"] }
+       }
+     }
 
-Then ask in plain words, for example: "turn the drums down 3 dB",
-"mute track 2", "bounce the mix". Every AI edit appears in the undo history
-as "AI: ...".
+  4. Quit and reopen Claude Desktop.
+
+Claude Code: run
+  claude mcp add --transport http meridian http://127.0.0.1:47800/mcp
+
+Then ask, for example:
+  "Make an 8-bar hip-hop beat at 90 BPM with drums, an 808 and keys,
+   then bounce it as an MP3."
+  "Set up a sung vocal track with a reverb bus."
+  "Strip the silence out of the podcast track."
 
 Turn the AI port off by unticking Setup > Enable AI Remote Control if you
 do not use it. Setup > AI Remote Control Info... shows the connection details.
 
 
-6. WHAT IS NOT THERE YET
-------------------------
-There are no built-in instruments or MIDI yet, and no built-in effects:
-use VST3 plug-ins (Setup > Plug-in Manager to scan them). See ROADMAP.md
-for what comes next.
+6. WHAT IS IN IT, AND WHAT IS NOT YET
+-------------------------------------
+In it: recording with punch-in and count-in, playlists and comping,
+editing with crossfades, groups and Strip Silence, MIDI with a piano roll,
+a built-in synth and drum machine, VST3 instruments and effects, built-in
+EQ, compressor, limiter, gate, de-esser, delay, reverb and tuner,
+automation, an analog-style console on the master, loudness metering,
+and export to WAV, AIFF, FLAC and MP3.
+
+Not yet: folder tracks, track freeze, Beat Detective, real-time Elastic
+Audio. See ROADMAP.md. This is an early release: please report problems
+on the project's GitHub page.

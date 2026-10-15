@@ -24,6 +24,42 @@ This is an early foundation, not a finished DAW. Everything listed as working co
 | Elastic Audio | Offline time-compress/expand and pitch shift with Rubber Band (R3 engine), Alt-drag TCE on clip edges | Real-time (preview) elastic mode, warp markers |
 | AI remote | MCP server (48 tools; every argument checked against the published schema), JSON tools and text commands (PLAY, STOP, RECORD, TOGGLE_WINDOW, MUTE_TRACK_X, SET_VOLUME_TRACK_X_YdB, BOUNCE, STATUS, HELP) on 127.0.0.1; strict input validation (RFC 8259 JSON, UTF-8, nesting limit) | Presets applied by plain request (see the roadmap) |
 
+## Make music with Claude (2-minute setup)
+
+Meridian has a built-in port that AI apps can drive: Claude can create tracks, write notes, add effects, mix and export, and everything it does lands in the undo history (labelled "AI: ...", so Ctrl+Z takes it back). It is on by default (Setup > Enable AI Remote Control) and only reachable from your own computer.
+
+**Claude Desktop (the free plan works):**
+
+1. Install [Node.js](https://nodejs.org) (the LTS version). Claude Desktop uses it to reach Meridian.
+2. Start Meridian.
+3. In Claude Desktop open **Settings > Developer > Edit Config** and put this in `claude_desktop_config.json` (on Windows it is in `%APPDATA%\Claude\`):
+
+   ```json
+   {
+     "mcpServers": {
+       "meridian": { "command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:47800/mcp"] }
+     }
+   }
+   ```
+
+4. Quit and reopen Claude Desktop. "meridian" appears in the tools menu of the message box.
+
+**Claude Code:** one command, with Meridian running:
+
+```bash
+claude mcp add --transport http meridian http://127.0.0.1:47800/mcp
+```
+
+**Things to ask:**
+
+- "Make an 8-bar hip-hop beat at 90 BPM: drums, an 808 bassline and keys. Then bounce it as an MP3."
+- "Set up a track for a sung vocal with a reverb bus, and arm it."
+- "Strip the silence out of the podcast track, then normalise the export to -16 LUFS."
+- "Group the drum tracks and bring them down 3 dB."
+- "Make the master a little warmer."
+
+Claude sees the session only through Meridian's tools (it cannot hear the audio), so it works best when you say what you want in musical terms. Long requests use many messages; on the free plan the daily limit is what you will notice first.
+
 ## Building
 
 ### Requirements
@@ -156,7 +192,7 @@ claude mcp add --transport http meridian http://127.0.0.1:47800/mcp
 
 Claude Desktop and other stdio-only clients can use the `mcp-remote` bridge: add a server with command `npx` and arguments `mcp-remote http://127.0.0.1:47800/mcp` in the client's MCP settings.
 
-Tools: `get_status`, `transport`, `set_loop`, `set_punch`, `set_click`, `add_marker`, `list_markers`, `delete_marker`, `set_track`, `create_track`, `delete_track`, `duplicate_track`, `move_track`, `set_output`, `set_send`, `remove_send`, `list_plugins`, `insert_plugin`, `remove_plugin`, `set_plugin_bypass`, `list_plugin_parameters`, `set_plugin_parameter`, `list_clips`, `split_clip`, `delete_clip`, `move_clip`, `set_clip`, `import_audio`, `set_volume_automation`, `set_automation`, `set_tempo`, `set_meter`, `add_midi_clip`, `add_notes`, `list_notes`, `set_synth`, `set_master`, `adjust`, `set_up`, `list_presets`, `bounce`, `undo`, `redo`, `save_session` and `show_window`. With the MIDI tools, an AI can compose: create an instrument track, write notes in beats, shape the sound, and bounce the result. With the plug-in parameter tools it can mix: read any plug-in's controls and set them in their own units (for example `{"parameter": "p2Gain", "value": 6}` for +6 dB on the EQ's second band). Each tool has a JSON schema and a description written for the model, and every call is checked against that schema before it runs. Tracks are referenced by number or name. Every AI edit lands in the undo history, labelled "AI: ...".
+Tools: `get_status`, `transport`, `set_loop`, `set_punch`, `set_click`, `add_marker`, `list_markers`, `delete_marker`, `set_track`, `create_track`, `delete_track`, `duplicate_track`, `move_track`, `playlist`, `group`, `set_output`, `set_send`, `remove_send`, `list_plugins`, `insert_plugin`, `remove_plugin`, `set_plugin_bypass`, `list_plugin_parameters`, `set_plugin_parameter`, `list_clips`, `split_clip`, `delete_clip`, `move_clip`, `set_clip`, `strip_silence`, `import_audio`, `set_volume_automation`, `set_automation`, `set_tempo`, `set_meter`, `add_midi_clip`, `add_notes`, `list_notes`, `set_synth`, `set_master`, `adjust`, `set_up`, `list_presets`, `bounce`, `undo`, `redo`, `save_session` and `show_window`. With the MIDI tools, an AI can compose: create an instrument track, write notes in beats, shape the sound, and bounce the result. With the plug-in parameter tools it can mix: read any plug-in's controls and set them in their own units (for example `{"parameter": "p2Gain", "value": 6}` for +6 dB on the EQ's second band). Each tool has a JSON schema and a description written for the model, and every call is checked against that schema before it runs. Tracks are referenced by number or name. Every AI edit lands in the undo history, labelled "AI: ...".
 
 ### Text commands
 
