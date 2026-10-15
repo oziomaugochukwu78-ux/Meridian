@@ -16,6 +16,11 @@ public:
 
     MainComponent& getMainComponent() noexcept { return *mainComponent; }
 
+    // Shrinks the window to the screen's work area when the default layout is
+    // too big for it (small or high-scaling displays). Normal start-up only:
+    // the self test keeps the fixed default size its UI checks are written for.
+    void fitToScreen();
+
     void closeButtonPressed() override;
 
 private:

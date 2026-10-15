@@ -39,6 +39,27 @@ MainWindow::~MainWindow()
     clearContentComponent();
 }
 
+void MainWindow::fitToScreen()
+{
+    const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
+    if (display == nullptr)
+        return;
+
+    // Our bounds exclude the native title bar and frame, so take those off the
+    // work area (the screen minus the taskbar) before comparing.
+    auto area = display->userBounds.getSmallestIntegerContainer();
+    if (auto* peer = getPeer())
+        if (const auto frame = peer->getFrameSizeIfPresent())
+            area = (*frame).subtractedFrom (area);
+
+    if (getWidth() <= area.getWidth() && getHeight() <= area.getHeight())
+        return;
+
+    setResizeLimits (juce::jmin (960, area.getWidth()), juce::jmin (600, area.getHeight()), 10000, 10000);
+    setBounds (area.withSizeKeepingCentre (juce::jmin (getWidth(), area.getWidth()),
+                                           juce::jmin (getHeight(), area.getHeight())));
+}
+
 void MainWindow::closeButtonPressed()
 {
     juce::JUCEApplication::getInstance()->systemRequestedQuit();
