@@ -46,6 +46,9 @@ public:
     /** The Tempo ruler's labels, left to right (for the self test). */
     juce::StringArray getTempoLabels() const;
 
+    /** The Timecode row's label for a timeline sample, at the session's rate and start. */
+    juce::String timecodeAt (juce::int64 sample) const;
+
     void setPlayheadPosition (juce::int64 sample);
     /** The SESSION tree, for markers and the loop range (invalid when none is open). */
     void setSessionState (juce::ValueTree sessionState);
@@ -56,7 +59,7 @@ public:
     void mouseDoubleClick (const juce::MouseEvent&) override;
 
     static constexpr int rowHeight = 20;
-    static constexpr int numRows = 4;
+    static constexpr int numRows = 5;
 
 private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override { repaint(); }
@@ -81,6 +84,8 @@ private:
     void showTempoMenu (const TempoMark&);
     void paintBarsBeats (juce::Graphics&, juce::Rectangle<int> row);
     void paintMinSecs (juce::Graphics&, juce::Rectangle<int> row);
+    void paintTimecode (juce::Graphics&, juce::Rectangle<int> row);
+    void showTimecodeMenu();
     void locateFromMouse (const juce::MouseEvent&);
     juce::ValueTree markerAt (int x) const;
     void showMarkerMenu (juce::ValueTree marker);

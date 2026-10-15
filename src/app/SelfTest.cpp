@@ -1,4 +1,5 @@
 #include "SelfTest.h"
+#include <midi/Timecode.h>
 
 #include "CommandIds.h"
 #include "media/AudioImporter.h"
@@ -5792,6 +5793,22 @@ void SelfTest::testTempoRuler()
     session->getState().setProperty (ids::tempo, 120.0, nullptr);
     midimodel::clearTempoAndMeterChanges (*session, nullptr);
     um.clearUndoHistory();
+    // The Timecode row: the session's rate and start.
+    {
+        auto state = session->getState();
+        expect ("the Timecode ruler defaults to 25 fps from 00:00:00:00", ruler.timecodeAt (72000) == "00:00:01:12", ruler.timecodeAt (72000));
+        state.setProperty (ids::timecodeRate, "29.97df", nullptr);
+        state.setProperty (ids::timecodeStart, midi::toFrameCount ({ 1, 0, 0, 0 }, midi::FrameRate::fps29_97drop), nullptr);
+        const auto hourLater = ruler.timecodeAt ((juce::int64) (3600.0 * sampleRate));
+        expect ("at 29.97 drop-frame from 01:00:00;00, one real hour later reads 02:00:00;00",
+                hourLater == "02:00:00;00" && findSessionProblem (*session).isEmpty(), hourLater);
+        state.setProperty (ids::timecodeRate, "31", nullptr);
+        expect ("an unknown timecode rate is caught by the validator", findSessionProblem (*session).contains ("timecode"),
+                findSessionProblem (*session));
+        state.removeProperty (ids::timecodeRate, nullptr);
+        state.removeProperty (ids::timecodeStart, nullptr);
+    }
+
 }
 
 //==============================================================================

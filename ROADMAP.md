@@ -73,7 +73,7 @@ are recorded so nobody adds them by accident.
 | Folder tracks | yes (32 routing folders) | 3 | to do |
 | Track Freeze and Commit | yes | 2 | to do |
 | Track Presets | yes | 1.5 | to do |
-| Timecode ruler | yes | 0.5 | to do |
+| Timecode ruler | yes | 0.5 | done (all six rates incl. drop-frame, session start) |
 | Retrospective MIDI record | yes | 1 | to do |
 | AAC export | yes | 1 | to do |
 | Playlist lane view | track comping | 2 | to do |

@@ -49,7 +49,8 @@
               PITCHBEND / MODWHEEL                      (optional: pitch-wheel -1..+1 / mod-wheel 0..1 moves)
                 CC  start value                         (ticks; sorted, one per tick; holds until the next)
 
-    SESSION also holds tempo (BPM, default 120), loop playback (loopEnabled,
+    SESSION also holds the timecode ruler's frame rate (timecodeRate: "23.976", "24", "25",
+    "29.97", "29.97df" or "30"; default 25) and start (timecodeStart, in frames), tempo (BPM, default 120), loop playback (loopEnabled,
     loopStart, loopEnd in samples), punch recording (punchEnabled, punchIn, punchOut), the click (clickEnabled, clickLevelDb),
     countInBars (0 = none; counts in before recording), and markers:
       MARKERS
@@ -132,6 +133,8 @@ MERIDIAN_ID (tick)         // TEMPO: where the change happens, in ticks (960 per
 MERIDIAN_ID (bpm)
 MERIDIAN_ID (ramp)
 MERIDIAN_ID (tempoRamp)
+MERIDIAN_ID (timecodeRate)
+MERIDIAN_ID (timecodeStart)
 MERIDIAN_ID (bar)          // METER: the 0-based bar the change starts
 MERIDIAN_ID (numerator)
 MERIDIAN_ID (denominator)

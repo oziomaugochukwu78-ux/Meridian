@@ -24,6 +24,7 @@ add_executable(meridian_core_tests
     midi/MidiRecordingTests.cpp
     midi/NoteSequenceTests.cpp
     midi/TempoMapTests.cpp
+    midi/TimecodeTests.cpp
     remote/CommandDispatcherTests.cpp
     remote/CommandParserTests.cpp
     remote/FuzzTests.cpp

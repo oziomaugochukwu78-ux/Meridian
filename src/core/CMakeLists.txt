@@ -50,6 +50,8 @@ add_library(meridian_core STATIC
     dsp/StereoDelay.h
 
     midi/MeterMap.cpp
+    midi/Timecode.cpp
+    midi/Timecode.h
     midi/MeterMap.h
     midi/MidiRecording.cpp
     midi/MidiRecording.h

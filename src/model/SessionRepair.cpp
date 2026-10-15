@@ -1,4 +1,5 @@
 #include "SessionRepair.h"
+#include <midi/Timecode.h>
 #include "Groups.h"
 
 #include "Automation.h"
@@ -146,6 +147,12 @@ private:
         clampNumber (s, ids::tempo, 20.0, 999.0, 120.0, "session");
         clampNumber (s, ids::clickLevelDb, -60.0, 0.0, -6.0, "session");
         clampNumber (s, ids::countInBars, 0.0, 8.0, 0.0, "session");
+        if (s.hasProperty (ids::timecodeRate) && ! midi::frameRateFromName (s[ids::timecodeRate].toString().toStdString()).has_value())
+        {
+            note ("session", "unknown timecode rate " + s[ids::timecodeRate].toString() + " removed (25 fps)");
+            s.removeProperty (ids::timecodeRate, nullptr);
+        }
+        clampNumber (s, ids::timecodeStart, 0.0, 24.0 * 3600.0 * 30.0 - 1.0, 0.0, "session");
         clampNumber (s, ids::loopStart, 0.0, 1.0e15, 0.0, "session");
         clampNumber (s, ids::loopEnd, 0.0, 1.0e15, 0.0, "session");
         if ((bool) s.getProperty (ids::loopEnabled, false)
@@ -700,6 +707,10 @@ juce::String findSessionProblem (const Session& session)
         return "click level " + s[ids::clickLevelDb].toString();
     if (s.hasProperty (ids::countInBars) && ! finiteIn (s[ids::countInBars], 0.0, 8.0))
         return "count-in " + s[ids::countInBars].toString();
+    if (s.hasProperty (ids::timecodeRate) && ! midi::frameRateFromName (s[ids::timecodeRate].toString().toStdString()).has_value())
+        return "timecode rate " + s[ids::timecodeRate].toString();
+    if (s.hasProperty (ids::timecodeStart) && ! finiteIn (s[ids::timecodeStart], 0.0, 24.0 * 3600.0 * 30.0 - 1.0))
+        return "timecode start " + s[ids::timecodeStart].toString();
     for (const auto* p : { &ids::loopStart, &ids::loopEnd, &ids::punchIn, &ids::punchOut })
         if (s.hasProperty (*p) && ! finiteIn (s[*p], 0.0, 1.0e15))
             return p->toString() + " " + s[*p].toString();

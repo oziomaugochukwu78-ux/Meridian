@@ -1,4 +1,5 @@
 #include "TimelineRuler.h"
+#include <midi/Timecode.h>
 
 #include "model/MidiModel.h"
 #include "model/Session.h"
@@ -111,6 +112,7 @@ void TimelineRuler::paint (juce::Graphics& g)
     g.drawText ("Tempo", labels.removeFromTop (rowHeight).reduced (10, 0), juce::Justification::centredRight);
     g.drawText ("Bars|Beats", labels.removeFromTop (rowHeight).reduced (10, 0), juce::Justification::centredRight);
     g.drawText ("Min:Secs", labels.removeFromTop (rowHeight).reduced (10, 0), juce::Justification::centredRight);
+    g.drawText ("Timecode", labels.removeFromTop (rowHeight).reduced (10, 0), juce::Justification::centredRight);
 
     g.reduceClipRegion (area);
 
@@ -149,11 +151,13 @@ void TimelineRuler::paint (juce::Graphics& g)
     paintTempo (g, area.removeFromTop (rowHeight));
     paintBarsBeats (g, area.removeFromTop (rowHeight));
     paintMinSecs (g, area.removeFromTop (rowHeight));
+    paintTimecode (g, area.removeFromTop (rowHeight));
 
     g.setColour (theme::divider);
     g.drawHorizontalLine (rowHeight, (float) trackHeaderWidth, (float) getWidth());
     g.drawHorizontalLine (rowHeight * 2, (float) trackHeaderWidth, (float) getWidth());
     g.drawHorizontalLine (rowHeight * 3, (float) trackHeaderWidth, (float) getWidth());
+    g.drawHorizontalLine (rowHeight * 4, (float) trackHeaderWidth, (float) getWidth());
     g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
     g.drawVerticalLine (trackHeaderWidth - 1, 0.0f, (float) getHeight());
 
@@ -249,6 +253,100 @@ void TimelineRuler::paintMinSecs (juce::Graphics& g, juce::Rectangle<int> row)
     }
 }
 
+namespace
+{
+midi::FrameRate rateOf (const juce::ValueTree& session)
+{
+    return midi::frameRateFromName (session.getProperty (ids::timecodeRate, "25").toString().toStdString()).value_or (midi::FrameRate::fps25);
+}
+} // namespace
+
+juce::String TimelineRuler::timecodeAt (juce::int64 sample) const
+{
+    return midi::format (sample, state.sampleRate, rateOf (session), (juce::int64) session.getProperty (ids::timecodeStart, 0));
+}
+
+void TimelineRuler::paintTimecode (juce::Graphics& g, juce::Rectangle<int> row)
+{
+    // Labels on whole frames, spaced at least 90 px apart: a number of frames, then of seconds.
+    const auto rate = rateOf (session);
+    const double fps = midi::framesPerSecond (rate);
+    const double pixelsPerFrame = state.sampleRate / fps / state.samplesPerPixel;
+    const int nominal = midi::nominalFramesPerSecond (rate);
+    juce::int64 step = (juce::int64) nominal * 600;
+    for (const juce::int64 frames : { (juce::int64) 1, (juce::int64) 2, (juce::int64) 5, (juce::int64) 10, (juce::int64) nominal,
+                                      (juce::int64) nominal * 2, (juce::int64) nominal * 5, (juce::int64) nominal * 10,
+                                      (juce::int64) nominal * 30, (juce::int64) nominal * 60, (juce::int64) nominal * 300 })
+        if ((double) frames * pixelsPerFrame >= 90.0)
+        {
+            step = frames;
+            break;
+        }
+
+    const auto first = midi::frameAtSample (std::max<juce::int64> (0, state.viewStart), state.sampleRate, rate);
+    const auto last = midi::frameAtSample (state.xToSample (row.getWidth()), state.sampleRate, rate);
+    g.setFont (theme::font (11.0f));
+    for (auto f = (first / step) * step; f <= last; f += step)
+    {
+        const auto sample = midi::sampleAtFrame (f, state.sampleRate, rate);
+        const auto x = (float) (row.getX() + state.sampleToX (sample));
+        g.setColour (theme::text);
+        g.drawVerticalLine ((int) x, (float) row.getY() + 4.0f, (float) row.getBottom());
+        g.drawText (timecodeAt (sample), juce::Rectangle<float> (x + 3.0f, (float) row.getY(), 90.0f, (float) row.getHeight()),
+                    juce::Justification::centredLeft);
+    }
+}
+
+void TimelineRuler::showTimecodeMenu()
+{
+    const auto current = rateOf (session);
+    const juce::int64 start = session.getProperty (ids::timecodeStart, 0);
+    auto set = [this] (const juce::Identifier& property, const juce::var& value, const juce::String& name)
+    {
+        auto* um = undoManager ? undoManager() : nullptr;
+        if (um != nullptr)
+            um->beginNewTransaction (name);
+        session.setProperty (property, value, um);
+        repaint();
+    };
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader ("Timecode Rate");
+    for (const auto r : { midi::FrameRate::fps23_976, midi::FrameRate::fps24, midi::FrameRate::fps25, midi::FrameRate::fps29_97,
+                          midi::FrameRate::fps29_97drop, midi::FrameRate::fps30 })
+    {
+        // The start stays the same moment (its frame count at the new rate follows).
+        menu.addItem (midi::frameRateLabel (r), true, r == current, [this, r, current, start, set]
+        {
+            const double startSeconds = (double) start / midi::framesPerSecond (current);
+            set (ids::timecodeRate, juce::String (midi::frameRateName (r)), "Timecode Rate");
+            session.setProperty (ids::timecodeStart, (juce::int64) std::llround (startSeconds * midi::framesPerSecond (r)),
+                                 undoManager ? undoManager() : nullptr);
+        });
+    }
+    menu.addSeparator();
+    menu.addSectionHeader ("Session Start");
+    const auto hour = midi::toFrameCount ({ 1, 0, 0, 0 }, current);
+    menu.addItem ("00:00:00:00", true, start == 0, [set] { set (ids::timecodeStart, 0, "Timecode Start"); });
+    menu.addItem ("01:00:00:00 (film and TV)", true, start == hour, [set, hour] { set (ids::timecodeStart, hour, "Timecode Start"); });
+    menu.addItem ("Other...", [this, current, set]
+    {
+        auto* window = new juce::AlertWindow ("Session Start", "The timecode of the session's first sample (hh:mm:ss:ff).",
+                                              juce::MessageBoxIconType::NoIcon);
+        window->addTextEditor ("start", midi::toString (midi::fromFrameCount ((juce::int64) session.getProperty (ids::timecodeStart, 0), current), current));
+        window->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        window->enterModalState (true, juce::ModalCallbackFunction::create ([window, current, set] (int result)
+        {
+            if (result != 1)
+                return;
+            if (const auto tc = midi::parse (window->getTextEditorContents ("start").toStdString(), current))
+                set (ids::timecodeStart, midi::toFrameCount (*tc, current), "Timecode Start");
+        }), true);
+    });
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this));
+}
+
 void TimelineRuler::locateFromMouse (const juce::MouseEvent& e)
 {
     if (e.x < trackHeaderWidth || ! onLocate)
@@ -258,6 +356,11 @@ void TimelineRuler::locateFromMouse (const juce::MouseEvent& e)
 
 void TimelineRuler::mouseDown (const juce::MouseEvent& e)
 {
+    if (e.y >= rowHeight * 4 && e.mods.isPopupMenu())
+    {
+        showTimecodeMenu();
+        return;
+    }
     if (e.y >= rowHeight && e.y < rowHeight * 2 && e.mods.isPopupMenu() && e.x >= trackHeaderWidth)
     {
         if (const auto mark = tempoMarkAt (e.x))
