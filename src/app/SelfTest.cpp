@@ -5117,6 +5117,23 @@ void SelfTest::testMixSections()
             mix.getSections().insertsFJ && mix.getSections().sends && strip->getFader().getHeight() == fullFader,
             juce::String (strip->getFader().getHeight()) + " px");
 
+    // Simple mode: unused inserts and sends, the I/O and the automation-mode controls are hidden.
+    commands.invokeDirectly (commands::mixSimpleMode, false);
+    const int bare = strip->preferredHeight();
+    expect ("Simple Mode hides the unused inserts and sends and the I/O controls: the strip needs 680 - 3 x 98 - 81 = 305 px",
+            mix.getSections().simple && ! strip->showsInputOutput() && bare == 305, juce::String (bare) + " px");
+    juce::PluginDescription eq;
+    for (const auto& d : BuiltinEffectFormat::getDescriptions())
+        if (d.name == "Meridian EQ")
+            eq = d;
+    juce::String error;
+    app.getBridge().insertPlugin (app.getSession()->getTrack (0), 0, eq, error);
+    expect ("once the track uses an insert, its inserts show again (98 px more)", strip->preferredHeight() == bare + 98,
+            error + juce::String (strip->preferredHeight()) + " px");
+    commands.invokeDirectly (commands::mixSimpleMode, false);
+    expect ("Pro mode (Simple off) shows everything again", ! mix.getSections().simple && strip->preferredHeight() == 680,
+            juce::String (strip->preferredHeight()) + " px");
+
     mix.setSections (saved);
     main.showWindow (WindowKind::edit);
     clearTracks();

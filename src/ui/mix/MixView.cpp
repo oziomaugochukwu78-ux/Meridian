@@ -20,6 +20,7 @@ MixView::MixView (AppController& a) : app (a), master (a)
     auto& settings = app.getSettings();
     sections.insertsFJ = settings.getBoolValue ("mixShowInsertsFJ", true);
     sections.sends = settings.getBoolValue ("mixShowSends", true);
+    sections.simple = settings.getBoolValue ("mixSimpleMode", false);
 
     app.addChangeListener (this);
     bindSession();
@@ -31,6 +32,7 @@ void MixView::setSections (ChannelStrip::Sections s)
     auto& settings = app.getSettings();
     settings.setValue ("mixShowInsertsFJ", s.insertsFJ);
     settings.setValue ("mixShowSends", s.sends);
+    settings.setValue ("mixSimpleMode", s.simple);
     for (auto* strip : strips)
         strip->setSections (s);
     layoutStrips();
@@ -64,6 +66,7 @@ void MixView::rebuildStrips()
     {
         auto* strip = strips.add (new ChannelStrip (app, t));
         strip->setSections (sections);
+        strip->onPreferredHeightChanged = [this] { layoutStrips(); };
         stripContainer.addAndMakeVisible (strip);
     }
 
@@ -73,7 +76,11 @@ void MixView::rebuildStrips()
 
 void MixView::layoutStrips()
 {
-    const int height = juce::jmax (ChannelStrip::minimumHeight (sections), viewport.getMaximumVisibleHeight());
+    // The tallest strip decides (in Simple mode strips differ: only used sections show).
+    int needed = strips.isEmpty() ? ChannelStrip::minimumHeight (sections) : 0;
+    for (const auto* strip : strips)
+        needed = juce::jmax (needed, strip->preferredHeight());
+    const int height = juce::jmax (needed, viewport.getMaximumVisibleHeight());
     stripContainer.setSize (juce::jmax (1, strips.size() * ChannelStrip::stripWidth), height);
     for (int i = 0; i < strips.size(); ++i)
         strips[i]->setBounds (i * ChannelStrip::stripWidth, 0, ChannelStrip::stripWidth, height);

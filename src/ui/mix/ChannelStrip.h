@@ -8,6 +8,8 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <functional>
+
 namespace meridian
 {
 
@@ -35,6 +37,7 @@ public:
     {
         bool insertsFJ = true;
         bool sends = true;
+        bool simple = false; ///< Simple mode: inserts and sends only once used; no I/O or automation-mode controls
     };
 
     /** The height a strip needs: its fixed sections plus a full-size fader. */
@@ -44,6 +47,13 @@ public:
     ~ChannelStrip() override;
 
     void setSections (Sections);
+
+    /** The height this strip needs for what it shows now (in Simple mode that
+        depends on its inserts and sends). Equal to minimumHeight in Pro mode. */
+    int preferredHeight() const;
+    /** Called when preferredHeight may have changed (an insert or send added or removed). */
+    std::function<void()> onPreferredHeightChanged;
+    bool showsInputOutput() const noexcept { return ! sections.simple; }
 
     void updateMeter();
 
@@ -65,7 +75,8 @@ private:
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
     void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;
     void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override;
-    void handleAsyncUpdate() override { refreshInsertSlots(); refreshRouting(); }
+    void handleAsyncUpdate() override;
+    bool hasInsertIn (int firstSlot, int endSlot) const;
     void refresh();
     void refreshInsertSlots();
     void populateInputs();

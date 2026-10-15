@@ -319,7 +319,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& c)
                   newTracks, deleteTrack,
                   playStop, record, returnToZero, loopPlayback, punchRecording, clickToggle, countInOff, countIn1Bar, countIn2Bars, addMarker,
                   playbackEngine, pluginManager, toggleRemoteControl, remoteControlInfo,
-                  toggleWindow, showEditWindow, showMixWindow, mixShowInsertsFJ, mixShowSends });
+                  toggleWindow, showEditWindow, showMixWindow, mixShowInsertsFJ, mixShowSends, mixSimpleMode });
 }
 
 void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -456,6 +456,9 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                                info.setTicked (mixView.getSections().insertsFJ); break;
         case mixShowSends:     info.setInfo ("Mix Window: Sends A-E", "Show the send slots", "Window", 0);
                                info.setTicked (mixView.getSections().sends); break;
+        case mixSimpleMode:    info.setInfo ("Mix Window: Simple Mode", "Show inserts and sends only once used, and no I/O or "
+                                             "automation-mode controls (nothing is disabled)", "Window", 0);
+                               info.setTicked (mixView.getSections().simple); break;
 
         default: break;
     }
@@ -576,9 +579,10 @@ bool MainComponent::perform (const InvocationInfo& info)
         case showMixWindow:   showWindow (WindowKind::mix); break;
         case mixShowInsertsFJ:
         case mixShowSends:
+        case mixSimpleMode:
         {
             auto s = mixView.getSections();
-            auto& shown = info.commandID == mixShowInsertsFJ ? s.insertsFJ : s.sends;
+            auto& shown = info.commandID == mixShowInsertsFJ ? s.insertsFJ : info.commandID == mixShowSends ? s.sends : s.simple;
             shown = ! shown;
             mixView.setSections (s);
             commandManager.commandStatusChanged(); // the menu ticks
@@ -661,7 +665,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int index, const juce::String&)
             add (toggleRemoteControl); add (remoteControlInfo);
             break;
         case 5: add (toggleWindow); menu.addSeparator(); add (showEditWindow); add (showMixWindow);
-                menu.addSeparator(); add (mixShowInsertsFJ); add (mixShowSends); break;
+                menu.addSeparator(); add (mixShowInsertsFJ); add (mixShowSends); add (mixSimpleMode); break;
         default: break;
     }
     return menu;

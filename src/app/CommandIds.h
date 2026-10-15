@@ -66,6 +66,7 @@ enum : juce::CommandID
     showMixWindow,
     mixShowInsertsFJ,
     mixShowSends,
+    mixSimpleMode,
 };
 
 } // namespace meridian::commands

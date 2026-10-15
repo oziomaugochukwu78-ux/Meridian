@@ -37,6 +37,8 @@ void styleKey (juce::TextButton& b, juce::Colour onColour, const juce::String& t
 
 void drawSectionHeader (juce::Graphics& g, juce::Rectangle<int> area, const juce::String& text)
 {
+    if (area.isEmpty())
+        return; // a hidden section
     g.setColour (theme::textDim);
     g.setFont (theme::font (9.5f, true));
     g.drawText (text, area, juce::Justification::centredLeft);
@@ -304,10 +306,8 @@ void ChannelStrip::paint (juce::Graphics& g)
     g.drawVerticalLine (getWidth() - 1, 0.0f, (float) getHeight());
 
     drawSectionHeader (g, insertsHeaderA, "INSERTS A-E");
-    if (sections.insertsFJ)
-        drawSectionHeader (g, insertsHeaderB, "INSERTS F-J");
-    if (sections.sends)
-        drawSectionHeader (g, sendsHeader, "SENDS A-E");
+    drawSectionHeader (g, insertsHeaderB, "INSERTS F-J");
+    drawSectionHeader (g, sendsHeader, "SENDS A-E");
     drawSectionHeader (g, ioHeader, "I/O");
 
     if (track::isAux (trackNode))
@@ -332,14 +332,54 @@ void ChannelStrip::paint (juce::Graphics& g)
     }
 }
 
+namespace
+{
+// Mirrors ChannelStrip::resized(): margins, the slot sections, I/O and automation,
+// pan, the keys, the readout and name plate, and a fader no shorter than in the full strip.
+int heightFor (int slotSections, bool inputOutput)
+{
+    constexpr int slotSection = sectionHeader + 5 * slotHeight;
+    constexpr int inputOutputSection = sectionHeader + 20 + 2 + 18 + 4 + 20 + 4;
+    constexpr int fixed = 8 + (40 + 14 + 4) + (22 + 6) + (22 + 4 + 18 + 4);
+    constexpr int minimumFader = 163;
+    return fixed + (inputOutput ? inputOutputSection : 0) + slotSection * slotSections + minimumFader;
+}
+} // namespace
+
 int ChannelStrip::minimumHeight (Sections s)
 {
-    // Mirrors resized(): margins, the slot sections, I/O and automation, pan, the
-    // keys, the readout and name plate, and a fader no shorter than in the full strip.
-    constexpr int slotSection = sectionHeader + 5 * slotHeight;
-    constexpr int fixed = 8 + (sectionHeader + 20 + 2 + 18 + 4 + 20 + 4) + (40 + 14 + 4) + (22 + 6) + (22 + 4 + 18 + 4);
-    constexpr int minimumFader = 163;
-    return fixed + slotSection * (1 + (s.insertsFJ ? 1 : 0) + (s.sends ? 1 : 0)) + minimumFader;
+    return heightFor (1 + (s.insertsFJ ? 1 : 0) + (s.sends ? 1 : 0), true);
+}
+
+bool ChannelStrip::hasInsertIn (int firstSlot, int endSlot) const
+{
+    for (const auto& insert : track::inserts (trackNode))
+        if (const int slot = insert[ids::slot]; slot >= firstSlot && slot < endSlot)
+            return true;
+    return false;
+}
+
+int ChannelStrip::preferredHeight() const
+{
+    if (! sections.simple)
+        return minimumHeight (sections);
+    const bool anyB = hasInsertIn (5, 10);
+    const int slotSections = (hasInsertIn (0, 5) || anyB ? 1 : 0) + (sections.insertsFJ && anyB ? 1 : 0)
+                           + (sections.sends && track::sends (trackNode).getNumChildren() > 0 ? 1 : 0);
+    return heightFor (slotSections, false);
+}
+
+void ChannelStrip::handleAsyncUpdate()
+{
+    refreshInsertSlots();
+    refreshRouting();
+    if (sections.simple)
+    {
+        resized();
+        repaint();
+        if (onPreferredHeightChanged)
+            onPreferredHeightChanged();
+    }
 }
 
 void ChannelStrip::setSections (Sections s)
@@ -353,31 +393,51 @@ void ChannelStrip::resized()
 {
     auto area = getLocalBounds().reduced (4, 4).withTrimmedRight (1);
 
-    insertsHeaderA = area.removeFromTop (sectionHeader);
-    for (int i = 0; i < 5; ++i)
-        insertSlots[i]->setBounds (area.removeFromTop (slotHeight));
+    // Simple mode shows inserts and sends only once the track uses them.
+    const bool simple = sections.simple, anyB = hasInsertIn (5, 10);
+    const bool showA = ! simple || hasInsertIn (0, 5) || anyB;
+    const bool showB = sections.insertsFJ && (! simple || anyB);
+    const bool showSends = sections.sends && (! simple || track::sends (trackNode).getNumChildren() > 0);
 
-    insertsHeaderB = sections.insertsFJ ? area.removeFromTop (sectionHeader) : juce::Rectangle<int>();
+    insertsHeaderA = showA ? area.removeFromTop (sectionHeader) : juce::Rectangle<int>();
+    for (int i = 0; i < 5; ++i)
+    {
+        insertSlots[i]->setVisible (showA);
+        insertSlots[i]->setBounds (showA ? area.removeFromTop (slotHeight) : juce::Rectangle<int>());
+    }
+
+    insertsHeaderB = showB ? area.removeFromTop (sectionHeader) : juce::Rectangle<int>();
     for (int i = 5; i < 10; ++i)
     {
-        insertSlots[i]->setVisible (sections.insertsFJ);
-        insertSlots[i]->setBounds (sections.insertsFJ ? area.removeFromTop (slotHeight) : juce::Rectangle<int>());
+        insertSlots[i]->setVisible (showB);
+        insertSlots[i]->setBounds (showB ? area.removeFromTop (slotHeight) : juce::Rectangle<int>());
     }
 
-    sendsHeader = sections.sends ? area.removeFromTop (sectionHeader) : juce::Rectangle<int>();
+    sendsHeader = showSends ? area.removeFromTop (sectionHeader) : juce::Rectangle<int>();
     for (auto* s : sendSlots)
     {
-        s->setVisible (sections.sends);
-        s->setBounds (sections.sends ? area.removeFromTop (slotHeight) : juce::Rectangle<int>());
+        s->setVisible (showSends);
+        s->setBounds (showSends ? area.removeFromTop (slotHeight) : juce::Rectangle<int>());
     }
 
-    ioHeader = area.removeFromTop (sectionHeader);
-    inputSelector.setBounds (area.removeFromTop (20));
-    area.removeFromTop (2);
-    outputButton.setBounds (area.removeFromTop (18));
-    area.removeFromTop (4);
-    automationSelector.setBounds (area.removeFromTop (20));
-    area.removeFromTop (4);
+    const bool showIO = ! simple;
+    for (auto* c : std::initializer_list<juce::Component*> { &inputSelector, &outputButton, &automationSelector })
+        c->setVisible (showIO);
+    if (! showIO)
+    {
+        ioHeader = {};
+        area.removeFromTop (4);
+    }
+    else
+    {
+        ioHeader = area.removeFromTop (sectionHeader);
+        inputSelector.setBounds (area.removeFromTop (20));
+        area.removeFromTop (2);
+        outputButton.setBounds (area.removeFromTop (18));
+        area.removeFromTop (4);
+        automationSelector.setBounds (area.removeFromTop (20));
+        area.removeFromTop (4);
+    }
 
     panKnob.setBounds (area.removeFromTop (40).withSizeKeepingCentre (40, 40));
     panReadout.setBounds (area.removeFromTop (14));
