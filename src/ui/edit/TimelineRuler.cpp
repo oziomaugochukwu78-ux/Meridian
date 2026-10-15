@@ -1,5 +1,6 @@
 #include "TimelineRuler.h"
 
+#include "model/MidiModel.h"
 #include "model/Session.h"
 #include "ui/Theme.h"
 
@@ -107,6 +108,7 @@ void TimelineRuler::paint (juce::Graphics& g)
     g.setColour (theme::textDim);
     g.setFont (theme::font (11.0f, true));
     g.drawText ("Markers", labels.removeFromTop (rowHeight).reduced (10, 0), juce::Justification::centredRight);
+    g.drawText ("Tempo", labels.removeFromTop (rowHeight).reduced (10, 0), juce::Justification::centredRight);
     g.drawText ("Bars|Beats", labels.removeFromTop (rowHeight).reduced (10, 0), juce::Justification::centredRight);
     g.drawText ("Min:Secs", labels.removeFromTop (rowHeight).reduced (10, 0), juce::Justification::centredRight);
 
@@ -144,12 +146,14 @@ void TimelineRuler::paint (juce::Graphics& g)
     }
 
     paintMarkers (g, area.removeFromTop (rowHeight));
+    paintTempo (g, area.removeFromTop (rowHeight));
     paintBarsBeats (g, area.removeFromTop (rowHeight));
     paintMinSecs (g, area.removeFromTop (rowHeight));
 
     g.setColour (theme::divider);
     g.drawHorizontalLine (rowHeight, (float) trackHeaderWidth, (float) getWidth());
     g.drawHorizontalLine (rowHeight * 2, (float) trackHeaderWidth, (float) getWidth());
+    g.drawHorizontalLine (rowHeight * 3, (float) trackHeaderWidth, (float) getWidth());
     g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
     g.drawVerticalLine (trackHeaderWidth - 1, 0.0f, (float) getHeight());
 
@@ -254,6 +258,14 @@ void TimelineRuler::locateFromMouse (const juce::MouseEvent& e)
 
 void TimelineRuler::mouseDown (const juce::MouseEvent& e)
 {
+    if (e.y >= rowHeight && e.y < rowHeight * 2 && e.mods.isPopupMenu() && e.x >= trackHeaderWidth)
+    {
+        if (const auto mark = tempoMarkAt (e.x))
+            showTempoMenu (*mark);
+        else
+            showTempoDialog (state.meterMap.positionOf (state.sampleToTicks (std::max<juce::int64> (0, state.xToSample (e.x - trackHeaderWidth)))).bar);
+        return;
+    }
     if (e.y < rowHeight)
     {
         if (const auto m = markerAt (e.x); m.isValid())
@@ -268,5 +280,182 @@ void TimelineRuler::mouseDown (const juce::MouseEvent& e)
     locateFromMouse (e);
 }
 void TimelineRuler::mouseDrag (const juce::MouseEvent& e) { locateFromMouse (e); }
+
+void TimelineRuler::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (e.y < rowHeight || e.y >= rowHeight * 2 || e.x < trackHeaderWidth)
+        return;
+    if (const auto mark = tempoMarkAt (e.x))
+        showTempoDialog (mark->bar);
+    else
+        showTempoDialog (state.meterMap.positionOf (state.sampleToTicks (std::max<juce::int64> (0, state.xToSample (e.x - trackHeaderWidth)))).bar);
+}
+
+//==============================================================================
+// Tempo ruler
+
+namespace
+{
+juce::String formatBpm (double bpm)
+{
+    auto text = juce::String (bpm, 2);
+    while (text.containsChar ('.') && (text.endsWithChar ('0') || text.endsWithChar ('.')))
+        text = text.dropLastCharacters (1);
+    return text;
+}
+} // namespace
+
+std::vector<TimelineRuler::TempoMark> TimelineRuler::tempoMarks() const
+{
+    // From the session itself when there is one, so an edit shows at once (the Edit
+    // window refreshes its own copies of the maps on a timer).
+    const auto* s = getSession ? getSession() : nullptr;
+    const auto tempo = s != nullptr ? midimodel::tempoMap (*s) : state.tempoMap;
+    const auto meter = s != nullptr ? midimodel::meterMap (*s) : state.meterMap;
+    std::vector<TempoMark> marks;
+    auto add = [&marks] (juce::int64 tick, juce::int64 bar, bool isTempo)
+    {
+        for (auto& m : marks)
+            if (m.tick == tick)
+            {
+                (isTempo ? m.hasTempo : m.hasMeter) = true;
+                return;
+            }
+        TempoMark m;
+        m.tick = tick;
+        m.bar = bar;
+        (isTempo ? m.hasTempo : m.hasMeter) = true;
+        marks.push_back (m);
+    };
+
+    add (0, 0, true); // the starting tempo and time signature are always shown
+    add (0, 0, false);
+    for (const auto& c : tempo.getChanges())
+        add ((juce::int64) c.tick, (juce::int64) meter.positionOf (c.tick).bar, true);
+    for (const auto& c : meter.getChanges())
+        add ((juce::int64) meter.barToTicks (c.bar), (juce::int64) c.bar, false);
+
+    std::sort (marks.begin(), marks.end(), [] (const TempoMark& a, const TempoMark& b) { return a.tick < b.tick; });
+    for (auto& m : marks)
+    {
+        juce::StringArray parts;
+        if (m.hasTempo)
+            parts.add (formatBpm (tempo.bpmAt (m.tick)) + " bpm");
+        if (m.hasMeter)
+        {
+            const auto& sig = meter.meterAt (m.bar);
+            parts.add (juce::String (sig.numerator) + "/" + juce::String (sig.denominator));
+        }
+        m.label = parts.joinIntoString (" ");
+    }
+    return marks;
+}
+
+juce::StringArray TimelineRuler::getTempoLabels() const
+{
+    juce::StringArray labels;
+    for (const auto& m : tempoMarks())
+        labels.add (m.label);
+    return labels;
+}
+
+std::optional<TimelineRuler::TempoMark> TimelineRuler::tempoMarkAt (int x) const
+{
+    for (const auto& m : tempoMarks())
+    {
+        const auto mx = trackHeaderWidth + (int) state.sampleToX (state.ticksToSample (m.tick));
+        const auto width = 10 + juce::GlyphArrangement::getStringWidthInt (theme::font (11.0f), m.label);
+        if (x >= mx - 4 && x <= mx + width)
+            return m;
+    }
+    return std::nullopt;
+}
+
+void TimelineRuler::paintTempo (juce::Graphics& g, juce::Rectangle<int> row)
+{
+    g.setFont (theme::font (11.0f));
+    for (const auto& m : tempoMarks())
+    {
+        const auto x = (float) (row.getX() + state.sampleToX (state.ticksToSample (m.tick)));
+        if (x > (float) row.getRight())
+            break;
+        g.setColour (theme::automation);
+        g.fillRect (juce::Rectangle<float> (x - 1.0f, (float) row.getY() + 3.0f, 3.0f, (float) row.getHeight() - 6.0f));
+        g.setColour (theme::text);
+        g.drawText (m.label, juce::Rectangle<float> (x + 5.0f, (float) row.getY(), 160.0f, (float) row.getHeight()),
+                    juce::Justification::centredLeft);
+    }
+}
+
+bool TimelineRuler::setTempoAtBar (juce::int64 bar, double bpm, int numerator, int denominator)
+{
+    auto* s = getSession ? getSession() : nullptr;
+    auto* um = undoManager ? undoManager() : nullptr;
+    if (s == nullptr || bar < 0)
+        return false;
+    if (um != nullptr)
+        um->beginNewTransaction ("Tempo Change");
+    midimodel::setTempoChange (*s, (juce::int64) midimodel::meterMap (*s).barToTicks (bar), bpm, um);
+    const auto current = midimodel::meterMap (*s).meterAt (bar);
+    if (current.numerator != numerator || current.denominator != denominator)
+        midimodel::setMeterChange (*s, bar, numerator, denominator, um);
+    return true;
+}
+
+bool TimelineRuler::deleteTempoChange (juce::int64 tick, juce::int64 bar)
+{
+    auto* s = getSession ? getSession() : nullptr;
+    auto* um = undoManager ? undoManager() : nullptr;
+    if (s == nullptr)
+        return false;
+    if (um != nullptr)
+        um->beginNewTransaction ("Delete Tempo Change");
+    const bool tempoRemoved = midimodel::removeTempoChange (*s, tick, um);
+    const bool meterRemoved = midimodel::removeMeterChange (*s, bar, um);
+    return tempoRemoved || meterRemoved;
+}
+
+void TimelineRuler::showTempoDialog (juce::int64 bar)
+{
+    const auto tick = state.meterMap.barToTicks (bar);
+    const auto& sig = state.meterMap.meterAt (bar);
+    auto* window = new juce::AlertWindow ("Tempo at bar " + juce::String (bar + 1),
+                                          "Tempo (20-999 bpm) and time signature from the start of this bar.",
+                                          juce::MessageBoxIconType::NoIcon);
+    window->addTextEditor ("bpm", formatBpm (state.tempoMap.bpmAt (tick)), "Tempo");
+    window->addTextEditor ("meter", juce::String (sig.numerator) + "/" + juce::String (sig.denominator), "Time signature");
+    window->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    window->enterModalState (true, juce::ModalCallbackFunction::create (
+        [safe = juce::Component::SafePointer<TimelineRuler> (this), bar, window] (int result)
+        {
+            if (safe == nullptr || result != 1)
+                return;
+            const auto bpmText = window->getTextEditorContents ("bpm").trim();
+            const auto meterText = window->getTextEditorContents ("meter").trim();
+            const auto numerator = meterText.upToFirstOccurrenceOf ("/", false, false).trim();
+            const auto denominator = meterText.fromFirstOccurrenceOf ("/", false, false).trim();
+            const double bpm = bpmText.getDoubleValue();
+            const bool valid = bpmText.containsOnly ("0123456789.") && bpm >= midi::TempoMap::minBpm && bpm <= midi::TempoMap::maxBpm
+                               && meterText.containsChar ('/') && numerator.isNotEmpty() && denominator.isNotEmpty()
+                               && numerator.containsOnly ("0123456789") && denominator.containsOnly ("0123456789");
+            if (! valid)
+            {
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Tempo",
+                                                        "Give a tempo from 20 to 999 bpm and a time signature such as 3/4 or 6/8.");
+                return;
+            }
+            safe->setTempoAtBar (bar, bpm, numerator.getIntValue(), denominator.getIntValue());
+        }), true);
+}
+
+void TimelineRuler::showTempoMenu (const TempoMark& mark)
+{
+    juce::PopupMenu menu;
+    menu.addItem ("Edit Tempo / Time Signature...", [this, bar = mark.bar] { showTempoDialog (bar); });
+    menu.addItem ("Delete This Change", mark.tick > 0, false,
+                  [this, mark] { deleteTempoChange (mark.hasTempo ? mark.tick : 0, mark.hasMeter ? mark.bar : 0); });
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this));
+}
 
 } // namespace meridian

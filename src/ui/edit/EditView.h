@@ -35,6 +35,7 @@ public:
     EditState& getEditState() noexcept { return state; }
     TrackLane* getLane (int index) const noexcept { return lanes[index]; }
     TrackHeader* getHeader (int index) const noexcept { return headers[index]; }
+    TimelineRuler& getRuler() noexcept { return ruler; }
 
     // Edit commands (invoked from menus and shortcuts)
     void separateAtSelection();

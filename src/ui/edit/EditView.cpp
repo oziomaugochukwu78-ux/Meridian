@@ -36,6 +36,7 @@ EditView::EditView (AppController& a) : app (a)
 
     ruler.onLocate = [this] (juce::int64 sample) { app.locate (sample); };
     ruler.undoManager = [this] { return app.getUndoManager(); };
+    ruler.getSession = [this] { return app.getSession(); };
 
     state.addChangeListener (this);
     app.addChangeListener (this);

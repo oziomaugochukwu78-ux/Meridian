@@ -58,7 +58,7 @@ What a home producer, songwriter or podcaster needs.
 - done: markers, loop playback, punch-in/punch-out recording
 - done: playlists with comping (track-header selector, Comp Selection From); still to do: a playlist lane view showing alternates under the track
 - done: bars|beats grid and ruler (from the tempo and meter maps, also in the MIDI editor)
-- done: tempo and meter map (tempo changes, time signatures); still to do: tempo ramps, editing changes in the ruler
+- done: tempo and meter map (tempo changes, time signatures), edited in the Tempo ruler; still to do: tempo ramps
 - done: click with a count-in
 
 **MIDI and instruments**

@@ -68,6 +68,26 @@ void setMeterChange (Session& session, juce::int64 bar, int numerator, int denom
     change.setProperty (ids::denominator, valid.denominator, um);
 }
 
+bool removeTempoChange (Session& session, juce::int64 tick, juce::UndoManager* um)
+{
+    auto map = session.getState().getChildWithName (ids::TEMPO_MAP);
+    auto change = tick > 0 ? map.getChildWithProperty (ids::tick, tick) : juce::ValueTree();
+    if (! change.isValid())
+        return false;
+    map.removeChild (change, um);
+    return true;
+}
+
+bool removeMeterChange (Session& session, juce::int64 bar, juce::UndoManager* um)
+{
+    auto map = session.getState().getChildWithName (ids::METER_MAP);
+    auto change = bar > 0 ? map.getChildWithProperty (ids::bar, bar) : juce::ValueTree();
+    if (! change.isValid())
+        return false;
+    map.removeChild (change, um);
+    return true;
+}
+
 void clearTempoAndMeterChanges (Session& session, juce::UndoManager* um)
 {
     for (const auto* type : { &ids::TEMPO_MAP, &ids::METER_MAP })

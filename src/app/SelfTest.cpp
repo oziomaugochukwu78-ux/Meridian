@@ -3946,6 +3946,7 @@ void SelfTest::timerCallback()
                     testEditModes();
                     testAutomationLanes();
                     testMixSections();
+                    testTempoRuler();
                     buildShowcaseSession(); // for the screenshots
                     phase = 4;
                 }
@@ -3971,6 +3972,7 @@ void SelfTest::timerCallback()
                 testEditModes();
                 testAutomationLanes();
                 testMixSections();
+                testTempoRuler();
                 buildShowcaseSession();
                 ticks = 0;
                 phase = 4;
@@ -4920,6 +4922,52 @@ void SelfTest::testAutomationLanes()
 
     view.setTool (EditTool::smart);
     clearTracks();
+}
+
+//==============================================================================
+// The Tempo ruler: adding, undoing and deleting tempo and time-signature changes.
+
+void SelfTest::testTempoRuler()
+{
+    beginGroup ("Edit window: Tempo ruler");
+    auto* session = app.getSession();
+    auto& um = session->getUndoManager();
+    auto& ruler = main.getEditView().getRuler();
+    midimodel::clearTempoAndMeterChanges (*session, nullptr);
+    session->getState().setProperty (ids::tempo, 120.0, nullptr);
+    um.clearUndoHistory();
+
+    const auto start = juce::StringArray { "120 bpm 4/4" };
+    expect ("the Tempo ruler shows the starting tempo and time signature", ruler.getTempoLabels() == start,
+            ruler.getTempoLabels().joinIntoString (" | "));
+
+    // Bar 5 (0-based 4) starts at tick 4 x 3840 = 15360 in 4/4.
+    ruler.setTempoAtBar (4, 90.5, 3, 4);
+    auto tempo = midimodel::tempoMap (*session);
+    auto meter = midimodel::meterMap (*session);
+    expect ("a change at bar 5: 90.5 bpm and 3/4 from its first tick, and the ruler shows it",
+            juce::exactlyEqual (tempo.bpmAt (15360), 90.5) && juce::exactlyEqual (tempo.bpmAt (15359), 120.0)
+                && meter.meterAt (4).numerator == 3 && meter.meterAt (3).numerator == 4
+                && ruler.getTempoLabels() == juce::StringArray { "120 bpm 4/4", "90.5 bpm 3/4" },
+            ruler.getTempoLabels().joinIntoString (" | "));
+
+    um.undo();
+    expect ("one undo removes both the tempo and the time signature", ruler.getTempoLabels() == start,
+            ruler.getTempoLabels().joinIntoString (" | "));
+    um.redo();
+    ruler.deleteTempoChange (15360, 4);
+    expect ("Delete This Change removes them", ruler.getTempoLabels() == start, ruler.getTempoLabels().joinIntoString (" | "));
+
+    ruler.setTempoAtBar (0, 100.0, 4, 4);
+    expect ("editing bar 1 sets the starting tempo (and adds no time signature: 4/4 is unchanged)",
+            juce::exactlyEqual (session->getTempo(), 100.0) && ruler.getTempoLabels() == juce::StringArray { "100 bpm 4/4" }
+                && session->getState().getChildWithName (ids::METER_MAP).getNumChildren() == 0,
+            ruler.getTempoLabels().joinIntoString (" | "));
+    expect ("tempo edits leave the session valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+
+    session->getState().setProperty (ids::tempo, 120.0, nullptr);
+    midimodel::clearTempoAndMeterChanges (*session, nullptr);
+    um.clearUndoHistory();
 }
 
 //==============================================================================

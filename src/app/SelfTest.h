@@ -133,6 +133,7 @@ private:
     void testEditModes();
     void testAutomationLanes();
     void testMixSections();
+    void testTempoRuler();
     void captureScreens();
     void finish();
 

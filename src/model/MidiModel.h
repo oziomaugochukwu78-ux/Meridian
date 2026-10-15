@@ -24,6 +24,11 @@ void setMeterChange (Session&, juce::int64 bar, int numerator, int denominator, 
 /** Back to one tempo (the starting one) and 4/4. */
 void clearTempoAndMeterChanges (Session&, juce::UndoManager*);
 
+/** Removes the tempo change at `tick` (never the starting tempo). False if there is none. Undoable. */
+bool removeTempoChange (Session&, juce::int64 tick, juce::UndoManager*);
+/** Removes the time signature starting at `bar` (never bar 0's). False if there is none. Undoable. */
+bool removeMeterChange (Session&, juce::int64 bar, juce::UndoManager*);
+
 /** A clip's NOTE children as a (sorted, validated) sequence. */
 midi::NoteSequence readNotes (const juce::ValueTree& clip);
 

@@ -5,13 +5,21 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <functional>
+#include <optional>
+#include <vector>
 
 namespace meridian
 {
 
-/** The rulers above the tracks: Markers, Bars|Beats and Min:Secs, with the
-    loop range shown as a strip. Clicking a ruler moves the playback cursor
-    there; clicking a marker goes to it, right-click renames or deletes it. */
+class Session;
+
+/** The rulers above the tracks: Markers, Tempo, Bars|Beats and Min:Secs, with
+    the loop range shown as a strip. Clicking a ruler moves the playback cursor
+    there; clicking a marker goes to it, right-click renames or deletes it.
+
+    The Tempo ruler shows the starting tempo and time signature and every
+    change. Double-click it to add a change at the start of that bar;
+    right-click a change to edit or delete it. Each edit is one undo step. */
 class TimelineRuler final : public juce::Component,
                             private juce::ChangeListener,
                             private juce::ValueTree::Listener
@@ -23,6 +31,17 @@ public:
     std::function<void (juce::int64)> onLocate;
     /** The session's undo manager, for marker renames and deletions. */
     std::function<juce::UndoManager*()> undoManager;
+    /** The open session (or nullptr), for tempo and meter edits. */
+    std::function<Session*()> getSession;
+
+    /** Sets the tempo (and, if it differs, the time signature) from the start of
+        `bar` (0-based), as one undo step. Used by the Tempo ruler's dialog; public
+        for the self test. False without a session. */
+    bool setTempoAtBar (juce::int64 bar, double bpm, int numerator, int denominator);
+    /** Deletes the tempo change at `tick` and the time signature at `bar` (either may be absent). */
+    bool deleteTempoChange (juce::int64 tick, juce::int64 bar);
+    /** The Tempo ruler's labels, left to right (for the self test). */
+    juce::StringArray getTempoLabels() const;
 
     void setPlayheadPosition (juce::int64 sample);
     /** The SESSION tree, for markers and the loop range (invalid when none is open). */
@@ -31,9 +50,10 @@ public:
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
 
     static constexpr int rowHeight = 20;
-    static constexpr int numRows = 3;
+    static constexpr int numRows = 4;
 
 private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override { repaint(); }
@@ -41,6 +61,20 @@ private:
     void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override { repaint(); }
     void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override { repaint(); }
     void paintMarkers (juce::Graphics&, juce::Rectangle<int> row);
+
+    /** One label on the Tempo ruler: a tempo change, a time signature, or both at one place. */
+    struct TempoMark
+    {
+        juce::int64 tick = 0;
+        juce::int64 bar = 0;
+        bool hasTempo = false, hasMeter = false;
+        juce::String label;
+    };
+    std::vector<TempoMark> tempoMarks() const;
+    std::optional<TempoMark> tempoMarkAt (int x) const;
+    void paintTempo (juce::Graphics&, juce::Rectangle<int> row);
+    void showTempoDialog (juce::int64 bar);
+    void showTempoMenu (const TempoMark&);
     void paintBarsBeats (juce::Graphics&, juce::Rectangle<int> row);
     void paintMinSecs (juce::Graphics&, juce::Rectangle<int> row);
     void locateFromMouse (const juce::MouseEvent&);
