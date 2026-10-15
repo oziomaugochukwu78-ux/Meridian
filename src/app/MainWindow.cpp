@@ -52,12 +52,18 @@ void MainWindow::fitToScreen()
         if (const auto frame = peer->getFrameSizeIfPresent())
             area = (*frame).subtractedFrom (area);
 
-    if (getWidth() <= area.getWidth() && getHeight() <= area.getHeight())
-        return;
-
-    setResizeLimits (juce::jmin (960, area.getWidth()), juce::jmin (600, area.getHeight()), 10000, 10000);
-    setBounds (area.withSizeKeepingCentre (juce::jmin (getWidth(), area.getWidth()),
-                                           juce::jmin (getHeight(), area.getHeight())));
+    auto bounds = getBounds();
+    if (bounds.getWidth() > area.getWidth() || bounds.getHeight() > area.getHeight())
+    {
+        setResizeLimits (juce::jmin (960, area.getWidth()), juce::jmin (600, area.getHeight()), 10000, 10000);
+        bounds = area.withSizeKeepingCentre (juce::jmin (bounds.getWidth(), area.getWidth()),
+                                             juce::jmin (bounds.getHeight(), area.getHeight()));
+    }
+    // A window that only just fits can still be centred with its title bar above
+    // the screen or its bottom under the taskbar: move it wholly inside.
+    bounds = bounds.constrainedWithin (area);
+    if (bounds != getBounds())
+        setBounds (bounds);
 }
 
 void MainWindow::closeButtonPressed()
