@@ -549,6 +549,45 @@ void SelfTest::testConsolePresets()
     expect ("undo restores Warm Tape", consolepresets::current (state) == "Warm Tape", consolepresets::current (state));
     expect ("an unknown preset is refused", ! call ("set_master", R"({"preset":"Loud"})").ok, {});
 
+    // adjust: relative, perceptual changes, measured before and after.
+    auto measuredThd = [&] (const juce::String& name)
+    {
+        const auto audio = readAudio (bounce (name, 0, end).file);
+        const float* p = audio.getReadPointer (0, (int) clipStart + 9600);
+        double h[11] = {}, distortion = 0.0;
+        for (int k = 1; k <= 10; ++k)
+            h[k] = dsp::toneAmplitude (p, (int) sampleRate, 1000.0 * k, sampleRate);
+        for (int k = 2; k <= 10; ++k)
+            distortion += h[k] * h[k];
+        return 100.0 * std::sqrt (distortion) / h[1];
+    };
+    auto value = [] (const RemoteTools::Result& r, const char* when, const char* what) { return (double) r.data[when][what]; };
+
+    call ("set_master", R"({"preset":"Warm Tape"})");
+    const auto warmer = call ("adjust", R"({"attribute":"warmth","direction":"more"})");
+    const double warmerThd = measuredThd ("adjust_warmth");
+    expect ("adjust warmth more: from Warm Tape, H2 over H3 and THD both rise, and the reported THD is what the mix measures",
+            warmer.ok && value (warmer, "after", "h2_over_h3_db") > value (warmer, "before", "h2_over_h3_db")
+                && value (warmer, "after", "thd_percent") > value (warmer, "before", "thd_percent")
+                && std::abs (warmerThd - value (warmer, "after", "thd_percent")) < 0.02,
+            warmer.error + juce::JSON::toString (warmer.data, true) + "; bounced " + fmt (warmerThd) + " %");
+    session->getUndoManager().undo();
+    expect ("one undo returns to Warm Tape", consolepresets::current (state) == "Warm Tape", consolepresets::current (state));
+
+    const auto grittier = call ("adjust", R"({"attribute":"grit","direction":"more"})");
+    expect ("adjust grit more: THD rises and the balance moves toward H3",
+            grittier.ok && value (grittier, "after", "thd_percent") > value (grittier, "before", "thd_percent")
+                && value (grittier, "after", "h2_over_h3_db") < value (grittier, "before", "h2_over_h3_db"),
+            grittier.error + juce::JSON::toString (grittier.data, true));
+    const auto cleaner = call ("adjust", R"({"attribute":"clean","direction":"more","amount":2})");
+    expect ("adjust clean more (2 steps): THD falls",
+            cleaner.ok && value (cleaner, "after", "thd_percent") < value (cleaner, "before", "thd_percent"),
+            cleaner.error + juce::JSON::toString (cleaner.data, true));
+    expect ("adjust refuses what it does not know (attribute \"loud\", 9 steps)",
+            ! call ("adjust", R"({"attribute":"loud","direction":"more"})").ok
+                && ! call ("adjust", R"({"attribute":"warmth","direction":"more","amount":9})").ok,
+            {});
+
     clearTracks();
     state.setProperty (ids::consoleEnabled, before[0], nullptr);
     state.setProperty (ids::consoleDrive, before[1], nullptr);
@@ -3834,8 +3873,8 @@ void SelfTest::testMcpTools()
     if (toolArray != nullptr)
         for (const auto& tool : *toolArray)
             allDescribed = allDescribed && tool["inputSchema"].isObject() && tool["description"].toString().length() > 20;
-    expect ("tools/list describes all 43 tools, each with a description and a JSON schema",
-            allDescribed && toolArray->size() == 43, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
+    expect ("tools/list describes all 44 tools, each with a description and a JSON schema",
+            allDescribed && toolArray->size() == 44, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
 
     auto r = toolCall ("get_status", "{}");
     expect ("get_status returns the session and tracks", ! failed (r) && callText (r).contains ("\"Vocal\""), callText (r).substring (0, 160));

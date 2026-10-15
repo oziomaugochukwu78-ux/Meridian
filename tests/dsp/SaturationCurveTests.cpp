@@ -79,3 +79,14 @@ TEST_CASE ("Drive below 0 dB keeps unity small-signal gain and moves the knee ab
 
     CHECK_THAT (makeCurve (SaturationCurve::Type::tanh, -40.0, 0.0).getDriveGain(), WithinRel (std::pow (10.0, -12.0 / 20.0), 1.0e-12));
 }
+
+TEST_CASE ("measure() reports a setting's character: Warm Tape 0.67 % with H2 leading, Gritty 4.6 % with H3 leading", "[saturation]")
+{
+    const auto warm = SaturationCurve::measure (SaturationCurve::Type::tanh, -12.0, 0.30);
+    CHECK_THAT (warm.thdPercent, WithinAbs (0.666, 0.02));
+    CHECK_THAT (warm.h2OverH3Db, WithinAbs (14.2, 0.3));
+
+    const auto gritty = SaturationCurve::measure (SaturationCurve::Type::tanh, 4.0, 0.05);
+    CHECK_THAT (gritty.thdPercent, WithinAbs (4.58, 0.05));
+    CHECK (gritty.h2OverH3Db < -15.0);
+}

@@ -46,6 +46,15 @@ public:
 
     double getDriveGain() const noexcept { return drive; }
 
+    /** A setting's measured character, the console presets' reference: a 1 kHz
+        sine at -6 dBFS through the curve (48 kHz, one second). */
+    struct Character
+    {
+        double thdPercent = 0.0;  ///< harmonics 2 to 10 over the fundamental
+        double h2OverH3Db = 0.0;  ///< second harmonic over third (+: even "warmth" leads)
+    };
+    static Character measure (Type, double driveDb, double asymmetry);
+
 private:
     void recalculate() noexcept;
     double shape (double u) const noexcept;

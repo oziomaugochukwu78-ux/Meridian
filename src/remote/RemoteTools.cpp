@@ -414,6 +414,14 @@ const std::vector<ToolInfo>& toolTable()
                     { "drive_db", "number", "Console drive, -12 to +24 dB (how early saturation starts; below 0 only colours)" },
                     { "character", "number", "Console asymmetry 0-1 (more = more 2nd harmonic warmth)" },
                     { "curve", "string", "Saturation curve", false, { "tanh", "cubic" } } }) },
+        { "adjust", "Change the master's character in plain terms",
+          "A relative, perceptual change to the master console, measured: warmth (more even harmonics: asymmetry and a "
+          "little drive up), grit (more odd harmonics: drive up) or clean (drive down). Each step is small and audible; "
+          "amount is the number of steps. The reply gives the measured THD and H2-over-H3 of a 1 kHz sine at -6 dBFS "
+          "before and after, and the preset the result matches (or Custom).",
+          schema ({ { "attribute", "string", "What to change", true, { "warmth", "grit", "clean" } },
+                    { "direction", "string", "more or less", true, { "more", "less" } },
+                    { "amount", "integer", "Steps, 1-5 (default 1)" } }) },
         { "bounce", "Bounce (export) the mix",
           "Mix the session down to a file in the session's Bounced Files folder. Runs in the background; get_status "
           "reports progress, then the file, its peak levels, integrated loudness (LUFS), loudness range and true peak. "
@@ -596,6 +604,7 @@ RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var
     if (name == "add_notes")          return addNotes (args);
     if (name == "list_notes")         return listNotes (args);
     if (name == "set_synth")          return setSynth (args);
+    if (name == "adjust")             return adjust (args);
     if (name == "set_master")         return setMaster (args);
     if (name == "bounce")             return bounce (args);
     if (name == "undo")               return undoRedo (args, true);
@@ -1880,6 +1889,71 @@ RemoteTools::Result RemoteTools::setMaster (const juce::var& args)
     if (args.hasProperty ("character"))  state.setProperty (ids::consoleCharacter, juce::jlimit (0.0, 1.0, (double) args["character"]), um);
     if (args.hasProperty ("curve"))      state.setProperty (ids::consoleCurve, args["curve"].toString() == "cubic" ? 1 : 0, um);
     return getStatus();
+}
+
+RemoteTools::Result RemoteTools::adjust (const juce::var& args)
+{
+    const auto attribute = args["attribute"].toString(), direction = args["direction"].toString();
+    if ((attribute != "warmth" && attribute != "grit" && attribute != "clean") || (direction != "more" && direction != "less"))
+        return { false, {}, "attribute is warmth, grit or clean; direction is more or less." };
+    const int steps = args.hasProperty ("amount") ? (int) args["amount"] : 1;
+    if (steps < 1 || steps > 5)
+        return { false, {}, "amount is 1 to 5 steps." };
+
+    auto state = app.getSession()->getState();
+    const bool wasOn = state.getProperty (ids::consoleEnabled, true);
+    double drive = state.getProperty (ids::consoleDrive, 6.0), character = state.getProperty (ids::consoleCharacter, 0.35);
+    int curve = state.getProperty (ids::consoleCurve, 0);
+
+    auto measure = [] (bool on, int curveType, double driveDb, double asymmetry)
+    {
+        return on ? dsp::SaturationCurve::measure (curveType == 1 ? dsp::SaturationCurve::Type::cubic : dsp::SaturationCurve::Type::tanh,
+                                                   driveDb, asymmetry)
+                  : dsp::SaturationCurve::Character {};
+    };
+    const auto before = measure (wasOn, curve, drive, character);
+
+    // One step each: warmth = asymmetry +0.05 and drive +1 dB on the tanh curve (H2 rises);
+    // grit = drive +2 dB with less asymmetry (H3 rises); clean = drive -2 dB.
+    const double sign = direction == "more" ? 1.0 : -1.0;
+    for (int i = 0; i < steps; ++i)
+    {
+        if (attribute == "warmth")
+        {
+            curve = 0;
+            character += 0.05 * sign;
+            drive += 1.0 * sign;
+        }
+        else if (attribute == "grit")
+        {
+            curve = 0;
+            drive += 2.0 * sign;
+            character -= 0.05 * std::max (0.0, sign);
+        }
+        else
+        {
+            drive -= 2.0 * sign;
+        }
+    }
+    drive = juce::jlimit (dsp::SaturationCurve::minDriveDb, dsp::SaturationCurve::maxDriveDb, drive);
+    character = juce::jlimit (0.0, 1.0, character);
+
+    auto* um = beginEdit ("Adjust: " + attribute + " " + direction);
+    state.setProperty (ids::consoleEnabled, true, um);
+    state.setProperty (ids::consoleDrive, drive, um);
+    state.setProperty (ids::consoleCharacter, character, um);
+    state.setProperty (ids::consoleCurve, curve, um);
+    const auto after = measure (true, curve, drive, character);
+
+    auto describe = [] (const dsp::SaturationCurve::Character& c)
+    {
+        return makeObject ({ { "thd_percent", std::round (c.thdPercent * 1000.0) / 1000.0 },
+                             { "h2_over_h3_db", std::round (c.h2OverH3Db * 10.0) / 10.0 } });
+    };
+    return { true, makeObject ({ { "attribute", attribute }, { "direction", direction }, { "steps", steps },
+                                 { "drive_db", drive }, { "character", character }, { "curve", curve == 1 ? "cubic" : "tanh" },
+                                 { "preset", consolepresets::current (state) },
+                                 { "before", describe (before) }, { "after", describe (after) } }), {} };
 }
 
 RemoteTools::Result RemoteTools::bounce (const juce::var& args)
