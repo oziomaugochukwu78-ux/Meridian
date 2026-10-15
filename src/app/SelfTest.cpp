@@ -616,6 +616,17 @@ void SelfTest::testConsolePresets()
             sung.ok && reverbs == 1 && sungSend.isValid() && send::target (sungSend) == track::id (reverbBus)
                 && juce::exactlyEqual (send::levelDb (sungSend), -14.0),
             juce::String (reverbs) + " Reverb buses");
+    const auto listed = call ("list_presets", "{}");
+    const auto* consoles = listed.data["console"].getArray();
+    bool warmMeasured = false;
+    if (consoles != nullptr)
+        for (const auto& c : *consoles)
+            warmMeasured = warmMeasured || (c["name"].toString() == "Warm Tape" && std::abs ((double) c["measured"]["thd_percent"] - 0.665) < 0.02);
+    expect ("list_presets lists the 4 console presets with their measured character, 8 templates and 6 set_up recipes",
+            listed.ok && consoles != nullptr && consoles->size() == 4 && warmMeasured
+                && listed.data["template"].getArray() != nullptr && listed.data["template"].getArray()->size() == 8
+                && listed.data["recipe"].getArray() != nullptr && listed.data["recipe"].getArray()->size() == 6,
+            juce::JSON::toString (listed.data["console"], true).substring (0, 300));
     expect ("set_up refuses an unknown goal, and the session stays valid",
             ! call ("set_up", R"({"goal":"opera"})").ok && findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
 
@@ -3909,8 +3920,8 @@ void SelfTest::testMcpTools()
     if (toolArray != nullptr)
         for (const auto& tool : *toolArray)
             allDescribed = allDescribed && tool["inputSchema"].isObject() && tool["description"].toString().length() > 20;
-    expect ("tools/list describes all 45 tools, each with a description and a JSON schema",
-            allDescribed && toolArray->size() == 45, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
+    expect ("tools/list describes all 46 tools, each with a description and a JSON schema",
+            allDescribed && toolArray->size() == 46, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
 
     auto r = toolCall ("get_status", "{}");
     expect ("get_status returns the session and tracks", ! failed (r) && callText (r).contains ("\"Vocal\""), callText (r).substring (0, 160));

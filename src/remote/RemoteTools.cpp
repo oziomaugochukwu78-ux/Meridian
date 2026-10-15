@@ -414,6 +414,11 @@ const std::vector<ToolInfo>& toolTable()
                     { "drive_db", "number", "Console drive, -12 to +24 dB (how early saturation starts; below 0 only colours)" },
                     { "character", "number", "Console asymmetry 0-1 (more = more 2nd harmonic warmth)" },
                     { "curve", "string", "Saturation curve", false, { "tanh", "cubic" } } }) },
+        { "list_presets", "List presets",
+          "What can be applied, with what it does: console presets (settings and the measured THD and H2-over-H3 of a "
+          "1 kHz sine at -6 dBFS), session templates (tracks and console preset) and set_up recipes. Use set_master "
+          "{preset}, the Dashboard's templates, or set_up {goal} to apply them.",
+          schema ({ { "kind", "string", "Only this kind (default: all)", false, { "console", "template", "recipe" } } }) },
         { "set_up", "Set up a track for a goal",
           "Creates a track configured for the goal: its input, record-armed where it records, an effect chain with "
           "settings for the job, and a send to a Reverb bus (created once and shared, fully wet). rap vocal: high-pass "
@@ -616,6 +621,7 @@ RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var
     if (name == "set_synth")          return setSynth (args);
     if (name == "adjust")             return adjust (args);
     if (name == "set_up")             return setUp (args);
+    if (name == "list_presets")       return listPresets (args);
     if (name == "set_master")         return setMaster (args);
     if (name == "bounce")             return bounce (args);
     if (name == "undo")               return undoRedo (args, true);
@@ -1902,27 +1908,98 @@ RemoteTools::Result RemoteTools::setMaster (const juce::var& args)
     return getStatus();
 }
 
+namespace
+{
+// set_up's recipes: a track configured for a goal (built-in effects, set in their own units).
+struct Setting { const char* id; double value; };
+struct Effect { const char* plugin; std::vector<Setting> settings; };
+struct Recipe
+{
+    const char* goal;
+    const char* name;
+    int channels;
+    bool bus;
+    bool armed;
+    std::vector<Effect> chain;
+    double reverbDb; ///< above 0 dB: no reverb send
+    const char* description;
+};
+
+Effect highPass (double hz) { return { "Meridian EQ", { { "hpOn", 1.0 }, { "hpFreq", hz } } }; }
+Effect compressor (double ratio, double threshold) { return { "Meridian Compressor", { { "ratio", ratio }, { "threshold", threshold } } }; }
+
+const std::vector<Recipe>& setUpRecipes()
+{
+    constexpr double none = 1.0;
+    const Effect gate { "Meridian Gate", {} }, deEsser { "Meridian De-Esser", {} };
+    static const std::vector<Recipe> recipes {
+        { "rap vocal", "Rap Vocal", 1, false, true, { highPass (80.0), compressor (3.0, -18.0), deEsser }, -18.0,
+          "Mono, armed: high-pass 80 Hz, 3:1 compression, de-esser, reverb send -18 dB" },
+        { "sung vocal", "Vocal", 1, false, true, { highPass (80.0), compressor (2.5, -20.0), deEsser }, -14.0,
+          "Mono, armed: high-pass 80 Hz, 2.5:1 compression, de-esser, reverb send -14 dB" },
+        { "acoustic guitar", "Acoustic Guitar", 1, false, true, { highPass (100.0), compressor (2.0, -20.0) }, -20.0,
+          "Mono, armed: high-pass 100 Hz, 2:1 compression, reverb send -20 dB" },
+        { "podcast voice", "Voice", 1, false, true, { gate, highPass (80.0), compressor (3.0, -20.0) }, none,
+          "Mono, armed: gate, high-pass 80 Hz, 3:1 compression, dry" },
+        { "voice-over", "Voice-Over", 1, false, true, { gate, highPass (80.0), compressor (3.0, -20.0), deEsser }, none,
+          "Mono, armed: gate, high-pass 80 Hz, 3:1 compression, de-esser, dry" },
+        { "drum bus", "Drum Bus", 2, true, false, { compressor (4.0, -20.0) }, none,
+          "A stereo bus with 4:1 glue compression; route or send drums to it" },
+    };
+    return recipes;
+}
+} // namespace
+
+RemoteTools::Result RemoteTools::listPresets (const juce::var& args)
+{
+    const auto kind = args["kind"].toString();
+    auto result = makeObject ({});
+    if (kind.isEmpty() || kind == "console")
+    {
+        juce::Array<juce::var> list;
+        for (const auto& p : consolepresets::all())
+        {
+            const auto measured = p.enabled ? dsp::SaturationCurve::measure (p.curve == 1 ? dsp::SaturationCurve::Type::cubic
+                                                                                          : dsp::SaturationCurve::Type::tanh,
+                                                                             p.driveDb, p.character)
+                                            : dsp::SaturationCurve::Character {};
+            list.add (makeObject ({ { "name", p.name }, { "description", p.description },
+                                    { "settings", p.enabled ? makeObject ({ { "curve", p.curve == 1 ? "cubic" : "tanh" }, { "drive_db", p.driveDb },
+                                                                           { "character", p.character } })
+                                                            : juce::var ("console off") },
+                                    { "measured", makeObject ({ { "thd_percent", std::round (measured.thdPercent * 1000.0) / 1000.0 },
+                                                                { "h2_over_h3_db", std::round (measured.h2OverH3Db * 10.0) / 10.0 } }) } }));
+        }
+        result.getDynamicObject()->setProperty ("console", list);
+    }
+    if (kind.isEmpty() || kind == "template")
+    {
+        juce::Array<juce::var> list;
+        for (const auto& t : builtInTemplates())
+        {
+            juce::Array<juce::var> tracks;
+            for (const auto& spec : t.tracks)
+                tracks.add (spec.name + " (" + spec.kind + ")");
+            list.add (makeObject ({ { "name", t.name }, { "group", t.group }, { "description", t.description }, { "tracks", tracks },
+                                    { "console_preset", t.consolePreset.isNotEmpty() ? t.consolePreset : juce::String ("Warm Tape") } }));
+        }
+        result.getDynamicObject()->setProperty ("template", list);
+    }
+    if (kind.isEmpty() || kind == "recipe")
+    {
+        juce::Array<juce::var> list;
+        for (const auto& r : setUpRecipes())
+            list.add (makeObject ({ { "goal", r.goal }, { "description", r.description } }));
+        result.getDynamicObject()->setProperty ("recipe", list);
+    }
+    return { true, result, {} };
+}
+
 RemoteTools::Result RemoteTools::setUp (const juce::var& args)
 {
-    struct Setting { const char* id; double value; };
-    struct Effect { const char* plugin; std::vector<Setting> settings; };
-    struct Recipe { const char* goal; const char* name; int channels; bool bus; bool armed; std::vector<Effect> chain; double reverbDb; };
-    constexpr double none = 1.0; // above 0 dB: no reverb send
-    const Effect gate { "Meridian Gate", {} };
-    auto highPass = [] (double hz) { return Effect { "Meridian EQ", { { "hpOn", 1.0 }, { "hpFreq", hz } } }; };
-    auto compressor = [] (double ratio, double threshold) { return Effect { "Meridian Compressor", { { "ratio", ratio }, { "threshold", threshold } } }; };
-    const Effect deEsser { "Meridian De-Esser", {} };
-    const std::vector<Recipe> recipes {
-        { "rap vocal",       "Rap Vocal",       1, false, true,  { highPass (80.0), compressor (3.0, -18.0), deEsser }, -18.0 },
-        { "sung vocal",      "Vocal",           1, false, true,  { highPass (80.0), compressor (2.5, -20.0), deEsser }, -14.0 },
-        { "acoustic guitar", "Acoustic Guitar", 1, false, true,  { highPass (100.0), compressor (2.0, -20.0) },          -20.0 },
-        { "podcast voice",   "Voice",           1, false, true,  { gate, highPass (80.0), compressor (3.0, -20.0) },    none },
-        { "voice-over",      "Voice-Over",      1, false, true,  { gate, highPass (80.0), compressor (3.0, -20.0), deEsser }, none },
-        { "drum bus",        "Drum Bus",        2, true,  false, { compressor (4.0, -20.0) },                           none },
-    };
     const auto goal = args["goal"].toString().trim().toLowerCase();
     const Recipe* recipe = nullptr;
-    for (const auto& r : recipes)
+    for (const auto& r : setUpRecipes())
         if (goal == r.goal)
             recipe = &r;
     if (recipe == nullptr)
