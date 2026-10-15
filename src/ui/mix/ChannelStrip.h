@@ -29,13 +29,28 @@ class ChannelStrip final : public juce::Component,
 public:
     static constexpr int stripWidth = 104;
 
+    /** The optional sections (Window > Mix Window: Inserts F-J, Sends A-E). Hiding
+        them leaves the fader more room on short screens. */
+    struct Sections
+    {
+        bool insertsFJ = true;
+        bool sends = true;
+    };
+
+    /** The height a strip needs: its fixed sections plus a full-size fader. */
+    static int minimumHeight (Sections);
+
     ChannelStrip (AppController&, juce::ValueTree track);
     ~ChannelStrip() override;
+
+    void setSections (Sections);
 
     void updateMeter();
 
     /** Re-reads routing labels (bus names can change from other strips). */
     void refreshRouting();
+
+    Sections getSections() const noexcept { return sections; }
 
     // For the self test, which drives the strip's real controls.
     juce::Slider& getFader() noexcept          { return fader; }
@@ -71,6 +86,7 @@ private:
     juce::Label volumeReadout, namePlate;
 
     juce::Rectangle<int> insertsHeaderA, insertsHeaderB, sendsHeader, ioHeader, scaleArea;
+    Sections sections;
     bool draggingFader = false;
 };
 

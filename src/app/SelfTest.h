@@ -130,6 +130,7 @@ private:
     void testPlaylistSelector();
     void testEditModes();
     void testAutomationLanes();
+    void testMixSections();
     void captureScreens();
     void finish();
 

@@ -304,8 +304,10 @@ void ChannelStrip::paint (juce::Graphics& g)
     g.drawVerticalLine (getWidth() - 1, 0.0f, (float) getHeight());
 
     drawSectionHeader (g, insertsHeaderA, "INSERTS A-E");
-    drawSectionHeader (g, insertsHeaderB, "INSERTS F-J");
-    drawSectionHeader (g, sendsHeader, "SENDS A-E");
+    if (sections.insertsFJ)
+        drawSectionHeader (g, insertsHeaderB, "INSERTS F-J");
+    if (sections.sends)
+        drawSectionHeader (g, sendsHeader, "SENDS A-E");
     drawSectionHeader (g, ioHeader, "I/O");
 
     if (track::isAux (trackNode))
@@ -330,6 +332,23 @@ void ChannelStrip::paint (juce::Graphics& g)
     }
 }
 
+int ChannelStrip::minimumHeight (Sections s)
+{
+    // Mirrors resized(): margins, the slot sections, I/O and automation, pan, the
+    // keys, the readout and name plate, and a fader no shorter than in the full strip.
+    constexpr int slotSection = sectionHeader + 5 * slotHeight;
+    constexpr int fixed = 8 + (sectionHeader + 20 + 2 + 18 + 4 + 20 + 4) + (40 + 14 + 4) + (22 + 6) + (22 + 4 + 18 + 4);
+    constexpr int minimumFader = 163;
+    return fixed + slotSection * (1 + (s.insertsFJ ? 1 : 0) + (s.sends ? 1 : 0)) + minimumFader;
+}
+
+void ChannelStrip::setSections (Sections s)
+{
+    sections = s;
+    resized();
+    repaint();
+}
+
 void ChannelStrip::resized()
 {
     auto area = getLocalBounds().reduced (4, 4).withTrimmedRight (1);
@@ -337,13 +356,20 @@ void ChannelStrip::resized()
     insertsHeaderA = area.removeFromTop (sectionHeader);
     for (int i = 0; i < 5; ++i)
         insertSlots[i]->setBounds (area.removeFromTop (slotHeight));
-    insertsHeaderB = area.removeFromTop (sectionHeader);
-    for (int i = 5; i < 10; ++i)
-        insertSlots[i]->setBounds (area.removeFromTop (slotHeight));
 
-    sendsHeader = area.removeFromTop (sectionHeader);
+    insertsHeaderB = sections.insertsFJ ? area.removeFromTop (sectionHeader) : juce::Rectangle<int>();
+    for (int i = 5; i < 10; ++i)
+    {
+        insertSlots[i]->setVisible (sections.insertsFJ);
+        insertSlots[i]->setBounds (sections.insertsFJ ? area.removeFromTop (slotHeight) : juce::Rectangle<int>());
+    }
+
+    sendsHeader = sections.sends ? area.removeFromTop (sectionHeader) : juce::Rectangle<int>();
     for (auto* s : sendSlots)
-        s->setBounds (area.removeFromTop (slotHeight));
+    {
+        s->setVisible (sections.sends);
+        s->setBounds (sections.sends ? area.removeFromTop (slotHeight) : juce::Rectangle<int>());
+    }
 
     ioHeader = area.removeFromTop (sectionHeader);
     inputSelector.setBounds (area.removeFromTop (20));

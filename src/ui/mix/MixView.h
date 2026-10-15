@@ -23,6 +23,10 @@ public:
 
     ChannelStrip* getStrip (int index) const noexcept { return strips[index]; }
 
+    /** Which optional strip sections show (remembered in the app settings). */
+    ChannelStrip::Sections getSections() const noexcept { return sections; }
+    void setSections (ChannelStrip::Sections);
+
     void paint (juce::Graphics&) override;
     void resized() override;
     void visibilityChanged() override;
@@ -45,6 +49,7 @@ private:
     MasterStrip master;
     juce::Label emptyHint;
     juce::ValueTree tracksNode;
+    ChannelStrip::Sections sections;
     int refreshCounter = 0;
 };
 

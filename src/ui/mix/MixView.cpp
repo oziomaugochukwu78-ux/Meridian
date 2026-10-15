@@ -17,8 +17,23 @@ MixView::MixView (AppController& a) : app (a), master (a)
     emptyHint.setColour (juce::Label::textColourId, theme::textDim);
     addChildComponent (emptyHint);
 
+    auto& settings = app.getSettings();
+    sections.insertsFJ = settings.getBoolValue ("mixShowInsertsFJ", true);
+    sections.sends = settings.getBoolValue ("mixShowSends", true);
+
     app.addChangeListener (this);
     bindSession();
+}
+
+void MixView::setSections (ChannelStrip::Sections s)
+{
+    sections = s;
+    auto& settings = app.getSettings();
+    settings.setValue ("mixShowInsertsFJ", s.insertsFJ);
+    settings.setValue ("mixShowSends", s.sends);
+    for (auto* strip : strips)
+        strip->setSections (s);
+    layoutStrips();
 }
 
 MixView::~MixView()
@@ -46,7 +61,11 @@ void MixView::rebuildStrips()
 {
     strips.clear();
     for (const auto& t : tracksNode)
-        stripContainer.addAndMakeVisible (strips.add (new ChannelStrip (app, t)));
+    {
+        auto* strip = strips.add (new ChannelStrip (app, t));
+        strip->setSections (sections);
+        stripContainer.addAndMakeVisible (strip);
+    }
 
     emptyHint.setVisible (strips.isEmpty() && app.getSession() != nullptr);
     layoutStrips();
@@ -54,7 +73,7 @@ void MixView::rebuildStrips()
 
 void MixView::layoutStrips()
 {
-    const int height = juce::jmax (680, viewport.getMaximumVisibleHeight());
+    const int height = juce::jmax (ChannelStrip::minimumHeight (sections), viewport.getMaximumVisibleHeight());
     stripContainer.setSize (juce::jmax (1, strips.size() * ChannelStrip::stripWidth), height);
     for (int i = 0; i < strips.size(); ++i)
         strips[i]->setBounds (i * ChannelStrip::stripWidth, 0, ChannelStrip::stripWidth, height);

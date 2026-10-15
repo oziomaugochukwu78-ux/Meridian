@@ -3769,6 +3769,7 @@ void SelfTest::timerCallback()
                     testPlaylistSelector();
                     testEditModes();
                     testAutomationLanes();
+                    testMixSections();
                     buildShowcaseSession(); // for the screenshots
                     phase = 4;
                 }
@@ -3793,6 +3794,7 @@ void SelfTest::timerCallback()
                 testPlaylistSelector();
                 testEditModes();
                 testAutomationLanes();
+                testMixSections();
                 buildShowcaseSession();
                 ticks = 0;
                 phase = 4;
@@ -4676,6 +4678,54 @@ void SelfTest::testAutomationLanes()
     expect ("removing the send returns the view to volume", header->getViewButtonText() == "volume", header->getViewButtonText());
 
     view.setTool (EditTool::smart);
+    clearTracks();
+}
+
+//==============================================================================
+// Mix window sections: hiding Inserts F-J and Sends A-E gives the fader the room.
+
+void SelfTest::testMixSections()
+{
+    beginGroup ("Mix window: Inserts F-J and Sends A-E shown or hidden");
+    auto& mix = main.getMixView();
+    auto& commands = main.getCommandManager();
+    clearTracks();
+    addToneTrack ("Strip", 1, media.getChildFile ("tone1k_mono.wav"), clipStart);
+    main.showWindow (WindowKind::mix);
+
+    const auto saved = mix.getSections(); // the user's setting: restored at the end
+    mix.setSections ({ true, true });
+    auto* strip = mix.getStrip (0);
+    if (strip == nullptr)
+    {
+        expect ("the track has a channel strip", false, {});
+        return;
+    }
+    const int fullStrip = strip->getHeight(), fullFader = strip->getFader().getHeight();
+
+    commands.invokeDirectly (commands::mixShowInsertsFJ, false);
+    commands.invokeDirectly (commands::mixShowSends, false);
+    const int compactStrip = strip->getHeight(), compactFader = strip->getFader().getHeight();
+    expect ("Window > Mix Window: Inserts F-J and Sends A-E turn off, in the view and in every strip",
+            ! mix.getSections().insertsFJ && ! mix.getSections().sends && ! strip->getSections().insertsFJ && ! strip->getSections().sends,
+            {});
+    expect ("a full strip needs 680 px and a compact one 196 px less (two sections of 98 px)",
+            ChannelStrip::minimumHeight ({ true, true }) == 680 && ChannelStrip::minimumHeight ({ false, false }) == 484,
+            juce::String (ChannelStrip::minimumHeight ({ false, false })) + " px");
+    expect ("the fader gets exactly the room the two sections gave up",
+            compactFader - fullFader == (compactStrip - fullStrip) + 196,
+            "fader " + juce::String (fullFader) + " -> " + juce::String (compactFader) + " px, strip "
+                + juce::String (fullStrip) + " -> " + juce::String (compactStrip) + " px");
+    snapshot (mix, "mix_compact.png");
+
+    commands.invokeDirectly (commands::mixShowInsertsFJ, false);
+    commands.invokeDirectly (commands::mixShowSends, false);
+    expect ("the same commands show them again, with the fader back to its full-strip size",
+            mix.getSections().insertsFJ && mix.getSections().sends && strip->getFader().getHeight() == fullFader,
+            juce::String (strip->getFader().getHeight()) + " px");
+
+    mix.setSections (saved);
+    main.showWindow (WindowKind::edit);
     clearTracks();
 }
 

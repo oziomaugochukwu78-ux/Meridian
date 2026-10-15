@@ -64,6 +64,8 @@ enum : juce::CommandID
     toggleWindow = 0x16000,
     showEditWindow,
     showMixWindow,
+    mixShowInsertsFJ,
+    mixShowSends,
 };
 
 } // namespace meridian::commands
