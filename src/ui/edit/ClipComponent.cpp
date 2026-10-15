@@ -2,7 +2,9 @@
 
 #include "media/TimeStretchEngine.h"
 #include "model/MidiModel.h"
+#include "model/Shuffle.h"
 #include "ui/Theme.h"
+#include "ui/TimeFormat.h"
 
 namespace meridian
 {
@@ -361,6 +363,12 @@ void ClipComponent::mouseDown (const juce::MouseEvent& e)
     originalFadeIn = clip::fadeIn (clipNode);
     originalFadeOut = clip::fadeOut (clipNode);
 
+    laterClips.clear();
+    if (editState.mode == EditMode::shuffle && (dragAction == Action::trimStart || dragAction == Action::trimEnd))
+        for (const auto& c : clipNode.getParent())
+            if (c != clipNode && clip::start (c) >= originalStart + originalLength)
+                laterClips.emplace_back (c, clip::start (c));
+
     editState.selectClip (clipNode);
 
     if (auto* um = app.getUndoManager())
@@ -385,19 +393,37 @@ void ClipComponent::mouseDrag (const juce::MouseEvent& e)
     const auto delta = (juce::int64) std::llround (editState.pixelsToSamples (e.getScreenX() - downScreenX));
     const auto originalEnd = originalStart + originalLength;
     const auto sourceLength = clip::sourceLength (clipNode);
+    const bool shuffling = editState.mode == EditMode::shuffle;
+
+    // Shuffle: later clips follow this clip's end, from where they were when the drag began.
+    auto shiftLaterClips = [this, um] (juce::int64 by)
+    {
+        for (auto& [c, start] : laterClips)
+            c.setProperty (ids::start, std::max<juce::int64> (0, start + by), um);
+    };
 
     switch (dragAction)
     {
         case Action::move:
-            clipNode.setProperty (ids::start, std::max<juce::int64> (0, editState.snap (originalStart + delta)), um);
+            if (editState.mode != EditMode::spot) // Spot asks for a time on mouse-up instead
+                clipNode.setProperty (ids::start, std::max<juce::int64> (0, editState.snap (originalStart + delta)), um);
             break;
 
         case Action::trimStart:
         {
             const auto earliest = std::max<juce::int64> (0, originalStart - originalOffset); // cannot reveal before the file starts
             const auto newStart = juce::jlimit (earliest, originalEnd - minimumClipLength, editState.snap (originalStart + delta));
+            const auto trimmed = newStart - originalStart;
+            if (shuffling)
+            {
+                // The clip's start stays put; its audio and everything after it slide instead.
+                clipNode.setProperty (ids::offset, originalOffset + trimmed, um);
+                clipNode.setProperty (ids::length, originalLength - trimmed, um);
+                shiftLaterClips (-trimmed);
+                break;
+            }
             clipNode.setProperty (ids::start, newStart, um);
-            clipNode.setProperty (ids::offset, originalOffset + (newStart - originalStart), um);
+            clipNode.setProperty (ids::offset, originalOffset + trimmed, um);
             clipNode.setProperty (ids::length, originalEnd - newStart, um);
             break;
         }
@@ -407,6 +433,8 @@ void ClipComponent::mouseDrag (const juce::MouseEvent& e)
             const auto latest = sourceLength > 0 ? originalStart + (sourceLength - originalOffset) : originalEnd + (1LL << 40);
             const auto newEnd = juce::jlimit (originalStart + minimumClipLength, latest, editState.snap (originalEnd + delta));
             clipNode.setProperty (ids::length, newEnd - originalStart, um);
+            if (shuffling)
+                shiftLaterClips (newEnd - originalEnd);
             break;
         }
 
@@ -460,6 +488,35 @@ void ClipComponent::mouseUp (const juce::MouseEvent& e)
         return;
     }
 
+    if (action == Action::move && editState.mode == EditMode::spot)
+    {
+        showSpotDialog();
+        return;
+    }
+
+    auto* um = app.getUndoManager();
+    const bool shuffling = editState.mode == EditMode::shuffle;
+
+    if (shuffling && um != nullptr && (action == Action::trimStart || action == Action::trimEnd))
+    {
+        // The track's automation follows the audio, once, by the drag's final amount.
+        auto track = clip::owningTrack (clipNode);
+        if (action == Action::trimEnd)
+        {
+            shuffle::shiftAutomation (track, originalStart + originalLength, clip::end (clipNode) - (originalStart + originalLength), um);
+        }
+        else if (const auto trimmed = clip::offset (clipNode) - originalOffset; trimmed > 0)
+        {
+            shuffle::shiftAutomation (track, originalStart + trimmed, -trimmed, um);   // [start, start + trimmed) is gone
+        }
+        else if (trimmed < 0)
+        {
+            shuffle::shiftAutomation (track, originalStart, -trimmed, um);             // audio revealed at the start
+        }
+        laterClips.clear();
+        return;
+    }
+
     if (action == Action::move && trackAtScreenPosition)
     {
         // Dropped on another track: move the clip there. Deferred, because
@@ -469,15 +526,54 @@ void ClipComponent::mouseUp (const juce::MouseEvent& e)
         const bool fits = target.isValid() && (clip::isMidi (clipNode) ? track::isInstrument (target) : track::isAudio (target));
         if (fits && target != source)
         {
-            juce::MessageManager::callAsync ([clipCopy = clipNode, source, target, um = app.getUndoManager()]() mutable
+            juce::MessageManager::callAsync ([clipCopy = clipNode, source, target, um]() mutable
             {
                 if (um == nullptr || ! clipCopy.getParent().isValid())
                     return;
                 track::clips (source).removeChild (clipCopy, um);
                 track::clips (target).appendChild (clipCopy, um);
             });
+            return;
         }
     }
+
+    if (action == Action::move && shuffling && um != nullptr && clip::start (clipNode) != originalStart)
+    {
+        // Shuffle: the drag only showed where; now take the clip out of the
+        // sequence and drop it in at the nearest clip boundary.
+        const auto dropped = clip::start (clipNode);
+        clipNode.setProperty (ids::start, originalStart, um);
+        shuffle::moveClip (clipNode, dropped, um);
+    }
+}
+
+bool ClipComponent::spotTo (const juce::String& timeText)
+{
+    const auto start = timeformat::parseTime (timeText, editState.sampleRate);
+    auto* um = app.getUndoManager();
+    if (! start.has_value() || um == nullptr)
+        return false;
+    um->beginNewTransaction ("Spot Clip");
+    clipNode.setProperty (ids::start, *start, um);
+    return true;
+}
+
+void ClipComponent::showSpotDialog()
+{
+    auto* window = new juce::AlertWindow ("Spot Clip", "Start time: m:ss.mmm, seconds, or samples (for example 48000 smp)",
+                                          juce::MessageBoxIconType::NoIcon);
+    window->addTextEditor ("start", timeformat::minSecs (clip::start (clipNode), editState.sampleRate));
+    window->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    window->enterModalState (true, juce::ModalCallbackFunction::create (
+        [safe = juce::Component::SafePointer<ClipComponent> (this), window] (int result)
+        {
+            const auto text = window->getTextEditorContents ("start").trim();
+            if (safe == nullptr || result != 1)
+                return;
+            if (! safe->spotTo (text) && safe->app.showProblem)
+                safe->app.showProblem ("Spot Clip", "\"" + text + "\" is not a time. Type m:ss.mmm, seconds, or samples (48000 smp).");
+        }), true);
 }
 
 void ClipComponent::mouseDoubleClick (const juce::MouseEvent& e)

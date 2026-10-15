@@ -10,9 +10,10 @@ struct ModeInfo { const char* name; EditMode mode; bool available; const char* t
 struct ToolInfo { const char* name; EditTool tool; bool available; const char* tooltip; };
 
 const ModeInfo modes[] = {
-    { "SHUFFLE", EditMode::shuffle, false, "Shuffle mode (planned): edits close up gaps" },
+    { "SHUFFLE", EditMode::shuffle, true,  "Shuffle mode: clips stay butted together. Deleting closes the gap, trimming "
+                                           "moves later clips, and a moved clip drops in at the nearest clip boundary (F1)" },
     { "SLIP",    EditMode::slip,    true,  "Slip mode: clips move freely (F2)" },
-    { "SPOT",    EditMode::spot,    false, "Spot mode (planned): place clips by typed time" },
+    { "SPOT",    EditMode::spot,    true,  "Spot mode: click a clip to type its exact start time (F3)" },
     { "GRID",    EditMode::grid,    true,  "Grid mode: edits snap to the beat grid (F4)" },
 };
 

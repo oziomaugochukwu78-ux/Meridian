@@ -1,5 +1,6 @@
 #include "EditView.h"
 #include "model/MidiModel.h"
+#include "model/Shuffle.h"
 
 #include "ui/Theme.h"
 #include "ui/dialogs/TimeStretchComponent.h"
@@ -323,12 +324,17 @@ void EditView::deleteSelection()
 
     auto& um = session->getUndoManager();
 
+    const bool shuffling = state.mode == EditMode::shuffle;
+
     if (state.selectedClip.isValid() && state.selectedClip.getParent().isValid())
     {
         um.beginNewTransaction ("Delete Clip");
         auto c = state.selectedClip;
         state.selectClip ({});
-        c.getParent().removeChild (c, &um);
+        if (shuffling)
+            shuffle::deleteClip (c, &um);
+        else
+            c.getParent().removeChild (c, &um);
         return;
     }
 
@@ -346,6 +352,8 @@ void EditView::deleteSelection()
                 doomed.add (c);
         for (auto& c : doomed)
             track::clips (t).removeChild (c, &um);
+        if (shuffling)
+            shuffle::closeRange (t, state.selectionStart, state.selectionEnd, &um);
     }
 }
 

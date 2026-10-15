@@ -35,6 +35,8 @@ enum : juce::CommandID
     grabberTool,
     smartTool,
     pencilTool,
+    shuffleMode,
+    spotMode,
 
     // Track
     newTracks = 0x13000,

@@ -128,6 +128,7 @@ private:
     void testUserInterface();
     void testPianoRoll();
     void testPlaylistSelector();
+    void testEditModes();
     void captureScreens();
     void finish();
 

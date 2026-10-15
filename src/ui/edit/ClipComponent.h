@@ -7,6 +7,8 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include <functional>
+#include <utility>
+#include <vector>
 
 namespace meridian
 {
@@ -28,7 +30,12 @@ namespace meridian
     CLIP GAIN (audio clips, any of those tools): the readout at the bottom left
     is a handle. Drag it up or down (0.25 dB per pixel; Shift: 0.05 dB) to set
     the clip's gain, -60 to +24 dB; double-click it for 0 dB. The waveform is
-    drawn at the clip's gain, and a line marks it (0 dB in the middle). */
+    drawn at the clip's gain, and a line marks it (0 dB in the middle).
+
+    EDIT MODES: in Shuffle, trimming moves every later clip on the track by the
+    same amount (automation follows), and a moved clip drops in at the nearest
+    clip boundary, closing the gap it left. In Spot, clicking a clip with the
+    Grabber asks for its exact start time instead of dragging. */
 class ClipComponent final : public juce::Component,
                             private juce::ValueTree::Listener,
                             private juce::ChangeListener
@@ -58,6 +65,11 @@ public:
         or when the clip is too small to show it). Public for the self test. */
     juce::Rectangle<float> gainHandleBounds() const;
 
+    /** Spot: moves the clip to a typed start time (m:ss.mmm, seconds, or samples
+        as "48000 smp"), as one undo step. False if the text is not a time.
+        Public for the self test, which cannot type into the dialog. */
+    bool spotTo (const juce::String& timeText);
+
     static constexpr double gainDbPerPixel = 0.25, fineGainDbPerPixel = 0.05;
     static constexpr double minGainDb = -60.0, maxGainDb = 24.0;
 
@@ -68,6 +80,7 @@ private:
     static juce::MouseCursor cursorFor (Action);
     void forwardToLane (const juce::MouseEvent&, int phase);
     void showMenu();
+    void showSpotDialog();
     void loadThumbnail();
 
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
@@ -90,6 +103,7 @@ private:
     int downScreenX = 0, downScreenY = 0;
     juce::int64 originalStart = 0, originalLength = 0, originalOffset = 0, originalFadeIn = 0, originalFadeOut = 0;
     double originalGainDb = 0.0;
+    std::vector<std::pair<juce::ValueTree, juce::int64>> laterClips; // Shuffle trims: later clips and their starts
 };
 
 } // namespace meridian

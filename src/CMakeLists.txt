@@ -56,6 +56,8 @@ target_sources(Meridian PRIVATE
     model/SessionRepair.h
     model/SessionTemplates.cpp
     model/SessionTemplates.h
+    model/Shuffle.cpp
+    model/Shuffle.h
 
     media/AudioImporter.cpp
     media/AudioImporter.h

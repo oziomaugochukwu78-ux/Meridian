@@ -103,7 +103,7 @@ What a professional mixing and tracking room needs.
 - **Advanced editing:**
   - real-time Elastic Audio with warp markers
   - groove quantise and transient detection (beat slicing)
-  - Shuffle and Spot edit modes
+  - done: Shuffle and Spot edit modes
 - **Plug-in formats:** CLAP hosting through a format adapter; ARA2 for pitch and timing editors.
 - **Control surfaces:** MIDI learn; Mackie Control / HUI protocol support.
 - **Session interchange:** importing tracks, routing and plug-in settings from other Meridian sessions.

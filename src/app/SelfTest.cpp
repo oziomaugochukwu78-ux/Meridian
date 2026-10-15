@@ -3767,6 +3767,7 @@ void SelfTest::timerCallback()
                     testUserInterface();
                     testPianoRoll();
                     testPlaylistSelector();
+                    testEditModes();
                     buildShowcaseSession(); // for the screenshots
                     phase = 4;
                 }
@@ -3789,6 +3790,7 @@ void SelfTest::timerCallback()
                 testUserInterface();
                 testPianoRoll();
                 testPlaylistSelector();
+                testEditModes();
                 buildShowcaseSession();
                 ticks = 0;
                 phase = 4;
@@ -4440,6 +4442,144 @@ void SelfTest::testPlaylistSelector()
             auxHeader != nullptr && auxHeader->getPlaylistButtonText().isEmpty() && auxHeader->buildPlaylistMenu().getNumItems() == 0,
             {});
     view.clearSelection();
+    clearTracks();
+}
+
+//==============================================================================
+// Shuffle and Spot edit modes, with the simulated mouse. Three clips butted
+// together, A [0.5 s, 1 s), B [1 s, 1.5 s), C [1.5 s, 2 s), and a volume
+// breakpoint inside C at 1.6 s, so every check is an exact sample position.
+
+void SelfTest::testEditModes()
+{
+    beginGroup ("Edit window: Shuffle and Spot modes");
+    auto* session = app.getSession();
+    auto& um = session->getUndoManager();
+    auto& editView = main.getEditView();
+    auto& view = editView.getEditState();
+    auto& commands = main.getCommandManager();
+    main.showWindow (WindowKind::edit);
+
+    clearTracks();
+    const auto tone = media.getChildFile ("tone1k_mono.wav");
+    auto t = session->addTrack ("Shuffle", 1, nullptr);
+    auto a = session->addClip (t, tone, 24000, 0, 24000, 96000, "A", nullptr);
+    auto b = session->addClip (t, tone, 48000, 24000, 24000, 96000, "B", nullptr);
+    auto c = session->addClip (t, tone, 72000, 48000, 24000, 96000, "C", nullptr);
+    auto lane = automation::getOrCreateVolumeLane (t, nullptr);
+    automation::addPoint (lane, 76800, -6.0, nullptr);
+    um.clearUndoHistory();
+    view.setView (0, 400.0); // 400 samples per pixel: a 50 px drag is exactly 20000 samples
+    view.setTool (EditTool::smart);
+
+    auto starts = [&] { return juce::String (clip::start (a)) + " / " + juce::String (clip::start (b)) + " / " + juce::String (clip::start (c)); };
+    auto pointTime = [&] { const auto p = automation::points (lane); return p.size() == 1 ? p[0].time : (juce::int64) -1; };
+    auto viewOf = [&editView] (const juce::ValueTree& clipNode) -> ClipComponent*
+    {
+        if (auto* trackLane = editView.getLane (0))
+            for (int i = 0; auto* cc = trackLane->getClipComponent (i); ++i)
+                if (cc->getClip() == clipNode)
+                    return cc;
+        return nullptr;
+    };
+
+    commands.invokeDirectly (commands::shuffleMode, false);
+    expect ("F1 selects Shuffle mode", view.mode == EditMode::shuffle, {});
+
+    // Delete a clip: the gap closes, automation included.
+    view.selectClip (b);
+    commands.invokeDirectly (commands::deleteSelection, false);
+    expect ("Shuffle: deleting B closes the gap (C moves left 24000 samples, and so does its automation)",
+            track::clips (t).getNumChildren() == 2 && clip::start (a) == 24000 && clip::start (c) == 48000 && pointTime() == 52800,
+            "A " + juce::String (clip::start (a)) + ", C " + juce::String (clip::start (c)) + ", point " + juce::String (pointTime()));
+    // Measured on the clean bus: the console the demo session turned on would ring briefly after C stops.
+    setConsole (false);
+    const auto closed = readAudio (bounce ("shuffle_delete", 0, 120000).file);
+    setConsole (true, 6.0, 0.35);
+    const auto inGap = dsp::measureLevels (closed.getReadPointer (0, 48000), 24000);
+    const auto afterEnd = dsp::measureLevels (closed.getReadPointer (0, 72000), 24000);
+    // The tone at -6 dB (the breakpoint) through the centre pan law has an RMS of 0.125.
+    expect ("and the audio really moved: C now plays where B was, and nothing plays where C was",
+            inGap.rms > 0.1 && db (afterEnd.peak) < silentDb, "RMS " + fmt (inGap.rms) + ", then peak " + fmt (db (afterEnd.peak)) + " dB");
+    um.undo();
+    expect ("undo puts B back and C and its automation where they were",
+            track::clips (t).getNumChildren() == 3 && clip::start (c) == 72000 && pointTime() == 76800, starts());
+
+    // Clear a time range: everything after it moves left by its length.
+    view.setTimeSelection (36000, 48000, { track::id (t) });
+    commands.invokeDirectly (commands::deleteSelection, false);
+    expect ("Shuffle: clearing 12000 samples of A moves B, C and the automation left by 12000",
+            clip::length (a) == 12000 && clip::start (b) == 36000 && clip::start (c) == 60000 && pointTime() == 64800,
+            starts() + ", point " + juce::String (pointTime()));
+    um.undo();
+    view.clearSelection();
+
+    // Trim A's end 50 px shorter: B and C follow.
+    if (auto* av = viewOf (a))
+    {
+        const float h = (float) av->getHeight();
+        const auto endX = (float) (view.sampleToX (clip::end (a)) - av->getX());
+        drag (*av, { endX - 2.0f, h * 0.6f }, { -50.0f, 0.0f });
+    }
+    expect ("Shuffle: trimming A's end 20000 samples shorter pulls B, C and the automation 20000 earlier",
+            clip::length (a) == 4000 && clip::start (b) == 28000 && clip::start (c) == 52000 && pointTime() == 56800,
+            starts() + ", point " + juce::String (pointTime()));
+    um.undo();
+    expect ("undo restores every clip and the automation in one step",
+            clip::length (a) == 24000 && clip::start (b) == 48000 && clip::start (c) == 72000 && pointTime() == 76800, starts());
+
+    // Trim A's start 25 px later: A keeps its place, its audio and everything after slide left.
+    if (auto* av = viewOf (a))
+    {
+        const float h = (float) av->getHeight();
+        const auto startX = (float) (view.sampleToX (clip::start (a)) - av->getX());
+        drag (*av, { startX + 2.0f, h * 0.6f }, { 25.0f, 0.0f });
+    }
+    expect ("Shuffle: trimming A's start keeps A at 0.5 s and slides its audio, B, C and the automation 10000 earlier",
+            clip::start (a) == 24000 && clip::offset (a) == 10000 && clip::length (a) == 14000
+                && clip::start (b) == 38000 && clip::start (c) == 62000 && pointTime() == 66800,
+            starts() + ", A offset " + juce::String (clip::offset (a)) + ", point " + juce::String (pointTime()));
+    um.undo();
+
+    // Drag C to the front: it drops in at A's start and A and B make room.
+    if (auto* cv = viewOf (c))
+    {
+        const float h = (float) cv->getHeight();
+        const auto startX = (float) (view.sampleToX (clip::start (c)) - cv->getX());
+        drag (*cv, { startX + 30.0f, h * 0.75f }, { -120.0f, 0.0f });
+    }
+    expect ("Shuffle: dragging C to the front reorders the clips to C, A, B, still butted together",
+            clip::start (c) == 24000 && clip::start (a) == 48000 && clip::start (b) == 72000, starts());
+    um.undo();
+    expect ("undo restores the order A, B, C", clip::start (a) == 24000 && clip::start (b) == 48000 && clip::start (c) == 72000, starts());
+
+    // Spot: a click asks for a time instead of moving the clip.
+    commands.invokeDirectly (commands::spotMode, false);
+    if (auto* cv = viewOf (c))
+    {
+        const float h = (float) cv->getHeight();
+        const auto startX = (float) (view.sampleToX (clip::start (c)) - cv->getX());
+        drag (*cv, { startX + 30.0f, h * 0.75f }, { -40.0f, 0.0f });
+    }
+    auto* modal = juce::ModalComponentManager::getInstance()->getModalComponent (0);
+    expect ("F3 selects Spot mode; dragging a clip opens the Spot dialog and does not move it",
+            view.mode == EditMode::spot && modal != nullptr && modal->getName() == "Spot Clip" && clip::start (c) == 72000,
+            (modal != nullptr ? modal->getName() : juce::String ("no dialog")) + ", C at " + juce::String (clip::start (c)));
+    juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
+
+    bool typed = false, samples = false, refused = false;
+    if (auto* cv = viewOf (c))
+    {
+        typed = cv->spotTo ("0:02.000") && clip::start (c) == 96000;
+        samples = cv->spotTo ("12345 smp") && clip::start (c) == 12345;
+        refused = ! cv->spotTo ("1:75") && ! cv->spotTo ("abc") && ! cv->spotTo ("") && clip::start (c) == 12345;
+    }
+    expect ("Spot: \"0:02.000\" puts C at exactly 2 s (96000 samples), and \"12345 smp\" at that sample", typed && samples, starts());
+    expect ("Spot refuses text that is not a time (\"1:75\", \"abc\", empty) and leaves the clip alone", refused, starts());
+    um.undo();
+    expect ("each spot is one undo step", clip::start (c) == 96000, starts());
+
+    commands.invokeDirectly (commands::slipMode, false);
     clearTracks();
 }
 

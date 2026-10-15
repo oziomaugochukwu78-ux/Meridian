@@ -315,7 +315,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& c)
     using namespace commands;
     c.addArray ({ dashboard, openSession, saveSession, saveSessionAs, importAudio, bounceMix,
                   undo, redo, separateClip, deleteSelection, elasticAudio, zoomIn, zoomOut,
-                  slipMode, gridMode, trimTool, selectorTool, grabberTool, smartTool, pencilTool,
+                  shuffleMode, slipMode, spotMode, gridMode, trimTool, selectorTool, grabberTool, smartTool, pencilTool,
                   newTracks, deleteTrack,
                   playStop, record, returnToZero, loopPlayback, punchRecording, clickToggle, countInOff, countIn1Bar, countIn2Bars, addMarker,
                   playbackEngine, pluginManager, toggleRemoteControl, remoteControlInfo,
@@ -379,8 +379,12 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
         case zoomOut:          info.setInfo ("Zoom Out", "Zoom out horizontally", "Edit", 0);
                                info.addDefaultKeypress ('[', cmd); break;
 
+        case shuffleMode:      info.setInfo ("Shuffle Mode", "Edits close up gaps: clips stay butted together", "Tools", 0);
+                               info.addDefaultKeypress (K::F1Key, 0); info.setTicked (edit.mode == EditMode::shuffle); break;
         case slipMode:         info.setInfo ("Slip Mode", "Clips move freely", "Tools", 0);
                                info.addDefaultKeypress (K::F2Key, 0); info.setTicked (edit.mode == EditMode::slip); break;
+        case spotMode:         info.setInfo ("Spot Mode", "Clicking a clip asks for its exact start time", "Tools", 0);
+                               info.addDefaultKeypress (K::F3Key, 0); info.setTicked (edit.mode == EditMode::spot); break;
         case gridMode:         info.setInfo ("Grid Mode", "Edits snap to the grid", "Tools", 0);
                                info.addDefaultKeypress (K::F4Key, 0); info.setTicked (edit.mode == EditMode::grid); break;
         case trimTool:         info.setInfo ("Trim Tool", "", "Tools", 0);
@@ -478,7 +482,9 @@ bool MainComponent::perform (const InvocationInfo& info)
         case zoomIn:          editView.zoomBy (0.5); break;
         case zoomOut:         editView.zoomBy (2.0); break;
 
+        case shuffleMode:     edit.setMode (EditMode::shuffle); break;
         case slipMode:        edit.setMode (EditMode::slip); break;
+        case spotMode:        edit.setMode (EditMode::spot); break;
         case gridMode:        edit.setMode (EditMode::grid); break;
         case trimTool:        edit.setTool (EditTool::trim); break;
         case selectorTool:    edit.setTool (EditTool::selector); break;
@@ -607,7 +613,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int index, const juce::String&)
             add (zoomIn); add (zoomOut);
             menu.addSeparator();
             juce::PopupMenu tools;
-            for (const auto id : { slipMode, gridMode })
+            for (const auto id : { shuffleMode, slipMode, spotMode, gridMode })
                 tools.addCommandItem (&commandManager, id);
             tools.addSeparator();
             for (const auto id : { trimTool, selectorTool, grabberTool, smartTool, pencilTool })
