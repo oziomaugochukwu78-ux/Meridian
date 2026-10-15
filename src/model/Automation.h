@@ -70,7 +70,8 @@ void clear (juce::ValueTree track, juce::UndoManager*);
 double valueAt (const std::vector<Point>&, juce::int64 time);
 
 /** The lane an Edit-window track shows: `wanted` if the track has that control
-    ("volume", "pan", "mute", or "send:<slot>" while the send exists), else "volume". */
+    ("volume", "pan", "mute", "send:<slot>" while the send exists, or
+    "plugin:<slot>:<i>" while that insert slot holds a plug-in), else "volume". */
 juce::String shownParameter (const juce::ValueTree& track, const juce::String& wanted);
 
 /** Short lane name for the track header: "volume", "pan", "mute", "send A". */

@@ -169,6 +169,10 @@ juce::String shownParameter (const juce::ValueTree& track, const juce::String& w
         return wanted;
     if (const int slot = sendTarget (wanted); slot >= 0 && routing::findSend (track, slot).isValid())
         return wanted;
+    if (const auto target = pluginTarget (wanted); target.first >= 0)
+        for (const auto& insert : track::inserts (track))
+            if ((int) insert[ids::slot] == target.first)
+                return wanted;
     return "volume";
 }
 

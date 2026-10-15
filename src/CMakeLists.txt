@@ -95,6 +95,7 @@ target_sources(Meridian PRIVATE
     ui/dialogs/PlaybackEngineComponent.h
     ui/dialogs/TimeStretchComponent.cpp
     ui/dialogs/TimeStretchComponent.h
+    ui/edit/AutomationView.h
     ui/edit/ClipComponent.cpp
     ui/edit/ClipComponent.h
     ui/edit/EditState.h

@@ -4636,7 +4636,7 @@ void SelfTest::testAutomationLanes()
     auto itemIds = [] (const juce::PopupMenu& menu)
     {
         juce::Array<int> found;
-        for (juce::PopupMenu::MenuItemIterator it (menu); it.next();)
+        for (juce::PopupMenu::MenuItemIterator it (menu, true); it.next();)
             if (it.getItem().itemID != 0)
                 found.add (it.getItem().itemID);
         return found;
@@ -4694,7 +4694,33 @@ void SelfTest::testAutomationLanes()
             sendPoints.empty() ? juce::String ("no point") : fmt (sendPoints[0].value) + " dB");
     snapshot (*lane, "automation_lane_send.png");
 
+    // A plug-in control: its normalised range, 1 at the top.
+    juce::PluginDescription eq;
+    for (const auto& d : BuiltinEffectFormat::getDescriptions())
+        if (d.name == "Meridian EQ")
+            eq = d;
+    juce::String error;
+    app.getBridge().insertPlugin (t, 0, eq, error);
+    int bandGain = -1;
+    if (const auto insert = app.getBridge().getInsert (track::id (t), 0); insert != nullptr && insert->plugin != nullptr)
+        for (int i = 0; i < insert->plugin->getParameters().size(); ++i)
+            if (insert->plugin->getParameters()[i]->getName (64) == "Band 2 Gain")
+                bandGain = i;
+    expect ("an inserted plug-in's controls are offered in a submenu",
+            bandGain >= 0 && itemIds (header->buildViewMenu()).contains (TrackHeader::pluginItemBase + bandGain), error);
+    header->runViewItem (TrackHeader::pluginItemBase + juce::jmax (0, bandGain));
+    click (350.0f, 4.0f);
+    click (450.0f, h - 4.0f);
+    const auto controlPoints = pointsOf (automation::pluginParameter (0, bandGain));
+    expect ("Insert A view: the header reads \"A: Band 2 Gain\", and Pencil clicks write the control's full range (1 at the top, 0 at the bottom)",
+            header->getViewButtonText() == "A: Band 2 Gain" && controlPoints.size() == 2
+                && juce::exactlyEqual (controlPoints[0].value, 1.0) && juce::exactlyEqual (controlPoints[1].value, 0.0),
+            header->getViewButtonText() + ", " + juce::String ((int) controlPoints.size()) + " points");
+    tools.call ("remove_plugin", juce::JSON::parse (R"({"track":"Lanes","slot":"A"})"));
+    expect ("removing the plug-in returns the view to volume", header->getViewButtonText() == "volume", header->getViewButtonText());
+
     // Removing the send takes its view with it.
+    header->runViewItem (10);
     tools.call ("remove_send", juce::JSON::parse (R"({"track":"Lanes","slot":"A"})"));
     expect ("removing the send returns the view to volume", header->getViewButtonText() == "volume", header->getViewButtonText());
 

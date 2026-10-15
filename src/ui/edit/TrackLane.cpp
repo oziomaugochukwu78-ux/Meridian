@@ -1,5 +1,6 @@
 #include "TrackLane.h"
 
+#include "AutomationView.h"
 #include "model/Automation.h"
 #include "model/MidiModel.h"
 #include "ui/Theme.h"
@@ -189,6 +190,7 @@ void TrackLane::paintOverChildren (juce::Graphics& g)
 //   volume, sends   the mixer fader's taper (0 dB at 75 % of the height)
 //   pan             left at the top, right at the bottom, centre in the middle
 //   mute            muted at the top, unmuted at the bottom; drawn as steps
+//   plug-in         the control's normalised range, 1 at the top
 
 juce::String TrackLane::shownParameter() const
 {
@@ -198,9 +200,10 @@ juce::String TrackLane::shownParameter() const
 float TrackLane::valueToY (double value) const
 {
     const auto parameter = shownParameter();
-    const double position = parameter == "pan"  ? (1.0 - value) * 0.5
-                          : parameter == "mute" ? value
-                                                : dsp::FaderTaper::dbToPosition (value);
+    const bool linear = parameter == "mute" || automation::pluginTarget (parameter).first >= 0;
+    const double position = parameter == "pan" ? (1.0 - value) * 0.5
+                          : linear             ? juce::jlimit (0.0, 1.0, value)
+                                               : dsp::FaderTaper::dbToPosition (value);
     const float usable = (float) getHeight() - 8.0f;
     return 4.0f + usable * (float) (1.0 - position);
 }
@@ -214,6 +217,8 @@ double TrackLane::yToValue (float y) const
         return 1.0 - 2.0 * position;
     if (parameter == "mute")
         return position >= 0.5 ? 1.0 : 0.0;
+    if (automation::pluginTarget (parameter).first >= 0)
+        return position;
     return dsp::FaderTaper::positionToDb (position);
 }
 
@@ -232,13 +237,13 @@ void TrackLane::paintAutomation (juce::Graphics& g)
     {
         g.setColour (colour);
         g.setFont (theme::font (11.0f));
-        g.drawText (automation::shortName (parameter), 6, 2, 80, 14, juce::Justification::centredLeft);
+        g.drawText (automationview::laneName (app, trackNode, parameter), 6, 2, 200, 14, juce::Justification::centredLeft);
     }
 
     if (pts.empty())
     {
         // Pencil over an unautomated control: show where it is set, as a guide.
-        const float y = valueToY (automation::staticValue (trackNode, parameter));
+        const float y = valueToY (automationview::staticValue (app, trackNode, parameter));
         const float dashes[] = { 4.0f, 4.0f };
         g.setColour (colour);
         g.drawDashedLine (juce::Line<float> (0.0f, y, (float) getWidth(), y), dashes, 2, 1.0f);

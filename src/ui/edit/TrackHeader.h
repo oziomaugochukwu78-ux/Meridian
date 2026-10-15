@@ -48,7 +48,9 @@ public:
     juce::String getPlaylistButtonText() const { return playlistButton.getButtonText(); }
 
     /** The automation view selector: which lane the track shows and the Pencil draws.
-        buildViewMenu's item ids: 1 volume, 2 pan, 3 mute, 10 + slot for send A..E. */
+        buildViewMenu's item ids: 1 volume, 2 pan, 3 mute, 10 + slot for send A..E, and
+        pluginItemBase + slot * pluginItemsPerSlot + index for an insert's control. */
+    static constexpr int pluginItemBase = 1000, pluginItemsPerSlot = 500;
     juce::PopupMenu buildViewMenu() const;
     void runViewItem (int item);
     juce::String getViewButtonText() const { return viewButton.getButtonText(); }

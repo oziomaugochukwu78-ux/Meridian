@@ -1,5 +1,6 @@
 #include "TrackHeader.h"
 
+#include "AutomationView.h"
 #include "model/Automation.h"
 #include "model/Playlists.h"
 #include "ui/Theme.h"
@@ -98,13 +99,14 @@ void TrackHeader::valueTreePropertyChanged (juce::ValueTree& tree, const juce::I
 
 void TrackHeader::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree&, int)
 {
-    if (parent.hasType (ids::SENDS))
-        updateViewButton(); // a removed send's lane falls back to volume
+    if (parent.hasType (ids::SENDS) || parent.hasType (ids::INSERTS))
+        updateViewButton(); // a removed send's or plug-in's lane falls back to volume
 }
 
 void TrackHeader::updateViewButton()
 {
-    const auto text = automation::shortName (automation::shownParameter (trackNode, editState.automationViewFor (track::id (trackNode))));
+    const auto shown = automation::shownParameter (trackNode, editState.automationViewFor (track::id (trackNode)));
+    const auto text = automationview::laneName (app, trackNode, shown);
     if (viewButton.getButtonText() != text)
         viewButton.setButtonText (text);
 }
@@ -125,12 +127,33 @@ juce::PopupMenu TrackHeader::buildViewMenu() const
         const auto parameter = automation::sendParameter (slot);
         menu.addItem (10 + slot, "Send " + juce::String::charToString ((juce::juce_wchar) ('A' + slot)) + " level", true, shown == parameter);
     }
+
+    // Each plug-in's automatable controls, in a submenu per insert.
+    for (int slot = 0; slot < Session::maxInserts; ++slot)
+    {
+        const auto insert = app.getBridge().getInsert (track::id (trackNode), slot);
+        if (insert == nullptr || insert->plugin == nullptr)
+            continue;
+        juce::PopupMenu controls;
+        const auto& all = insert->plugin->getParameters();
+        for (int i = 0; i < juce::jmin (all.size(), pluginItemsPerSlot); ++i)
+            if (all[i]->isAutomatable())
+            {
+                const auto parameter = automation::pluginParameter (slot, i);
+                controls.addItem (pluginItemBase + slot * pluginItemsPerSlot + i, all[i]->getName (64), true, shown == parameter);
+            }
+        if (controls.getNumItems() > 0)
+            menu.addSubMenu ("Insert " + juce::String::charToString ((juce::juce_wchar) ('A' + slot)) + ": " + insert->plugin->getName(),
+                             controls);
+    }
     return menu;
 }
 
 void TrackHeader::runViewItem (int item)
 {
-    const auto parameter = item == 2 ? juce::String ("pan")
+    const auto parameter = item >= pluginItemBase ? automation::pluginParameter ((item - pluginItemBase) / pluginItemsPerSlot,
+                                                                                 (item - pluginItemBase) % pluginItemsPerSlot)
+                         : item == 2 ? juce::String ("pan")
                          : item == 3 ? juce::String ("mute")
                          : item >= 10 ? automation::sendParameter (item - 10)
                                       : juce::String ("volume");
