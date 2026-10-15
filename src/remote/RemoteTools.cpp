@@ -414,6 +414,16 @@ const std::vector<ToolInfo>& toolTable()
                     { "drive_db", "number", "Console drive, -12 to +24 dB (how early saturation starts; below 0 only colours)" },
                     { "character", "number", "Console asymmetry 0-1 (more = more 2nd harmonic warmth)" },
                     { "curve", "string", "Saturation curve", false, { "tanh", "cubic" } } }) },
+        { "set_up", "Set up a track for a goal",
+          "Creates a track configured for the goal: its input, record-armed where it records, an effect chain with "
+          "settings for the job, and a send to a Reverb bus (created once and shared, fully wet). rap vocal: high-pass "
+          "80 Hz, 3:1 compression, de-esser, reverb -18 dB. sung vocal: high-pass 80 Hz, 2.5:1, de-esser, reverb -14 dB. "
+          "acoustic guitar: high-pass 100 Hz, 2:1, reverb -20 dB. podcast voice: gate, high-pass 80 Hz, 3:1. "
+          "voice-over: gate, high-pass 80 Hz, 3:1, de-esser. drum bus: a stereo bus with 4:1 glue compression.",
+          schema ({ { "goal", "string", "What the track is for", true,
+                      { "rap vocal", "sung vocal", "acoustic guitar", "podcast voice", "voice-over", "drum bus" } },
+                    { "name", "string", "Track name (default: from the goal)" },
+                    { "input", "integer", "Interface input, 1-based (default 1)" } }) },
         { "adjust", "Change the master's character in plain terms",
           "A relative, perceptual change to the master console, measured: warmth (more even harmonics: asymmetry and a "
           "little drive up), grit (more odd harmonics: drive up) or clean (drive down). Each step is small and audible; "
@@ -605,6 +615,7 @@ RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var
     if (name == "list_notes")         return listNotes (args);
     if (name == "set_synth")          return setSynth (args);
     if (name == "adjust")             return adjust (args);
+    if (name == "set_up")             return setUp (args);
     if (name == "set_master")         return setMaster (args);
     if (name == "bounce")             return bounce (args);
     if (name == "undo")               return undoRedo (args, true);
@@ -1889,6 +1900,79 @@ RemoteTools::Result RemoteTools::setMaster (const juce::var& args)
     if (args.hasProperty ("character"))  state.setProperty (ids::consoleCharacter, juce::jlimit (0.0, 1.0, (double) args["character"]), um);
     if (args.hasProperty ("curve"))      state.setProperty (ids::consoleCurve, args["curve"].toString() == "cubic" ? 1 : 0, um);
     return getStatus();
+}
+
+RemoteTools::Result RemoteTools::setUp (const juce::var& args)
+{
+    struct Setting { const char* id; double value; };
+    struct Effect { const char* plugin; std::vector<Setting> settings; };
+    struct Recipe { const char* goal; const char* name; int channels; bool bus; bool armed; std::vector<Effect> chain; double reverbDb; };
+    constexpr double none = 1.0; // above 0 dB: no reverb send
+    const Effect gate { "Meridian Gate", {} };
+    auto highPass = [] (double hz) { return Effect { "Meridian EQ", { { "hpOn", 1.0 }, { "hpFreq", hz } } }; };
+    auto compressor = [] (double ratio, double threshold) { return Effect { "Meridian Compressor", { { "ratio", ratio }, { "threshold", threshold } } }; };
+    const Effect deEsser { "Meridian De-Esser", {} };
+    const std::vector<Recipe> recipes {
+        { "rap vocal",       "Rap Vocal",       1, false, true,  { highPass (80.0), compressor (3.0, -18.0), deEsser }, -18.0 },
+        { "sung vocal",      "Vocal",           1, false, true,  { highPass (80.0), compressor (2.5, -20.0), deEsser }, -14.0 },
+        { "acoustic guitar", "Acoustic Guitar", 1, false, true,  { highPass (100.0), compressor (2.0, -20.0) },          -20.0 },
+        { "podcast voice",   "Voice",           1, false, true,  { gate, highPass (80.0), compressor (3.0, -20.0) },    none },
+        { "voice-over",      "Voice-Over",      1, false, true,  { gate, highPass (80.0), compressor (3.0, -20.0), deEsser }, none },
+        { "drum bus",        "Drum Bus",        2, true,  false, { compressor (4.0, -20.0) },                           none },
+    };
+    const auto goal = args["goal"].toString().trim().toLowerCase();
+    const Recipe* recipe = nullptr;
+    for (const auto& r : recipes)
+        if (goal == r.goal)
+            recipe = &r;
+    if (recipe == nullptr)
+        return { false, {}, "Unknown goal: rap vocal, sung vocal, acoustic guitar, podcast voice, voice-over or drum bus." };
+    const int input = args.hasProperty ("input") ? (int) args["input"] : 1;
+    if (input < 1 || input > 64)
+        return { false, {}, "input is the interface input, 1-based." };
+
+    auto& session = *app.getSession();
+    auto* um = beginEdit ("Set Up: " + juce::String (recipe->goal));
+    const auto name = args.hasProperty ("name") ? args["name"].toString().trim() : juce::String (recipe->name);
+    auto t = session.addTrack (name.isNotEmpty() ? name : juce::String (recipe->name), recipe->channels, um,
+                               recipe->bus ? Session::TrackKind::aux : Session::TrackKind::audio);
+    if (! recipe->bus)
+    {
+        t.setProperty (ids::inputChannel, input - 1, um);
+        t.setProperty (ids::recordArm, recipe->armed, um);
+    }
+
+    // The chain, each effect set for the job (values in the control's own units).
+    auto insertEffect = [this] (juce::ValueTree track, int slot, const Effect& effect)
+    {
+        for (const auto& d : BuiltinEffectFormat::getDescriptions())
+        {
+            juce::String error;
+            if (d.name != effect.plugin || ! app.getBridge().insertPlugin (track, slot, d, error))
+                continue;
+            if (const auto insert = app.getBridge().getInsert (track::id (track), slot); insert != nullptr && insert->plugin != nullptr)
+                for (const auto& s : effect.settings)
+                    for (auto* p : insert->plugin->getParameters())
+                        if (parameterId (*p) == s.id)
+                            p->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, p->getValueForText (juce::String (s.value))));
+        }
+    };
+    for (int slot = 0; slot < (int) recipe->chain.size(); ++slot)
+        insertEffect (t, slot, recipe->chain[(size_t) slot]);
+
+    // One shared Reverb bus, fully wet, created the first time a recipe needs it.
+    if (recipe->reverbDb <= 0.0)
+    {
+        auto reverb = session.getTracksNode().getChildWithProperty (ids::name, "Reverb");
+        if (! reverb.isValid() || ! track::isAux (reverb))
+        {
+            reverb = session.addTrack ("Reverb", 2, um, Session::TrackKind::aux);
+            insertEffect (reverb, 0, { "Meridian Reverb", { { "mix", 1.0 } } });
+        }
+        if (routing::setSend (session, t, 0, track::id (reverb), um))
+            routing::findSend (t, 0).setProperty (ids::levelDb, recipe->reverbDb, um);
+    }
+    return { true, describeTrack (t, session.indexOfTrack (t) + 1), {} };
 }
 
 RemoteTools::Result RemoteTools::adjust (const juce::var& args)

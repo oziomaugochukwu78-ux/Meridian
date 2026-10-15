@@ -91,6 +91,7 @@ private:
     Result setSynth (const juce::var&);
     Result setMaster (const juce::var&);
     Result adjust (const juce::var&);
+    Result setUp (const juce::var&);
     Result bounce (const juce::var&);
     Result undoRedo (const juce::var&, bool undo);
     Result saveSession();

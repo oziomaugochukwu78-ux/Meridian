@@ -583,6 +583,42 @@ void SelfTest::testConsolePresets()
     expect ("adjust clean more (2 steps): THD falls",
             cleaner.ok && value (cleaner, "after", "thd_percent") < value (cleaner, "before", "thd_percent"),
             cleaner.error + juce::JSON::toString (cleaner.data, true));
+    // set_up: a track configured for a goal.
+    const auto rap = call ("set_up", R"({"goal":"rap vocal","input":2})");
+    const auto rapTrack = session->getTracksNode().getChildWithProperty (ids::name, "Rap Vocal");
+    const auto reverbBus = session->getTracksNode().getChildWithProperty (ids::name, "Reverb");
+    auto controlIs = [this] (const juce::ValueTree& t, int slot, const juce::String& id, const juce::String& text)
+    {
+        if (const auto insert = app.getBridge().getInsert (track::id (t), slot); insert != nullptr && insert->plugin != nullptr)
+            for (auto* p : insert->plugin->getParameters())
+                if (auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (p); hosted != nullptr && hosted->getParameterID() == id)
+                    return std::abs (p->getValue() - p->getValueForText (text)) < 1.0e-4f;
+        return false;
+    };
+    juce::StringArray chain;
+    for (int slot = 0; slot < 4; ++slot)
+        if (const auto insert = app.getBridge().getInsert (track::id (rapTrack), slot); insert != nullptr && insert->plugin != nullptr)
+            chain.add (insert->plugin->getName());
+    const auto rapSend = routing::findSend (rapTrack, 0);
+    expect ("set_up rap vocal: input 2, armed, EQ high-pass on at 80 Hz, 3:1 compressor, de-esser, -18 dB to a fully wet Reverb bus",
+            rap.ok && track::inputChannel (rapTrack) == 1 && track::recordArm (rapTrack)
+                && chain == juce::StringArray { "Meridian EQ", "Meridian Compressor", "Meridian De-Esser" }
+                && controlIs (rapTrack, 0, "hpOn", "1") && controlIs (rapTrack, 0, "hpFreq", "80") && controlIs (rapTrack, 1, "ratio", "3")
+                && rapSend.isValid() && send::target (rapSend) == track::id (reverbBus) && juce::exactlyEqual (send::levelDb (rapSend), -18.0)
+                && track::isAux (reverbBus) && controlIs (reverbBus, 0, "mix", "1"),
+            rap.error + chain.joinIntoString (", "));
+    const auto sung = call ("set_up", R"({"goal":"sung vocal"})");
+    int reverbs = 0;
+    for (const auto& t : session->getTracksNode())
+        reverbs += track::name (t) == "Reverb" ? 1 : 0;
+    const auto sungSend = routing::findSend (session->getTracksNode().getChildWithProperty (ids::name, "Vocal"), 0);
+    expect ("a second recipe shares the one Reverb bus (sung vocal sends -14 dB to it)",
+            sung.ok && reverbs == 1 && sungSend.isValid() && send::target (sungSend) == track::id (reverbBus)
+                && juce::exactlyEqual (send::levelDb (sungSend), -14.0),
+            juce::String (reverbs) + " Reverb buses");
+    expect ("set_up refuses an unknown goal, and the session stays valid",
+            ! call ("set_up", R"({"goal":"opera"})").ok && findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+
     expect ("adjust refuses what it does not know (attribute \"loud\", 9 steps)",
             ! call ("adjust", R"({"attribute":"loud","direction":"more"})").ok
                 && ! call ("adjust", R"({"attribute":"warmth","direction":"more","amount":9})").ok,
@@ -3873,8 +3909,8 @@ void SelfTest::testMcpTools()
     if (toolArray != nullptr)
         for (const auto& tool : *toolArray)
             allDescribed = allDescribed && tool["inputSchema"].isObject() && tool["description"].toString().length() > 20;
-    expect ("tools/list describes all 44 tools, each with a description and a JSON schema",
-            allDescribed && toolArray->size() == 44, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
+    expect ("tools/list describes all 45 tools, each with a description and a JSON schema",
+            allDescribed && toolArray->size() == 45, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
 
     auto r = toolCall ("get_status", "{}");
     expect ("get_status returns the session and tracks", ! failed (r) && callText (r).contains ("\"Vocal\""), callText (r).substring (0, 160));
