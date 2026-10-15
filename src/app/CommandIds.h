@@ -53,6 +53,7 @@ enum : juce::CommandID
     // Track
     newTracks = 0x13000,
     deleteTrack,
+    groupTracks,
 
     // Transport
     playStop = 0x14000,

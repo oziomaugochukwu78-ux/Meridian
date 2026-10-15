@@ -1,4 +1,5 @@
 #include "TrackHeader.h"
+#include "model/Groups.h"
 
 #include "AutomationView.h"
 #include "model/Automation.h"
@@ -161,6 +162,12 @@ void TrackHeader::runViewItem (int item)
     updateViewButton(); // now, not when the (asynchronous) change message arrives
 }
 
+void TrackHeader::refreshGroups()
+{
+    if (auto* session = app.getSession(); session != nullptr && groups::namesFor (*session, track::id (trackNode)) != shownGroups)
+        refresh();
+}
+
 void TrackHeader::refresh()
 {
     nameLabel.setText (track::name (trackNode), juce::dontSendNotification);
@@ -176,7 +183,9 @@ void TrackHeader::refresh()
                            : input < 0 ? juce::String ("no input")
                            : track::channels (trackNode) == 2 ? "In " + juce::String (input + 1) + "-" + juce::String (input + 2)
                                                               : "In " + juce::String (input + 1);
-    infoLabel.setText ("vol " + formatDb (track::volumeDb (trackNode)) + "   " + inputText
+    shownGroups = app.getSession() != nullptr ? groups::namesFor (*app.getSession(), track::id (trackNode)) : juce::String();
+    infoLabel.setText ((shownGroups.isNotEmpty() ? "[" + shownGroups + "]  " : juce::String())
+                           + "vol " + formatDb (track::volumeDb (trackNode)) + "   " + inputText
                            + (aux || instrument ? juce::String() : track::channels (trackNode) == 2 ? "   stereo" : "   mono"),
                        juce::dontSendNotification);
     recordButton.setVisible (! track::isAux (trackNode)); // instruments record MIDI from the keyboard; buses record nothing

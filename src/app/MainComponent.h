@@ -60,6 +60,7 @@ private:
     void showBounceDialog();
     void openSessionFromDisk();
     void showSaveAsDialog();
+    void showGroupDialog();
     void offerRecovery (const juce::File& backup);
     void showRemoteControlInfo();
 

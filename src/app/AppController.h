@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AutomationRecorder.h"
+#include "GroupLinker.h"
 #include "engine/AudioEngine.h"
 #include "engine/DiskStreamer.h"
 #include "engine/EngineBridge.h"
@@ -140,6 +141,10 @@ public:
     /** Touch / Latch / Write automation recording. */
     AutomationRecorder& getAutomationRecorder() noexcept { return *automationRecorder; }
 
+    /** Groups these tracks (Track > Group Selected Tracks, the AI's group tool) as
+        one undo step, "Group Tracks". Returns the GROUP node, or invalid for fewer than two. */
+    juce::ValueTree groupTracks (const juce::String& name, const juce::Array<int>& trackIds, bool mix, bool edit);
+
     // MIDI input ------------------------------------------------------------------------------
     /** Opens every MIDI input (and any plugged in later); their notes play the
         record-armed instrument tracks and are recorded with them. Called for
@@ -194,6 +199,7 @@ private:
     std::unique_ptr<EngineBridge> bridge;
     std::unique_ptr<AudioEngine> offlineEngine;   // exists only while a background bounce runs
     std::unique_ptr<Session> session;
+    GroupLinker groupLinker; // after the session: detaches before it goes
     RemoteTools remoteTools { *this };
     RemoteControlServer remoteServer {
         [this] (const std::string& message)

@@ -1,4 +1,5 @@
 #include "AppController.h"
+#include "model/Groups.h"
 
 #include "media/AudioImporter.h"
 #include "media/TimeStretchEngine.h"
@@ -92,6 +93,7 @@ AppController::~AppController()
     deviceManager.closeAudioDevice();
 
     bridge->attachSession (nullptr);
+    groupLinker.attach (nullptr);
     if (session != nullptr)
         session->getState().removeListener (this);
     session.reset();
@@ -209,6 +211,15 @@ juce::Result AppController::openSession (const juce::File& file)
     return juce::Result::ok();
 }
 
+juce::ValueTree AppController::groupTracks (const juce::String& name, const juce::Array<int>& trackIds, bool mix, bool edit)
+{
+    if (session == nullptr)
+        return {};
+    auto& um = session->getUndoManager();
+    um.beginNewTransaction ("Group Tracks");
+    return groups::create (*session, name, trackIds, mix, edit, &um);
+}
+
 void AppController::installSession (std::unique_ptr<Session> newSession)
 {
     transportStop();
@@ -216,6 +227,7 @@ void AppController::installSession (std::unique_ptr<Session> newSession)
     // Background jobs for the old session keep running; their results are
     // discarded on arrival because the generation no longer matches.
     bridge->attachSession (nullptr);
+    groupLinker.attach (nullptr);
     if (session != nullptr)
     {
         session->getState().removeListener (this);
@@ -231,6 +243,7 @@ void AppController::installSession (std::unique_ptr<Session> newSession)
     if (session != nullptr)
     {
         session->getState().addListener (this);
+        groupLinker.attach (session.get());
         backups::markOpen (session->getSessionFile());
         // A freshly loaded session has nothing to back up; a recovered one does.
         changeCountAtLastBackup = session->hasUnsavedChanges() ? ~juce::uint64 (0) : session->getChangeCount();

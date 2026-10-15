@@ -67,7 +67,7 @@ are recorded so nobody adds them by accident.
 | Copy, cut, paste and duplicate clips | assumed by every DAW | 2 | done (with automation; Shuffle inserts; multi-track) |
 | Crossfades between clips | assumed | 2 | done (equal power or equal gain; handles; removable) |
 | Nudge (move clips by a step from the keyboard) | assumed | 0.5 | done |
-| Mix and edit groups | assumed | 3 | to do |
+| Mix and edit groups | assumed | 3 | done (relative faders, switches, automation mode, selection; AI tool) |
 | MP3 export | Bounce | 1.5 | to do |
 | Strip Silence; batch fades | yes | 2.5 | batch fades done; Strip Silence to do |
 | Folder tracks | yes (32 routing folders) | 3 | to do |

@@ -135,6 +135,7 @@ private:
     void testEditModes();
     void testClipboard();
     void testCrossfades();
+    void testGroups();
     void testAutomationLanes();
     void testMixSections();
     void testTempoRuler();

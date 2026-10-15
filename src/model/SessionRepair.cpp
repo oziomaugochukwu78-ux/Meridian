@@ -1,4 +1,5 @@
 #include "SessionRepair.h"
+#include "Groups.h"
 
 #include "Automation.h"
 #include "MidiModel.h"
@@ -76,6 +77,7 @@ public:
             set (state, ids::nextId, maxId + 1, "session", "next id");
 
         repairRouting();
+        notes.addArray (groups::repair (session));
         return notes;
     }
 
@@ -678,6 +680,8 @@ juce::StringArray repairSession (Session& session)
 juce::String findSessionProblem (const Session& session)
 {
     const auto& s = session.getState();
+    if (const auto groupProblem = groups::findProblem (session); groupProblem.isNotEmpty())
+        return groupProblem;
     auto finiteIn = [] (const juce::var& v, double lo, double hi)
     {
         const double d = v;

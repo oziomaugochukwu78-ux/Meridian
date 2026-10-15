@@ -8,6 +8,7 @@
 #include <juce_events/juce_events.h>
 
 #include <cmath>
+#include <functional>
 #include <map>
 
 namespace meridian
@@ -95,11 +96,15 @@ public:
 
     bool hasTimeRange() const noexcept { return selectionEnd > selectionStart; }
 
+    /** Edit groups: given the tracks being selected, returns them with the
+        members of their active edit groups (set by the Edit window). */
+    std::function<juce::Array<int> (const juce::Array<int>&)> linkTracks;
+
     void setTimeSelection (juce::int64 a, juce::int64 b, juce::Array<int> trackIds)
     {
         selectionStart = juce::jmin (a, b);
         selectionEnd = juce::jmax (a, b);
-        selectedTrackIds = std::move (trackIds);
+        selectedTrackIds = linkTracks != nullptr ? linkTracks (trackIds) : std::move (trackIds);
         selectedClip = {};
         sendChangeMessage();
     }

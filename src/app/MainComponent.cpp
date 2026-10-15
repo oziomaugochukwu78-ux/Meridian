@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "model/Groups.h"
 
 #include "model/MidiModel.h"
 
@@ -310,13 +311,37 @@ void MainComponent::showRemoteControlInfo()
 }
 
 //==============================================================================
+void MainComponent::showGroupDialog()
+{
+    auto* session = app.getSession();
+    const auto trackIds = editView.getEditState().selectedTrackIds;
+    if (session == nullptr || trackIds.size() < 2)
+        return;
+
+    auto* w = new juce::AlertWindow ("Group Tracks", "Group the " + juce::String (trackIds.size()) + " selected tracks.",
+                                     juce::MessageBoxIconType::NoIcon, this);
+    w->addTextEditor ("name", "Group " + juce::String (groups::groupsNode (session->getState()).getNumChildren() + 1), "Name:");
+    w->addComboBox ("links", { "Mix and Edit", "Mix only (faders, mute, solo, record, automation mode)", "Edit only (selection)" },
+                    "Links:");
+    w->getComboBoxComponent ("links")->setSelectedItemIndex (0);
+    w->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w, trackIds] (int result)
+    {
+        if (result != 1)
+            return;
+        const int links = w->getComboBoxComponent ("links")->getSelectedItemIndex();
+        app.groupTracks (w->getTextEditorContents ("name"), trackIds, links != 2, links != 1);
+    }), true);
+}
+
 void MainComponent::getAllCommands (juce::Array<juce::CommandID>& c)
 {
     using namespace commands;
     c.addArray ({ dashboard, openSession, saveSession, saveSessionAs, importAudio, bounceMix,
                   undo, redo, cutSelection, copySelection, pasteClipboard, duplicateSelection, fadeSelection, crossfadeEqualGain, nudgeEarlier, nudgeLater, nudge1ms, nudge10ms, nudge100ms, nudge1s, separateClip, deleteSelection, elasticAudio, zoomIn, zoomOut,
                   shuffleMode, slipMode, spotMode, gridMode, trimTool, selectorTool, grabberTool, smartTool, pencilTool,
-                  newTracks, deleteTrack,
+                  newTracks, deleteTrack, groupTracks,
                   playStop, record, returnToZero, loopPlayback, punchRecording, clickToggle, countInOff, countIn1Bar, countIn2Bars, addMarker,
                   playbackEngine, pluginManager, toggleRemoteControl, remoteControlInfo,
                   toggleWindow, showEditWindow, showMixWindow, mixShowInsertsFJ, mixShowSends, mixSimpleMode });
@@ -436,6 +461,9 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
 
         case newTracks:        info.setInfo ("New Track...", "Create new tracks", "Track", 0);
                                info.addDefaultKeypress ('n', cmd | shift); info.setActive (hasSession); break;
+        case groupTracks:      info.setInfo ("Group Selected Tracks...", "Link the selected tracks' faders, mutes, solos and "
+                                             "selection", "Track", 0);
+                               info.addDefaultKeypress ('g', cmd); info.setActive (hasSession && edit.selectedTrackIds.size() >= 2); break;
         case deleteTrack:      info.setInfo ("Delete Selected Track", "", "Track", 0);
                                info.setActive (hasSession && edit.selectedTrackIds.size() == 1); break;
 
@@ -534,6 +562,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case nudge10ms:       editView.setNudgeMilliseconds (10); commandManager.commandStatusChanged(); break;
         case nudge100ms:      editView.setNudgeMilliseconds (100); commandManager.commandStatusChanged(); break;
         case nudge1s:         editView.setNudgeMilliseconds (1000); commandManager.commandStatusChanged(); break;
+        case groupTracks:     showGroupDialog(); break;
         case separateClip:    editView.separateAtSelection(); break;
         case deleteSelection: editView.deleteSelection(); break;
         case elasticAudio:    editView.openElasticDialog ({}); break;
@@ -702,7 +731,51 @@ juce::PopupMenu MainComponent::getMenuForIndex (int index, const juce::String&)
             menu.addSubMenu ("Modes and Tools", tools);
             break;
         }
-        case 2: add (newTracks); add (deleteTrack); break;
+        case 2:
+        {
+            add (newTracks); add (deleteTrack);
+            menu.addSeparator();
+            add (groupTracks);
+            if (auto* session = app.getSession())
+            {
+                juce::PopupMenu list;
+                for (const auto& g : groups::groupsNode (session->getState()))
+                {
+                    const int groupId = g[ids::id];
+                    juce::PopupMenu item;
+                    item.addItem ("Active", true, groups::isActive (g), [this, groupId]
+                    {
+                        if (auto* s = app.getSession())
+                            if (auto found = groups::findById (*s, groupId); found.isValid())
+                            {
+                                s->getUndoManager().beginNewTransaction ("Group Active");
+                                found.setProperty (ids::active, ! groups::isActive (found), &s->getUndoManager());
+                            }
+                    });
+                    item.addItem ("Select Its Tracks", [this, groupId]
+                    {
+                        if (auto* s = app.getSession())
+                            if (auto found = groups::findById (*s, groupId); found.isValid())
+                                editView.getEditState().setTimeSelection (editView.getEditState().selectionStart,
+                                                                          editView.getEditState().selectionEnd, groups::members (found));
+                    });
+                    item.addItem ("Delete Group", [this, groupId]
+                    {
+                        if (auto* s = app.getSession())
+                            if (auto found = groups::findById (*s, groupId); found.isValid())
+                            {
+                                s->getUndoManager().beginNewTransaction ("Delete Group");
+                                groups::remove (*s, found, &s->getUndoManager());
+                            }
+                    });
+                    const auto links = groups::linksMix (g) && groups::linksEdit (g) ? "" : groups::linksMix (g) ? "  (mix)" : "  (edit)";
+                    list.addSubMenu (g[ids::name].toString() + links + (groups::isActive (g) ? "" : "  [off]"), item);
+                }
+                if (list.getNumItems() > 0)
+                    menu.addSubMenu ("Groups", list);
+            }
+            break;
+        }
         case 3:
         {
             add (playStop); add (record); add (returnToZero);

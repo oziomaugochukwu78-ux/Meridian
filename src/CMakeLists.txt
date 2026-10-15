@@ -11,6 +11,8 @@ juce_add_gui_app(Meridian
 target_sources(Meridian PRIVATE
     app/AppController.cpp
     app/AutomationRecorder.cpp
+    app/GroupLinker.cpp
+    app/GroupLinker.h
     app/AutomationRecorder.h
     app/AppController.h
     app/CommandIds.h
@@ -47,6 +49,8 @@ target_sources(Meridian PRIVATE
     model/EditClipboard.h
     model/Fades.cpp
     model/Fades.h
+    model/Groups.cpp
+    model/Groups.h
     model/MidiModel.cpp
     model/MidiModel.h
     model/Playlists.cpp

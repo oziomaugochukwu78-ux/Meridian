@@ -1,5 +1,6 @@
 #include "EditView.h"
 #include "model/Fades.h"
+#include "model/Groups.h"
 #include "model/MidiModel.h"
 #include "model/Shuffle.h"
 
@@ -38,6 +39,11 @@ EditView::EditView (AppController& a) : app (a)
     ruler.onLocate = [this] (juce::int64 sample) { app.locate (sample); };
     ruler.undoManager = [this] { return app.getUndoManager(); };
     ruler.getSession = [this] { return app.getSession(); };
+    state.linkTracks = [this] (const juce::Array<int>& trackIds)
+    {
+        auto* session = app.getSession();
+        return session != nullptr ? groups::expandForEdit (*session, trackIds) : trackIds;
+    };
 
     state.addChangeListener (this);
     app.addChangeListener (this);
@@ -198,6 +204,8 @@ void EditView::timerCallback()
     if (auto* session = app.getSession(); session != nullptr && session->getChangeCount() != mapsSeenAt)
     {
         mapsSeenAt = session->getChangeCount();
+        for (auto* h : headers)
+            h->refreshGroups();
         auto tempo = midimodel::tempoMap (*session);
         auto meter = midimodel::meterMap (*session);
         const auto& t1 = tempo.getChanges();

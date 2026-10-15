@@ -1,4 +1,5 @@
 #include "RemoteTools.h"
+#include "model/Groups.h"
 
 #include "app/AppController.h"
 #include "model/Automation.h"
@@ -131,6 +132,11 @@ juce::var schema (std::initializer_list<Param> params)
                     { "start_beats", makeObject ({ { "type", "number" }, { "description", "Pedal down, in beats from the clip start" } }) },
                     { "length_beats", makeObject ({ { "type", "number" }, { "description", "How long it stays down, in beats" } }) } }) },
                 { "required", juce::Array<juce::var> { "start_beats", "length_beats" } } }));
+        }
+        else if (juce::String (p.type) == "tracklist")
+        {
+            set (property, "type", "array");
+            set (property, "items", makeObject ({ { "type", juce::Array<juce::var> { "integer", "string" } } }));
         }
         else if (juce::String (p.type) == "controlpoints")
         {
@@ -416,6 +422,14 @@ const std::vector<ToolInfo>& toolTable()
                     { "drive_db", "number", "Console drive, -12 to +24 dB (how early saturation starts; below 0 only colours)" },
                     { "character", "number", "Console asymmetry 0-1 (more = more 2nd harmonic warmth)" },
                     { "curve", "string", "Saturation curve", false, { "tanh", "cubic" } } }) },
+        { "group", "Group tracks",
+          "Mix and edit groups. create: the tracks move together: faders relatively (same change in dB), mute, solo, "
+          "record arm and automation mode (links mix), and selection, so edits apply to all of them (links edit). "
+          "delete, enable, disable: by name. list: every group with its tracks.",
+          schema ({ { "action", "string", "What to do", true, { "create", "delete", "enable", "disable", "list" } },
+                    { "name", "string", "Group name (create: optional; others: required)" },
+                    { "tracks", "tracklist", "create: the tracks (at least two), by number or name" },
+                    { "links", "string", "create: what is linked (default mix and edit)", false, { "mix and edit", "mix", "edit" } } }) },
         { "list_presets", "List presets",
           "What can be applied, with what it does: console presets (settings and the measured THD and H2-over-H3 of a "
           "1 kHz sine at -6 dBFS), session templates (tracks and console preset) and set_up recipes. Use set_master "
@@ -534,6 +548,12 @@ juce::String checkArgument (const juce::String& name, const juce::var& value, co
         {
             const auto& item = items->getReference (i);
             const auto where = "entry " + juce::String (i + 1) + " of \"" + name + "\"";
+            if (itemSchema["type"].isArray()) // a list of tracks: each a number or a name
+            {
+                if (const auto error = checkArgument (name, item, itemSchema); error.isNotEmpty())
+                    return where + ": " + error;
+                continue;
+            }
             if (! item.isObject())
                 return where + " must be an object";
             if (const auto* required = itemSchema["required"].getArray())
@@ -624,6 +644,7 @@ RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var
     if (name == "adjust")             return adjust (args);
     if (name == "set_up")             return setUp (args);
     if (name == "list_presets")       return listPresets (args);
+    if (name == "group")              return group (args);
     if (name == "set_master")         return setMaster (args);
     if (name == "bounce")             return bounce (args);
     if (name == "undo")               return undoRedo (args, true);
@@ -1954,6 +1975,66 @@ const std::vector<Recipe>& setUpRecipes()
     return recipes;
 }
 } // namespace
+
+RemoteTools::Result RemoteTools::group (const juce::var& args)
+{
+    auto* session = app.getSession();
+    auto* um = app.getUndoManager();
+    const auto action = args["action"].toString();
+    auto describe = [session] (const juce::ValueTree& g)
+    {
+        juce::Array<juce::var> names;
+        for (const int id : groups::members (g))
+            if (auto t = session->getTrackById (id); t.isValid())
+                names.add (track::name (t));
+        const auto links = groups::linksMix (g) && groups::linksEdit (g) ? "mix and edit" : groups::linksMix (g) ? "mix" : "edit";
+        return makeObject ({ { "name", g[ids::name].toString() }, { "active", groups::isActive (g) }, { "links", links },
+                             { "tracks", names } });
+    };
+
+    if (action == "list")
+    {
+        juce::Array<juce::var> list;
+        for (const auto& g : groups::groupsNode (session->getState()))
+            list.add (describe (g));
+        return { true, makeObject ({ { "groups", list } }), {} };
+    }
+    if (action == "create")
+    {
+        juce::Array<int> trackIds;
+        if (const auto* list = args["tracks"].getArray())
+        {
+            for (const auto& v : *list)
+            {
+                juce::String error;
+                const auto t = findTrack (v, error);
+                if (! t.isValid())
+                    return { false, {}, error };
+                trackIds.addIfNotAlreadyThere (track::id (t));
+            }
+        }
+        if (trackIds.size() < 2)
+            return { false, {}, "A group needs at least two tracks: give \"tracks\", e.g. [\"Kick\", \"Snare\"]." };
+        const auto wanted = args["name"].toString().trim();
+        if (wanted.isNotEmpty() && groups::findByName (*session, wanted).isValid())
+            return { false, {}, "There is already a group called \"" + wanted + "\"." };
+        const auto links = args.hasProperty ("links") ? args["links"].toString() : juce::String ("mix and edit");
+        const auto g = groups::create (*session, wanted, trackIds, links != "edit", links != "mix", um);
+        return { true, describe (g), {} };
+    }
+
+    auto g = groups::findByName (*session, args["name"].toString());
+    if (! g.isValid())
+        return { false, {}, "There is no group called \"" + args["name"].toString() + "\". Call group with action \"list\"." };
+    if (action == "delete")
+    {
+        const auto name = g[ids::name].toString();
+        groups::remove (*session, g, um);
+        return { true, makeObject ({ { "deleted", name } }), {} };
+    }
+    g.setProperty (ids::active, action == "enable", um);
+    return { true, describe (g), {} };
+}
 
 RemoteTools::Result RemoteTools::listPresets (const juce::var& args)
 {

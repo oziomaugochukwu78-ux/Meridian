@@ -24,6 +24,8 @@ class TrackHeader final : public juce::Component,
 {
 public:
     TrackHeader (AppController&, EditState&, juce::ValueTree track);
+    /** Shows the groups the track is in, if that changed. */
+    void refreshGroups();
     ~TrackHeader() override;
 
     const juce::ValueTree& getTrack() const noexcept { return trackNode; }
@@ -69,6 +71,7 @@ private:
     AppController& app;
     EditState& editState;
     juce::ValueTree trackNode;
+    juce::String shownGroups;
 
     juce::Label nameLabel;
     juce::TextButton recordButton { "R" }, soloButton { "S" }, muteButton { "M" };

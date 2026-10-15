@@ -4,6 +4,7 @@
 #include "media/AudioImporter.h"
 #include "model/Automation.h"
 #include "model/Fades.h"
+#include "model/Groups.h"
 #include "model/ConsolePresets.h"
 #include "model/MidiModel.h"
 #include "model/Playlists.h"
@@ -4033,8 +4034,8 @@ void SelfTest::testMcpTools()
     if (toolArray != nullptr)
         for (const auto& tool : *toolArray)
             allDescribed = allDescribed && tool["inputSchema"].isObject() && tool["description"].toString().length() > 20;
-    expect ("tools/list describes all 46 tools, each with a description and a JSON schema",
-            allDescribed && toolArray->size() == 46, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
+    expect ("tools/list describes all 47 tools, each with a description and a JSON schema",
+            allDescribed && toolArray->size() == 47, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
 
     auto r = toolCall ("get_status", "{}");
     expect ("get_status returns the session and tracks", ! failed (r) && callText (r).contains ("\"Vocal\""), callText (r).substring (0, 160));
@@ -4214,6 +4215,7 @@ void SelfTest::timerCallback()
                     testEditModes();
                     testClipboard();
                     testCrossfades();
+                    testGroups();
                     testAutomationLanes();
                     testMixSections();
                     testTempoRuler();
@@ -4242,6 +4244,7 @@ void SelfTest::timerCallback()
                 testEditModes();
                 testClipboard();
                 testCrossfades();
+                testGroups();
                 testAutomationLanes();
                 testMixSections();
                 testTempoRuler();
@@ -4942,6 +4945,120 @@ void SelfTest::testPlaylistSelector()
 // Shuffle and Spot edit modes, with the simulated mouse. Three clips butted
 // together, A [0.5 s, 1 s), B [1 s, 1.5 s), C [1.5 s, 2 s), and a volume
 // breakpoint inside C at 1.6 s, so every check is an exact sample position.
+
+void SelfTest::testGroups()
+{
+    beginGroup ("Mix and edit groups");
+    auto* session = app.getSession();
+    auto& um = session->getUndoManager();
+    auto& view = main.getEditView().getEditState();
+    auto& tools = app.getRemoteTools();
+    auto call = [&tools] (const juce::String& tool, const juce::String& arguments) { return tools.call (tool, juce::JSON::parse (arguments)); };
+    auto levelIn = [this] (const BounceResult& result, int channel, double from, double to)
+    {
+        const auto rendered = readAudio (result.file);
+        const auto a = (int) (from * 48000.0), b = std::min ((int) (to * 48000.0), rendered.getNumSamples());
+        return b > a ? db (dsp::measureLevels (rendered.getReadPointer (channel, a), b - a).rms) : -999.0;
+    };
+    main.showWindow (WindowKind::edit);
+
+    clearTracks();
+    const auto tone = media.getChildFile ("tone1k_mono.wav");
+    auto kick = session->addTrack ("Kick", 1, nullptr);
+    auto snare = session->addTrack ("Snare", 1, nullptr);
+    auto bass = session->addTrack ("Bass", 1, nullptr);
+    session->addClip (snare, tone, 0, 0, 48000, 96000, "Snare Tone", nullptr);
+    snare.setProperty (ids::volumeDb, -3.0, nullptr);
+    um.clearUndoHistory();
+
+    const auto g = app.groupTracks ("Drums", { track::id (kick), track::id (snare) }, true, true);
+    expect ("Group Tracks makes a group of the two tracks (one undo step)",
+            g.isValid() && groups::members (g).size() == 2 && um.getUndoDescription() == "Group Tracks", {});
+
+    // A fader move carries to the other member as the same change in dB.
+    setConsole (false);
+    const double before = levelIn (bounce ("group_before", 0, 48000), 0, 0.2, 0.8);
+    um.beginNewTransaction ("Volume");
+    kick.setProperty (ids::volumeDb, -6.0, &um);
+    expect ("moving one fader of a mix group moves the others by the same dB (snare -3 -> -9), and no other track",
+            juce::exactlyEqual (track::volumeDb (snare), -9.0) && juce::exactlyEqual (track::volumeDb (bass), 0.0),
+            fmt (track::volumeDb (snare)) + " dB");
+    const double after = levelIn (bounce ("group_after", 0, 48000), 0, 0.2, 0.8);
+    expectNear ("and the grouped track really plays 6 dB quieter", after - before, -6.0, 0.01, "dB");
+    um.undo();
+    expect ("one undo restores both faders exactly (nothing applied twice)",
+            juce::exactlyEqual (track::volumeDb (kick), 0.0) && juce::exactlyEqual (track::volumeDb (snare), -3.0),
+            fmt (track::volumeDb (kick)) + " / " + fmt (track::volumeDb (snare)) + " dB");
+    um.redo();
+    expect ("and redo puts both back", juce::exactlyEqual (track::volumeDb (snare), -9.0), fmt (track::volumeDb (snare)));
+
+    um.beginNewTransaction ("Volume");
+    kick.setProperty (ids::volumeDb, dsp::FaderTaper::minDb, &um);
+    expect ("a member that reaches the bottom of its fader stops there", juce::exactlyEqual (track::volumeDb (snare), dsp::FaderTaper::minDb),
+            fmt (track::volumeDb (snare)));
+    um.undo();
+
+    // Switches and the automation mode take the same value.
+    for (const auto* property : { &ids::mute, &ids::solo, &ids::recordArm })
+    {
+        um.beginNewTransaction ("Switch");
+        kick.setProperty (*property, true, &um);
+    }
+    um.beginNewTransaction ("Automation Mode");
+    kick.setProperty (ids::automationMode, "touch", &um);
+    expect ("mute, solo, record arm and automation mode follow too",
+            track::mute (snare) && track::solo (snare) && track::recordArm (snare) && track::automationMode (snare) == "touch"
+                && ! track::mute (bass),
+            {});
+    for (int i = 0; i < 4; ++i)
+        um.undo();
+
+    // Edit group: selecting on one member selects the group.
+    view.setTimeSelection (0, 24000, { track::id (kick) });
+    expect ("an edit group selects all its members (not other tracks)",
+            view.selectedTrackIds.contains (track::id (snare)) && ! view.selectedTrackIds.contains (track::id (bass)),
+            juce::String (view.selectedTrackIds.size()) + " tracks selected");
+
+    // The AI tool: list, disable (nothing follows), create, delete.
+    auto r = call ("group", R"({"action":"list"})");
+    expect ("the group tool lists the group with its tracks",
+            r.ok && r.data["groups"].size() == 1 && r.data["groups"][0]["tracks"].size() == 2, r.error);
+    r = call ("group", R"({"action":"disable","name":"drums"})");
+    um.beginNewTransaction ("Volume");
+    kick.setProperty (ids::volumeDb, -12.0, &um);
+    view.setTimeSelection (0, 24000, { track::id (kick) });
+    expect ("a disabled group links nothing", r.ok && juce::exactlyEqual (track::volumeDb (snare), -9.0) && view.selectedTrackIds.size() == 1,
+            fmt (track::volumeDb (snare)) + " dB, " + juce::String (view.selectedTrackIds.size()) + " selected");
+    r = call ("group", R"({"action":"create","name":"Low End","tracks":["Kick","Bass"],"links":"mix"})");
+    um.beginNewTransaction ("Volume");
+    bass.setProperty (ids::volumeDb, -2.0, &um);
+    expect ("the tool creates a mix-only group that links faders", r.ok && juce::exactlyEqual (track::volumeDb (kick), -14.0),
+            r.error + " " + fmt (track::volumeDb (kick)));
+    r = call ("group", R"({"action":"create","tracks":["Kick"]})");
+    expect ("a group of one track is refused", ! r.ok && r.error.contains ("two tracks"), r.error);
+    r = call ("group", R"({"action":"create","tracks":[1, {"bad":true}]})");
+    expect ("a malformed track list is refused by the schema check", ! r.ok, r.error);
+    r = call ("group", R"({"action":"delete","name":"Low End"})");
+    expect ("the tool deletes a group by name", r.ok && ! groups::findByName (*session, "Low End").isValid(), r.error);
+
+    // Deleting a grouped track: the group ignores it, undo brings it back, repair on load prunes it.
+    um.beginNewTransaction ("Delete Track");
+    session->getTracksNode().removeChild (snare, &um);
+    expect ("a group whose track was deleted is still a valid session (the member is ignored)",
+            findSessionProblem (*session).isEmpty() && groups::linkedTracks (*session, track::id (kick), true).isEmpty(),
+            findSessionProblem (*session));
+    um.undo();
+    call ("group", R"({"action":"enable","name":"Drums"})");
+    expect ("undoing the deletion brings the membership back", groups::linkedTracks (*session, track::id (kick), true).size() == 1, {});
+    um.beginNewTransaction ("Delete Track");
+    session->getTracksNode().removeChild (snare, &um);
+    const auto notes = repairSession (*session);
+    expect ("repair removes a group left with one track", ! groups::findByName (*session, "Drums").isValid(),
+            notes.joinIntoString ("; "));
+    setConsole (true, 6.0, 0.35);
+    view.clearSelection();
+    clearTracks();
+}
 
 void SelfTest::testCrossfades()
 {
