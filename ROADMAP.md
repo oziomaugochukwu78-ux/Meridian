@@ -50,7 +50,56 @@ To finish before the feature work below:
 
 ## Milestone 2: Artist-level
 
-What a home producer, songwriter or podcaster needs.
+What a home producer, songwriter or podcaster needs to record and mix a song.
+
+### Definition: checked against the real product
+
+"Artist-level" is defined row by row against Avid's published comparison table
+(<https://www.avid.com/pro-tools/comparison>, checked 2026-10-15), plus the everyday
+editing basics that table takes for granted. Every Artist row falls into one of three
+tiers. **Tier 1 is the finish line: when it is done, Milestone 2 is done.** Tiers 2 and 3
+are recorded so nobody adds them by accident.
+
+**Tier 1: must have (the finish line).** Size in feature units (about 1% of a week's AI usage each).
+
+| Feature | In Avid's table | Size | Status |
+|---|---|---|---|
+| Copy, cut, paste and duplicate clips | assumed by every DAW | 2 | to do |
+| Crossfades between clips | assumed | 2 | to do |
+| Nudge (move clips by a step from the keyboard) | assumed | 0.5 | to do |
+| Mix and edit groups | assumed | 3 | to do |
+| MP3 export | Bounce | 1.5 | to do |
+| Strip Silence; batch fades | yes | 2.5 | to do |
+| Folder tracks | yes (32 routing folders) | 3 | to do |
+| Track Freeze and Commit | yes | 2 | to do |
+| Track Presets | yes | 1.5 | to do |
+| Timecode ruler | yes | 0.5 | to do |
+| Retrospective MIDI record | yes | 1 | to do |
+| AAC export | yes | 1 | to do |
+| Playlist lane view | track comping | 2 | to do |
+| Beat Detective (transient detection, groove edits) | yes | 4 | to do |
+| Real-time Elastic Audio with warp markers | yes | 6 | to do (offline stretching is done) |
+
+Launch point: after copy/paste, crossfades, nudge, groups, MP3, Strip Silence and batch
+fades. The rest of Tier 1 ships as public updates.
+
+**Tier 2: worth it after launch, only if users ask.** ARA 2 (Melodyne in the timeline;
+JUCE can host it), Audio-to-MIDI, Ableton Link, a Sketch (clip-launcher) window if
+beatmakers become a target, other MIDI controllers.
+
+**Tier 3: never (useless for Meridian).**
+- Clip FX "playback only": Artist has it only to play sessions made in the higher tiers; Meridian does not open Pro Tools sessions.
+- AAX plug-ins: needs Avid's licence; VST3 (and LV2, AU) cover the same plug-ins.
+- Avid hardware and surfaces (MBOX, MTRX, HDX, S1/S4/S6, Dock, Avid Control/EUCON).
+- Cloud collaboration and storage, Sonic Drop, Inner Circle, bundled third-party software: business services, not software.
+- Sibelius interop: proprietary and niche.
+- Track, input and Aux I/O limits: Meridian has none, so it is already past them.
+- "110+ included plug-ins": a marketing count. Instead, a few essentials Meridian lacks (chorus, saturation, a sampler) when users ask.
+
+Already past Artist: no track limits, gain-reduction meters and Trim automation (higher
+tiers in Avid's table), LUFS/true-peak metering, AI control.
+
+### Done so far
 
 **Editing and workflow**
 - done: clip gain handle and line on audio clips (drag, fine with Shift, double-click for 0 dB)
