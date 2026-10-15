@@ -43,6 +43,8 @@ target_sources(Meridian PRIVATE
     model/Automation.h
     model/ConsolePresets.cpp
     model/ConsolePresets.h
+    model/EditClipboard.cpp
+    model/EditClipboard.h
     model/MidiModel.cpp
     model/MidiModel.h
     model/Playlists.cpp

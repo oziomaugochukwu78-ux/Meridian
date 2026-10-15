@@ -26,6 +26,10 @@ enum : juce::CommandID
     elasticAudio,
     zoomIn,
     zoomOut,
+    cutSelection,
+    copySelection,
+    pasteClipboard,
+    duplicateSelection,
 
     // Tools and modes
     slipMode = 0x12100,

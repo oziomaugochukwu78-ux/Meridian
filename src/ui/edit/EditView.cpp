@@ -317,7 +317,7 @@ void EditView::splitTracksAtSelection()
     }
 }
 
-void EditView::deleteSelection()
+void EditView::deleteSelection (const juce::String& actionName)
 {
     auto* session = app.getSession();
     if (session == nullptr)
@@ -329,7 +329,7 @@ void EditView::deleteSelection()
 
     if (state.selectedClip.isValid() && state.selectedClip.getParent().isValid())
     {
-        um.beginNewTransaction ("Delete Clip");
+        um.beginNewTransaction (actionName.isNotEmpty() ? actionName : juce::String ("Delete Clip"));
         auto c = state.selectedClip;
         state.selectClip ({});
         if (shuffling)
@@ -343,7 +343,7 @@ void EditView::deleteSelection()
         return;
 
     // One undo step: split at the selection edges, then remove what lies inside.
-    um.beginNewTransaction ("Clear Selection");
+    um.beginNewTransaction (actionName.isNotEmpty() ? actionName : juce::String ("Clear Selection"));
     splitTracksAtSelection();
     for (auto t : tracksForEdit())
     {
@@ -356,6 +356,99 @@ void EditView::deleteSelection()
         if (shuffling)
             shuffle::closeRange (t, state.selectionStart, state.selectionEnd, &um);
     }
+}
+
+bool EditView::hasSelectionToCopy() const
+{
+    if (state.selectedClip.isValid() && state.selectedClip.getParent().isValid())
+        return true;
+    return state.hasTimeRange() && ! tracksForEdit().isEmpty();
+}
+
+void EditView::copySelection()
+{
+    if (app.getSession() == nullptr)
+        return;
+    if (state.selectedClip.isValid() && state.selectedClip.getParent().isValid())
+        clipboardContents = clipboard::copyClip (state.selectedClip);
+    else if (state.hasTimeRange())
+        clipboardContents = clipboard::copyRange (tracksForEdit(), state.selectionStart, state.selectionEnd);
+}
+
+void EditView::cutSelection()
+{
+    if (! hasSelectionToCopy())
+        return;
+    copySelection();
+    deleteSelection ("Cut");
+}
+
+void EditView::pasteClipboard()
+{
+    auto* session = app.getSession();
+    if (session == nullptr || clipboardContents.isEmpty())
+        return;
+
+    juce::int64 at = app.getEngine().getTransport().getPosition();
+    juce::Array<juce::ValueTree> targets;
+    if (state.selectedClip.isValid() && state.selectedClip.getParent().isValid())
+    {
+        at = clip::start (state.selectedClip);
+        targets.add (clip::owningTrack (state.selectedClip));
+    }
+    else
+    {
+        // The insertion point: where the user clicked (a selection, even of no length).
+        if (state.hasTimeRange() || ! state.selectedTrackIds.isEmpty())
+            at = state.selectionStart;
+        targets = tracksForEdit();
+    }
+    // Nothing selected: back onto the tracks it was copied from.
+    if (targets.isEmpty())
+        for (const auto& lane : clipboardContents.lanes)
+            if (auto t = session->getTrackById (lane.sourceTrackId); t.isValid())
+                targets.add (t);
+    pasteContents (clipboardContents, targets, at, "Paste");
+}
+
+void EditView::duplicateSelection()
+{
+    if (app.getSession() == nullptr || ! hasSelectionToCopy())
+        return;
+    if (state.selectedClip.isValid() && state.selectedClip.getParent().isValid())
+        pasteContents (clipboard::copyClip (state.selectedClip), { clip::owningTrack (state.selectedClip) },
+                       clip::end (state.selectedClip), "Duplicate");
+    else
+        pasteContents (clipboard::copyRange (tracksForEdit(), state.selectionStart, state.selectionEnd), tracksForEdit(),
+                       state.selectionEnd, "Duplicate");
+}
+
+void EditView::pasteContents (const clipboard::Contents& contents, juce::Array<juce::ValueTree> targets, juce::int64 at,
+                              const juce::String& actionName)
+{
+    auto* session = app.getSession();
+    if (session == nullptr || contents.isEmpty() || targets.isEmpty())
+        return;
+    auto& um = session->getUndoManager();
+    um.beginNewTransaction (actionName);
+    const bool wasClip = state.selectedClip.isValid();
+    const auto result = clipboard::paste (*session, contents, targets, at, state.mode == EditMode::shuffle, &um);
+
+    if (result.clipsPasted == 0 && result.lanesSkipped > 0)
+    {
+        if (app.showProblem)
+            app.showProblem (actionName, "Audio clips go on audio tracks and MIDI clips on instrument tracks. "
+                                         "Select a track of the right kind and paste again.");
+        return;
+    }
+
+    // Select what was pasted, so a repeat lays the next copy after it.
+    state.setTimeSelection (at, at + contents.length, result.trackIds);
+    if (wasClip && result.trackIds.size() == 1)
+        if (auto t = session->getTrackById (result.trackIds[0]); t.isValid())
+            for (const auto& c : track::clips (t))
+                if (clip::start (c) == at && clip::length (c) == contents.length)
+                    state.selectClip (c);
 }
 
 void EditView::openElasticDialog (juce::ValueTree c)

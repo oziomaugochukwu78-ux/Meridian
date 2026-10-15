@@ -133,6 +133,7 @@ private:
     void testPianoRoll();
     void testPlaylistSelector();
     void testEditModes();
+    void testClipboard();
     void testAutomationLanes();
     void testMixSections();
     void testTempoRuler();

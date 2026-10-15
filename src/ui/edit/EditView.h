@@ -8,6 +8,7 @@
 #include "TrackLane.h"
 
 #include "app/AppController.h"
+#include "model/EditClipboard.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -39,7 +40,20 @@ public:
 
     // Edit commands (invoked from menus and shortcuts)
     void separateAtSelection();
-    void deleteSelection();
+    /** actionName: the undo step's name ("Cut"); default "Delete Clip" or "Clear Selection". */
+    void deleteSelection (const juce::String& actionName = {});
+    /** Cut, Copy, Paste: the selected clip, or the selected time range on the
+        selected tracks. Paste goes to the selection start (or the cursor) on the
+        selected tracks, replacing what is there (Shuffle: inserting), and
+        selects what it pasted. */
+    void cutSelection();
+    void copySelection();
+    void pasteClipboard();
+    /** Duplicate: a copy of the selection right after it, then selected, so
+        repeating it lays copies end to end. Leaves the clipboard alone. */
+    void duplicateSelection();
+    bool hasSelectionToCopy() const;
+    const clipboard::Contents& getClipboard() const noexcept { return clipboardContents; }
     void openElasticDialog (juce::ValueTree clip);
     void zoomBy (double factor);
 
@@ -72,9 +86,11 @@ private:
     juce::ValueTree trackAtScreenPosition (juce::Point<int> screenPosition) const;
     juce::Array<juce::ValueTree> tracksForEdit() const;
     void splitTracksAtSelection(); // within the caller's undo transaction
+    void pasteContents (const clipboard::Contents&, juce::Array<juce::ValueTree> targets, juce::int64 at, const juce::String& actionName);
 
     AppController& app;
     EditState state;
+    clipboard::Contents clipboardContents;
 
     EditToolbar toolbar { state };
     TimelineRuler ruler { state };

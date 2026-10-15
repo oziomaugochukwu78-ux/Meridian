@@ -4211,6 +4211,7 @@ void SelfTest::timerCallback()
                     testPianoRoll();
                     testPlaylistSelector();
                     testEditModes();
+                    testClipboard();
                     testAutomationLanes();
                     testMixSections();
                     testTempoRuler();
@@ -4237,6 +4238,7 @@ void SelfTest::timerCallback()
                 testPianoRoll();
                 testPlaylistSelector();
                 testEditModes();
+                testClipboard();
                 testAutomationLanes();
                 testMixSections();
                 testTempoRuler();
@@ -4937,6 +4939,137 @@ void SelfTest::testPlaylistSelector()
 // Shuffle and Spot edit modes, with the simulated mouse. Three clips butted
 // together, A [0.5 s, 1 s), B [1 s, 1.5 s), C [1.5 s, 2 s), and a volume
 // breakpoint inside C at 1.6 s, so every check is an exact sample position.
+
+void SelfTest::testClipboard()
+{
+    beginGroup ("Edit window: Cut, Copy, Paste and Duplicate");
+    auto* session = app.getSession();
+    auto& um = session->getUndoManager();
+    auto& editView = main.getEditView();
+    auto& view = editView.getEditState();
+    auto& commands = main.getCommandManager();
+    main.showWindow (WindowKind::edit);
+
+    clearTracks();
+    const auto tone = media.getChildFile ("tone1k_mono.wav");
+    auto a = session->addTrack ("Copy From", 1, nullptr);
+    auto b = session->addTrack ("Copy To", 1, nullptr);
+    auto keys = session->addTrack ("Copy Keys", 2, nullptr, Session::TrackKind::instrument);
+    auto source = session->addClip (a, tone, 24000, 0, 48000, 96000, "Tone", nullptr);
+    auto laneA = automation::getOrCreateVolumeLane (a, nullptr);
+    automation::addPoint (laneA, 0, -6.0, nullptr);
+    automation::addPoint (laneA, 200000, -6.0, nullptr);
+    um.clearUndoHistory();
+    commands.invokeDirectly (commands::slipMode, false);
+
+    auto clipsOf = [] (const juce::ValueTree& t)
+    {
+        juce::Array<juce::ValueTree> sorted;
+        for (const auto& c : track::clips (t))
+            sorted.add (c);
+        std::sort (sorted.begin(), sorted.end(), [] (const juce::ValueTree& x, const juce::ValueTree& y) { return clip::start (x) < clip::start (y); });
+        juce::String s;
+        for (const auto& c : sorted)
+            s << clip::start (c) << "+" << clip::length (c) << "@" << clip::offset (c) << " ";
+        return s.trim();
+    };
+    // Largest sample difference between two stretches of a bounce (channel 0).
+    auto difference = [] (const juce::AudioBuffer<float>& x, int fromA, int fromB, int count)
+    {
+        double worst = 0.0;
+        for (int i = 0; i < count; ++i)
+            worst = std::max (worst, (double) std::abs (x.getSample (0, fromA + i) - x.getSample (0, fromB + i)));
+        return worst;
+    };
+
+    // Copy 12000 samples from the middle of the clip; paste them on another track.
+    view.setTimeSelection (36000, 48000, { track::id (a) });
+    expect ("Copy is enabled with a time selection", editView.hasSelectionToCopy(), {});
+    commands.invokeDirectly (commands::copySelection, false);
+    const auto& copied = editView.getClipboard();
+    expect ("Copy (Ctrl+C) holds the 12000-sample span: one clip, trimmed (source offset 12000), with its automation",
+            copied.length == 12000 && copied.lanes.size() == 1 && copied.lanes[0].clips.size() == 1
+                && clip::offset (copied.lanes[0].clips[0]) == 12000 && copied.lanes[0].automation.getNumChildren() == 1,
+            juce::String (copied.length) + " samples, " + juce::String ((int) copied.lanes.size()) + " lanes");
+
+    view.setTimeSelection (96000, 100000, { track::id (b) });
+    commands.invokeDirectly (commands::pasteClipboard, false);
+    const auto bLane = automation::points (automation::volumeLane (b));
+    expect ("Paste (Ctrl+V) puts the clip at the selection start on the selected track, and selects it",
+            clipsOf (b) == "96000+12000@12000" && view.selectionStart == 96000 && view.selectionEnd == 108000
+                && um.getUndoDescription() == "Paste",
+            clipsOf (b) + "; selection " + juce::String (view.selectionStart) + ".." + juce::String (view.selectionEnd));
+    expect ("the automation comes too (-6 dB inside), and the fader's 0 dB still plays outside it",
+            std::abs (automation::valueAt (bLane, 100000) + 6.0) < 1.0e-9 && std::abs (automation::valueAt (bLane, 90000)) < 1.0e-9
+                && std::abs (automation::valueAt (bLane, 120000)) < 1.0e-9,
+            fmt (automation::valueAt (bLane, 90000)) + " / " + fmt (automation::valueAt (bLane, 100000)) + " / "
+                + fmt (automation::valueAt (bLane, 120000)) + " dB");
+    setConsole (false);
+    auto mix = readAudio (bounce ("clipboard_paste", 0, 130000).file);
+    const double pasteError = difference (mix, 36000 + 2400, 96000 + 2400, 12000 - 4800);
+    expect ("and it plays exactly what was copied (the pasted stretch nulls against the original)", pasteError < 1.0e-6,
+            "largest difference " + juce::String (pasteError));
+    um.undo();
+    expect ("one undo removes the pasted clip and its automation",
+            track::clips (b).getNumChildren() == 0 && automation::points (automation::volumeLane (b)).empty(), clipsOf (b));
+
+    // Duplicate a clip twice: copies laid end to end, the clipboard untouched.
+    view.selectClip (source);
+    commands.invokeDirectly (commands::duplicateSelection, false);
+    commands.invokeDirectly (commands::duplicateSelection, false);
+    expect ("Duplicate (Ctrl+D) twice lays two copies end to end after the clip",
+            clipsOf (a) == "24000+48000@0 72000+48000@0 120000+48000@0", clipsOf (a));
+    expect ("Duplicate leaves the clipboard alone", editView.getClipboard().length == 12000, {});
+    um.undo();
+    um.undo();
+    expect ("two undos take both copies away", clipsOf (a) == "24000+48000@0", clipsOf (a));
+
+    // Cut in Shuffle mode closes the gap; pasting it back in Shuffle restores the audio exactly.
+    const auto before = readAudio (bounce ("clipboard_before_cut", 0, 80000).file);
+    commands.invokeDirectly (commands::shuffleMode, false);
+    view.setTimeSelection (36000, 48000, { track::id (a) });
+    commands.invokeDirectly (commands::cutSelection, false);
+    expect ("Cut (Ctrl+X) in Shuffle removes the span and closes the gap",
+            clipsOf (a) == "24000+12000@0 36000+24000@24000" && um.getUndoDescription() == "Cut", clipsOf (a));
+    view.setTimeSelection (36000, 36000, { track::id (a) });
+    app.locate (36000);
+    commands.invokeDirectly (commands::pasteClipboard, false);
+    expect ("Paste in Shuffle inserts it, moving what follows right",
+            clipsOf (a) == "24000+12000@0 36000+12000@12000 48000+24000@24000", clipsOf (a));
+    const auto after = readAudio (bounce ("clipboard_after_paste", 0, 80000).file);
+    double againstBefore = 0.0;
+    for (int i = 0; i < before.getNumSamples() && i < after.getNumSamples(); ++i)
+        againstBefore = std::max (againstBefore, (double) std::abs (after.getSample (0, i) - before.getSample (0, i)));
+    expect ("cut then paste in Shuffle puts the audio back sample for sample", againstBefore < 1.0e-6 && after.getNumSamples() == before.getNumSamples(),
+            "largest difference " + juce::String (againstBefore));
+    setConsole (true, 6.0, 0.35);
+    commands.invokeDirectly (commands::slipMode, false);
+
+    // Audio does not go onto an instrument track.
+    juce::StringArray problems;
+    const auto previousHandler = app.showProblem;
+    app.showProblem = [&problems] (const juce::String& title, const juce::String& message) { problems.add (title + ": " + message); };
+    view.setTimeSelection (0, 1000, { track::id (keys) });
+    commands.invokeDirectly (commands::pasteClipboard, false);
+    app.showProblem = previousHandler;
+    expect ("pasting audio onto an instrument track is refused with an explanation",
+            track::clips (keys).getNumChildren() == 0 && problems.size() == 1 && problems[0].contains ("instrument tracks"),
+            problems.joinIntoString (" | "));
+
+    // Two tracks at once: the copy keeps their order.
+    session->addClip (b, tone, 0, 0, 24000, 96000, "Other", nullptr);
+    view.setTimeSelection (0, 30000, { track::id (a), track::id (b) });
+    commands.invokeDirectly (commands::copySelection, false);
+    view.setTimeSelection (150000, 150000, { track::id (a) });
+    app.locate (150000);
+    commands.invokeDirectly (commands::pasteClipboard, false);
+    expect ("a two-track copy pasted onto the upper track fills it and the one below, in order",
+            clipsOf (a).endsWith ("174000+6000@0") && clipsOf (b).endsWith ("150000+24000@0"),
+            clipsOf (a) + " | " + clipsOf (b));
+    expect ("a session with pasted clips is valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+    view.clearSelection();
+    clearTracks();
+}
 
 void SelfTest::testEditModes()
 {

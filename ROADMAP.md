@@ -64,7 +64,7 @@ are recorded so nobody adds them by accident.
 
 | Feature | In Avid's table | Size | Status |
 |---|---|---|---|
-| Copy, cut, paste and duplicate clips | assumed by every DAW | 2 | to do |
+| Copy, cut, paste and duplicate clips | assumed by every DAW | 2 | done (with automation; Shuffle inserts; multi-track) |
 | Crossfades between clips | assumed | 2 | to do |
 | Nudge (move clips by a step from the keyboard) | assumed | 0.5 | to do |
 | Mix and edit groups | assumed | 3 | to do |

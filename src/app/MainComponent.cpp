@@ -314,7 +314,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& c)
 {
     using namespace commands;
     c.addArray ({ dashboard, openSession, saveSession, saveSessionAs, importAudio, bounceMix,
-                  undo, redo, separateClip, deleteSelection, elasticAudio, zoomIn, zoomOut,
+                  undo, redo, cutSelection, copySelection, pasteClipboard, duplicateSelection, separateClip, deleteSelection, elasticAudio, zoomIn, zoomOut,
                   shuffleMode, slipMode, spotMode, gridMode, trimTool, selectorTool, grabberTool, smartTool, pencilTool,
                   newTracks, deleteTrack,
                   playStop, record, returnToZero, loopPlayback, punchRecording, clickToggle, countInOff, countIn1Bar, countIn2Bars, addMarker,
@@ -366,6 +366,14 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setActive (um != nullptr && um->canRedo());
             break;
         }
+        case cutSelection:     info.setInfo ("Cut", "Cut the selected clip or time range to the clipboard", "Edit", 0);
+                               info.addDefaultKeypress ('x', cmd); info.setActive (hasSession && editView.hasSelectionToCopy()); break;
+        case copySelection:    info.setInfo ("Copy", "Copy the selected clip or time range (with its automation)", "Edit", 0);
+                               info.addDefaultKeypress ('c', cmd); info.setActive (hasSession && editView.hasSelectionToCopy()); break;
+        case pasteClipboard:   info.setInfo ("Paste", "Paste at the selection or cursor (Shuffle mode: insert)", "Edit", 0);
+                               info.addDefaultKeypress ('v', cmd); info.setActive (hasSession && ! editView.getClipboard().isEmpty()); break;
+        case duplicateSelection: info.setInfo ("Duplicate", "Put a copy of the selection right after it", "Edit", 0);
+                               info.addDefaultKeypress ('d', cmd); info.setActive (hasSession && editView.hasSelectionToCopy()); break;
         case separateClip:     info.setInfo ("Separate Clip", "Split clips at the selection or cursor", "Edit", 0);
                                info.addDefaultKeypress ('e', cmd); info.setActive (hasSession); break;
         case deleteSelection:  info.setInfo ("Delete", "Delete the selected clip or time range", "Edit", 0);
@@ -483,6 +491,10 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         case undo:            if (auto* um = app.getUndoManager()) um->undo(); break;
         case redo:            if (auto* um = app.getUndoManager()) um->redo(); break;
+        case cutSelection:    editView.cutSelection(); break;
+        case copySelection:   editView.copySelection(); break;
+        case pasteClipboard:  editView.pasteClipboard(); break;
+        case duplicateSelection: editView.duplicateSelection(); break;
         case separateClip:    editView.separateAtSelection(); break;
         case deleteSelection: editView.deleteSelection(); break;
         case elasticAudio:    editView.openElasticDialog ({}); break;
@@ -623,6 +635,8 @@ juce::PopupMenu MainComponent::getMenuForIndex (int index, const juce::String&)
         case 1:
         {
             add (undo); add (redo);
+            menu.addSeparator();
+            add (cutSelection); add (copySelection); add (pasteClipboard); add (duplicateSelection);
             menu.addSeparator();
             add (separateClip); add (deleteSelection);
             menu.addSeparator();
