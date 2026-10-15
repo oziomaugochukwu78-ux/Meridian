@@ -91,13 +91,17 @@ public:
     /** The keyboard's sustain pedal (CC 64), timed and routed like its notes. */
     void pushLiveSustain (bool down, double timeSeconds) noexcept;
 
+    /** The keyboard's pitch wheel (midi::pitchBend, -1..+1) or mod wheel
+        (midi::modWheel, 0..1), timed and routed like its notes. */
+    void pushLiveControl (int control, float value, double timeSeconds) noexcept;
+
     /** A note captured on a record-armed instrument track while recording, at
         the timeline sample where it was played into the engine. */
     struct RecordedMidi
     {
         int trackId = 0;
         juce::int64 time = 0;
-        int pitch = 60;         ///< or midi::sustainPedal (on = pedal down)
+        int pitch = 60;         ///< or midi::sustainPedal (on = pedal down), midi::pitchBend or midi::modWheel (velocity = value)
         float velocity = 0.0f;
         bool on = false;
     };

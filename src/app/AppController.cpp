@@ -543,9 +543,9 @@ juce::StringArray AppController::getOpenMidiInputs() const
 
 void AppController::handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& message)
 {
-    // MIDI device thread. Notes and the sustain pedal (CC 64: 64 and above is down);
-    // other controllers are not used yet. JUCE stamps incoming messages in
-    // Time::getMillisecondCounter() seconds.
+    // MIDI device thread. Notes, the sustain pedal (CC 64: 64 and above is down),
+    // the pitch wheel and the mod wheel (CC 1); other controllers are not used yet.
+    // JUCE stamps incoming messages in Time::getMillisecondCounter() seconds.
     if (message.isNoteOn())
         engine.pushLiveMidi (message.getNoteNumber(), message.getFloatVelocity(), true, message.getTimeStamp());
     else if (message.isNoteOff())
@@ -554,6 +554,16 @@ void AppController::handleIncomingMidiMessage (juce::MidiInput*, const juce::Mid
         engine.pushLiveSustain (true, message.getTimeStamp());
     else if (message.isSustainPedalOff())
         engine.pushLiveSustain (false, message.getTimeStamp());
+    else if (message.isPitchWheel())
+    {
+        // 14-bit, 8192 = centre: both ends map to exactly -1 and +1.
+        const int offset = message.getPitchWheelValue() - 8192;
+        engine.pushLiveControl (midi::pitchBend, (float) offset / (offset >= 0 ? 8191.0f : 8192.0f), message.getTimeStamp());
+    }
+    else if (message.isControllerOfType (1))
+    {
+        engine.pushLiveControl (midi::modWheel, (float) message.getControllerValue() / 127.0f, message.getTimeStamp());
+    }
 }
 
 void AppController::returnToZero()

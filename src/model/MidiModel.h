@@ -39,6 +39,16 @@ std::vector<midi::PedalRange> readSustain (const juce::ValueTree& clip);
 /** Replaces a MIDI clip's sustain-pedal ranges (undoable); normalises them first. */
 void writeSustain (juce::ValueTree clip, const std::vector<midi::PedalRange>&, juce::UndoManager*);
 
+/** The wheels: midi::pitchBend (values -1..+1) or midi::modWheel (0..1). */
+juce::Identifier controlNodeType (int control);
+float controlLow (int control);
+
+/** A MIDI clip's pitch-wheel or mod-wheel moves (normalised; empty if none). */
+std::vector<midi::ControlPoint> readControl (const juce::ValueTree& clip, int control);
+
+/** Replaces them (undoable); normalises them first. */
+void writeControl (juce::ValueTree clip, int control, const std::vector<midi::ControlPoint>&, juce::UndoManager*);
+
 /** An instrument track's SYNTH node as synth parameters (defaults for missing values). */
 synth::PolySynth::Params readSynthParams (const juce::ValueTree& synthNode);
 

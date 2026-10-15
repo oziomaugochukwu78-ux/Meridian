@@ -95,4 +95,36 @@ std::vector<PedalRange> normalisedPedal (std::vector<PedalRange> ranges)
     return merged;
 }
 
+std::vector<ControlPoint> normalisedControl (std::vector<ControlPoint> points, float low, float high)
+{
+    for (auto& p : points)
+    {
+        p.tick = std::max<int64_t> (0, p.tick);
+        p.value = std::isfinite (p.value) ? std::clamp (p.value, low, high) : 0.0f;
+    }
+    std::stable_sort (points.begin(), points.end(), [] (const ControlPoint& a, const ControlPoint& b) { return a.tick < b.tick; });
+
+    std::vector<ControlPoint> unique;
+    for (const auto& p : points)
+    {
+        if (! unique.empty() && unique.back().tick == p.tick)
+            unique.back() = p; // the later one wins
+        else
+            unique.push_back (p);
+    }
+    return unique;
+}
+
+float controlValueAt (const std::vector<ControlPoint>& points, int64_t tick, float rest) noexcept
+{
+    float value = rest;
+    for (const auto& p : points)
+    {
+        if (p.tick > tick)
+            break;
+        value = p.value;
+    }
+    return value;
+}
+
 } // namespace meridian::midi

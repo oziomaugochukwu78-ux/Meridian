@@ -111,6 +111,7 @@ private:
     void testTempoAndMeter();
     void testPluginInstrument();
     void testSustainPedal();
+    void testPitchAndModWheels();
     void testStress();
     void testRobustness();
     void testDamagedSessions (const juce::File& originalSession);

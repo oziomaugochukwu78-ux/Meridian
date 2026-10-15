@@ -109,3 +109,19 @@ TEST_CASE ("Transpose shifts pitches and keeps them in range", "[notes]")
     s.transpose (-200);
     CHECK (std::all_of (s.getNotes().begin(), s.getNotes().end(), [] (const Note& n) { return n.pitch == 0; }));
 }
+
+TEST_CASE ("Control points: sorted, clamped, one per tick (the last wins), and read back as steps", "[notes]")
+{
+    const auto points = normalisedControl ({ { 960, 0.5f }, { -10, -3.0f }, { 480, 0.25f }, { 960, 0.75f } }, -1.0f, 1.0f);
+    REQUIRE (points.size() == 3);
+    CHECK (points[0].tick == 0);
+    CHECK (points[0].value == -1.0f);
+    CHECK (points[1].tick == 480);
+    CHECK (points[2].tick == 960);
+    CHECK (points[2].value == 0.75f);
+
+    CHECK (controlValueAt (points, 479, 0.0f) == -1.0f);
+    CHECK (controlValueAt (points, 480, 0.0f) == 0.25f);
+    CHECK (controlValueAt (points, 5000, 0.0f) == 0.75f);
+    CHECK (controlValueAt ({}, 100, 0.5f) == 0.5f);
+}

@@ -86,7 +86,7 @@ struct PathDelay
 struct MidiEvent
 {
     juce::int64 time = 0;
-    int pitch = 60;     ///< or midi::sustainPedal (on = pedal down)
+    int pitch = 60;     ///< or midi::sustainPedal (on = pedal down), midi::pitchBend or midi::modWheel (velocity = value)
     float velocity = 0.0f;
     bool on = false;
 };

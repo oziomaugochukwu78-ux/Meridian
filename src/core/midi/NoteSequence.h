@@ -81,4 +81,24 @@ struct PedalRange
     overlapping or touching ranges merged (the pedal is either down or up). */
 std::vector<PedalRange> normalisedPedal (std::vector<PedalRange>);
 
+/** In the same event streams, the pitch wheel and the mod wheel (MIDI CC 1).
+    The event's velocity carries the value: -1..+1 for the pitch wheel (0 =
+    centre), 0..1 for the mod wheel. */
+inline constexpr int pitchBend = -2;
+inline constexpr int modWheel = -3;
+
+/** A controller value from `tick` on (it holds until the next point). */
+struct ControlPoint
+{
+    int64_t tick = 0;
+    float value = 0.0f;
+};
+
+/** Sorted by tick, ticks at or after zero, values clamped to [low, high], and one
+    point per tick (the last one given wins). */
+std::vector<ControlPoint> normalisedControl (std::vector<ControlPoint>, float low, float high);
+
+/** The value at `tick`: the last point at or before it, or `rest` before the first. */
+float controlValueAt (const std::vector<ControlPoint>& normalised, int64_t tick, float rest) noexcept;
+
 } // namespace meridian::midi

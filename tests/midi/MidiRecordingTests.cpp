@@ -90,3 +90,20 @@ TEST_CASE ("MIDI recording: events outside the take are clamped into it; a take 
     CHECK (take.notes[0].start == 0);
     CHECK (take.notes[0].length == 1880); // 47000 samples
 }
+
+TEST_CASE ("MIDI recording: pitch-wheel and mod-wheel moves become control points on the meant ticks", "[midirec]")
+{
+    const int64_t late = 1000;
+    const auto take = buildTake ({ on (24000 + late, 60), { 36000 + late, pitchBend, 1.0f, true }, { 48000 + late, pitchBend, 0.0f, true },
+                                   { 36000 + late, modWheel, 0.25f, true }, { 42000 + late, modWheel, 2.0f, true }, off (60000 + late, 60) },
+                                 late, 96000 + late, late, tempo120, rate);
+    REQUIRE (take.pitchBend.size() == 2);
+    CHECK (take.pitchBend[0].tick == 1440);
+    CHECK (take.pitchBend[0].value == 1.0f);
+    CHECK (take.pitchBend[1].tick == 1920);
+    CHECK (take.pitchBend[1].value == 0.0f);
+    REQUIRE (take.modWheel.size() == 2);
+    CHECK (take.modWheel[0].tick == 1440);
+    CHECK (take.modWheel[1].value == 1.0f); // clamped into 0..1
+    CHECK (take.notes.size() == 1);
+}

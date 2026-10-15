@@ -22,11 +22,17 @@ double decibelsToGain (double db) noexcept
     return db <= silenceDb ? 0.0 : std::pow (10.0, db / 20.0);
 }
 
-/** A note or the sustain pedal (CC 64, 127 down / 0 up) as a MIDI message on channel 1. */
+/** A note, the sustain pedal (CC 64, 127 down / 0 up), the pitch wheel (14-bit,
+    8192 = centre; the value is in velocity) or the mod wheel (CC 1) as a MIDI
+    message on channel 1. */
 juce::MidiMessage toMidiMessage (int pitch, float velocity, bool on) noexcept
 {
     if (pitch == midi::sustainPedal)
         return juce::MidiMessage::controllerEvent (1, 64, on ? 127 : 0);
+    if (pitch == midi::pitchBend)
+        return juce::MidiMessage::pitchWheel (1, juce::jlimit (0, 16383, 8192 + juce::roundToInt (velocity * (velocity >= 0.0f ? 8191.0f : 8192.0f))));
+    if (pitch == midi::modWheel)
+        return juce::MidiMessage::controllerEvent (1, 1, juce::jlimit (0, 127, juce::roundToInt (velocity * 127.0f)));
     return on ? juce::MidiMessage::noteOn (1, pitch, velocity) : juce::MidiMessage::noteOff (1, pitch);
 }
 
@@ -192,6 +198,15 @@ void AudioEngine::pushLiveSustain (bool down, double timeSeconds) noexcept
 {
     const juce::SpinLock::ScopedLockType producers (liveMidiProducers);
     liveMidiIn.push ({ midi::sustainPedal, 0.0f, down, timeSeconds });
+}
+
+void AudioEngine::pushLiveControl (int control, float value, double timeSeconds) noexcept
+{
+    if (control != midi::pitchBend && control != midi::modWheel)
+        return;
+    const float low = control == midi::pitchBend ? -1.0f : 0.0f;
+    const juce::SpinLock::ScopedLockType producers (liveMidiProducers);
+    liveMidiIn.push ({ control, juce::jlimit (low, 1.0f, value), true, timeSeconds });
 }
 
 void AudioEngine::drainLiveMidi (int numSamples) noexcept
@@ -667,6 +682,10 @@ void AudioEngine::renderInstrument (TrackRender& t, const BlockContext& ctx) noe
             {
                 if (pitch == midi::sustainPedal)
                     engineObject.setSustain (on);
+                else if (pitch == midi::pitchBend)
+                    engineObject.setPitchBend (velocity);
+                else if (pitch == midi::modWheel)
+                    engineObject.setModWheel (velocity);
                 else if (on)
                     engineObject.noteOn (pitch, velocity);
                 else

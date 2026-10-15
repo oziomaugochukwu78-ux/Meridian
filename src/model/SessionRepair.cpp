@@ -33,6 +33,30 @@ bool sustainIsValid (const juce::ValueTree& list)
     return true;
 }
 
+/** A PITCHBEND or MODWHEEL list as midimodel::writeControl leaves it: CCs only,
+    from tick zero on, strictly increasing ticks, finite values in [low, 1]. */
+bool controlIsValid (const juce::ValueTree& list, double low)
+{
+    juce::int64 previous = -1;
+    for (const auto& p : list)
+    {
+        if (! p.hasType (ids::CC) || ! p.hasProperty (ids::start) || ! p.hasProperty (ids::value))
+            return false;
+        const auto start = (juce::int64) p[ids::start];
+        const double value = p[ids::value];
+        if (start < 0 || start <= previous || ! std::isfinite (value) || value < low || value > 1.0)
+            return false;
+        previous = start;
+    }
+    return true;
+}
+
+/** midi::pitchBend or midi::modWheel for a PITCHBEND / MODWHEEL list, else 0. */
+int controlOf (const juce::ValueTree& list)
+{
+    return list.hasType (ids::PITCHBEND) ? midi::pitchBend : list.hasType (ids::MODWHEEL) ? midi::modWheel : 0;
+}
+
 class Repairer
 {
 public:
@@ -323,11 +347,25 @@ private:
 
     void repairNotes (juce::ValueTree c, const juce::String& where)
     {
-        // Exactly one NOTES list, holding only valid NOTEs; at most one SUSTAIN list.
-        juce::ValueTree list, sustain;
+        // Exactly one NOTES list, holding only valid NOTEs; at most one SUSTAIN list,
+        // and at most one PITCHBEND and one MODWHEEL list.
+        juce::ValueTree list, sustain, wheels[2];
         for (int i = 0; i < c.getNumChildren(); ++i)
         {
-            if (c.getChild (i).hasType (ids::SUSTAIN))
+            if (const int control = controlOf (c.getChild (i)); control != 0)
+            {
+                auto& kept = wheels[control == midi::pitchBend ? 0 : 1];
+                if (kept.isValid())
+                {
+                    note (where, "removed a duplicate <" + c.getChild (i).getType().toString() + "> list");
+                    c.removeChild (i--, nullptr);
+                }
+                else
+                {
+                    kept = c.getChild (i);
+                }
+            }
+            else if (c.getChild (i).hasType (ids::SUSTAIN))
             {
                 if (sustain.isValid())
                 {
@@ -362,6 +400,19 @@ private:
             {
                 note (where, "sorted and merged the sustain-pedal ranges");
                 midimodel::writeSustain (c, midimodel::readSustain (c), nullptr);
+            }
+        }
+        for (const int control : { midi::pitchBend, midi::modWheel })
+        {
+            auto wheel = wheels[control == midi::pitchBend ? 0 : 1];
+            if (! wheel.isValid())
+                continue;
+            // Sorted, one point per tick, values in range: rewrite the list if it is not.
+            removeChildrenNotOfType (wheel, ids::CC, where);
+            if (! controlIsValid (wheel, midimodel::controlLow (control)))
+            {
+                note (where, "sorted and clamped the " + juce::String (control == midi::pitchBend ? "pitch-wheel" : "mod-wheel") + " moves");
+                midimodel::writeControl (c, control, midimodel::readControl (c, control), nullptr);
             }
         }
 
@@ -781,9 +832,16 @@ juce::String findSessionProblem (const Session& session)
             if (clip::isMidi (c) != instrument)             return clipName + " is the wrong kind of clip for its track";
             if (clip::isMidi (c))
             {
-                int lists = 0, sustainLists = 0;
+                int lists = 0, sustainLists = 0, bendLists = 0, modLists = 0;
                 for (const auto& child : c)
                 {
+                    if (const int control = controlOf (child); control != 0)
+                    {
+                        ++(control == midi::pitchBend ? bendLists : modLists);
+                        if (! controlIsValid (child, midimodel::controlLow (control)))
+                            return clipName + " has invalid " + (control == midi::pitchBend ? "pitch-wheel" : "mod-wheel") + " moves";
+                        continue;
+                    }
                     if (child.hasType (ids::SUSTAIN))
                     {
                         ++sustainLists;
@@ -799,6 +857,8 @@ juce::String findSessionProblem (const Session& session)
                     return clipName + " has " + juce::String (lists) + " <NOTES> lists";
                 if (sustainLists > 1)
                     return clipName + " has " + juce::String (sustainLists) + " <SUSTAIN> lists";
+                if (bendLists > 1 || modLists > 1)
+                    return clipName + " has more than one <PITCHBEND> or <MODWHEEL> list";
                 for (const auto& n : clip::notes (c))
                 {
                     if (! n.hasType (ids::NOTE))

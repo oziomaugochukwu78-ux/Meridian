@@ -89,6 +89,7 @@ void SelfTest::start()
         testTempoAndMeter();
         testPluginInstrument();
         testSustainPedal();
+        testPitchAndModWheels();
         testStress();
         testRobustness(); // before the remote tests: their BOUNCE runs in the background
         testMcpTools();
@@ -2227,6 +2228,97 @@ void SelfTest::testPluginInstrument()
 
 //==============================================================================
 // The sustain pedal: in clips, from the keyboard, recorded, and through the AI tools.
+
+//==============================================================================
+// The pitch wheel and the mod wheel in MIDI clips, through the AI tools, the
+// engine and the built-in synth (a pure sine, so frequencies are exact).
+
+void SelfTest::testPitchAndModWheels()
+{
+    beginGroup ("Pitch wheel and mod wheel");
+    auto& tools = app.getRemoteTools();
+    auto call = [&tools] (const juce::String& tool, const juce::String& arguments) { return tools.call (tool, juce::JSON::parse (arguments)); };
+    auto* session = app.getSession();
+    clearTracks();
+    call ("set_tempo", R"({"bpm":120,"clear_changes":true})");
+    call ("create_track", R"({"kind":"instrument","name":"Wheels"})");
+    call ("set_synth", R"({"track":"Wheels","waveform":"sine","detune_cents":0,"attack":0.001,"sustain":1,"release":0.01,)"
+                       R"("cutoff_hz":20000,"filter_env_octaves":0,"resonance":0})");
+
+    // Clip 1 (beats 0-4): A4 throughout, the wheel up from beat 2. Clip 2 (beats 4-6): A4, no wheel.
+    call ("add_midi_clip", R"({"track":"Wheels","start_beat":0,"length_beats":4,"name":"Bend"})");
+    call ("add_midi_clip", R"({"track":"Wheels","start_beat":4,"length_beats":2,"name":"After"})");
+    const auto added = call ("add_notes", R"({"track":"Wheels","clip":"Bend","notes":[{"pitch":69,"start_beats":0,"length_beats":4,"velocity":1}],)"
+                                          R"("pitch_bend":[{"start_beats":0,"value":0},{"start_beats":2,"value":1}]})");
+    call ("add_notes", R"({"track":"Wheels","clip":"After","notes":[{"pitch":69,"start_beats":0,"length_beats":2,"velocity":1}]})");
+    const auto listed = call ("list_notes", R"({"track":"Wheels","clip":"Bend"})");
+    const auto* bendList = listed.data["pitch_bend"].getArray();
+    expect ("add_notes sets the pitch wheel and list_notes reports it",
+            added.ok && bendList != nullptr && bendList->size() == 2 && juce::exactlyEqual ((double) (*bendList)[1]["start_beats"], 2.0)
+                && juce::exactlyEqual ((double) (*bendList)[1]["value"], 1.0),
+            added.error + juce::JSON::toString (listed.data["pitch_bend"], true));
+
+    const auto audio = readAudio (bounce ("wheels_bend", 0, (juce::int64) (3.0 * sampleRate)).file);
+    auto hzBetween = [&] (const juce::AudioBuffer<float>& a, double from, double to)
+    {
+        const auto start = (int) (from * sampleRate);
+        return dsp::estimateFrequency (a.getReadPointer (0, start), (int) ((to - from) * sampleRate), sampleRate);
+    };
+    const double before = hzBetween (audio, 0.2, 0.9), bent = hzBetween (audio, 1.2, 1.9), after = hzBetween (audio, 2.2, 2.9);
+    const double target = 440.0 * std::exp2 (synth::PolySynth::bendRangeSemitones / 12.0);
+    expect ("the wheel at +1 from beat 2 raises A4 by exactly two semitones (440 -> 493.88 Hz)",
+            std::abs (before - 440.0) < 0.1 && std::abs (bent - target) < 0.1,
+            fmt (before, 2) + " Hz, then " + fmt (bent, 2) + " Hz");
+    expect ("at the clip's end the wheel returns to rest: the next clip's A4 is 440 Hz again",
+            std::abs (after - 440.0) < 0.1, fmt (after, 2) + " Hz");
+
+    // Mod wheel fully up: vibrato of exactly half a semitone either way.
+    call ("add_notes", R"({"track":"Wheels","clip":"Bend","notes":[],"pitch_bend":[],"mod_wheel":[{"start_beats":0,"value":1}]})");
+    const auto vibrato = readAudio (bounce ("wheels_mod", 0, (juce::int64) (2.0 * sampleRate)).file);
+    const float* x = vibrato.getReadPointer (0);
+    double previousCrossing = -1.0, low = 1.0e9, high = 0.0;
+    for (int i = (int) (0.2 * sampleRate); i < (int) (1.9 * sampleRate); ++i)
+        if (x[i - 1] < 0.0f && x[i] >= 0.0f)
+        {
+            const double crossing = (double) (i - 1) + x[i - 1] / (x[i - 1] - x[i]);
+            if (previousCrossing >= 0.0)
+            {
+                low = std::min (low, sampleRate / (crossing - previousCrossing));
+                high = std::max (high, sampleRate / (crossing - previousCrossing));
+            }
+            previousCrossing = crossing;
+        }
+    const double depth = synth::PolySynth::vibratoDepthSemitones;
+    expect ("the mod wheel at 1 gives vibrato of exactly half a semitone either way (427.47 to 452.89 Hz)",
+            std::abs (high - 440.0 * std::exp2 (depth / 12.0)) < 0.3 && std::abs (low - 440.0 * std::exp2 (-depth / 12.0)) < 0.3,
+            fmt (low, 2) + " to " + fmt (high, 2) + " Hz");
+
+    // Saved and reloaded; damaged values repaired.
+    auto bendClip = track::clips (session->getTrack (0)).getChild (0);
+    midimodel::writeControl (bendClip, midi::pitchBend, { { 0, -0.5f }, { 960, 0.25f } }, nullptr);
+    const auto saved = app.saveSession();
+    juce::String error;
+    const auto loaded = saved.wasOk() ? Session::load (session->getSessionFile(), error) : nullptr;
+    const auto reloaded = loaded != nullptr ? midimodel::readControl (track::clips (loaded->getTrack (0)).getChild (0), midi::pitchBend)
+                                            : std::vector<midi::ControlPoint>();
+    expect ("save and reload keep the wheel moves",
+            reloaded.size() == 2 && reloaded[0].value == -0.5f && reloaded[1].tick == 960 && reloaded[1].value == 0.25f,
+            saved.getErrorMessage() + error);
+
+    auto list = bendClip.getChildWithName (ids::PITCHBEND);
+    juce::ValueTree wild (ids::CC);
+    wild.setProperty (ids::start, 480, nullptr);
+    wild.setProperty (ids::value, 5.0, nullptr);
+    list.appendChild (wild, nullptr); // out of range, and out of order
+    const auto problem = findSessionProblem (*session);
+    repairSession (*session);
+    const auto repaired = midimodel::readControl (bendClip, midi::pitchBend);
+    expect ("a damaged pitch-wheel list is found, then sorted and clamped by repair",
+            problem.isNotEmpty() && findSessionProblem (*session).isEmpty() && repaired.size() == 3 && repaired[1].tick == 480
+                && repaired[1].value == 1.0f,
+            problem);
+    clearTracks();
+}
 
 void SelfTest::testSustainPedal()
 {

@@ -54,6 +54,11 @@ RecordedTake buildTake (std::vector<RecordedEvent> events, int64_t recordStart, 
                 liftPedal (at);
             continue;
         }
+        if (e.pitch == pitchBend || e.pitch == modWheel)
+        {
+            (e.pitch == pitchBend ? take.pitchBend : take.modWheel).push_back ({ ticksAt (at), e.velocity });
+            continue;
+        }
         if (e.pitch < 0 || e.pitch > 127)
             continue;
         if (e.on && e.velocity > 0.0f)
@@ -71,6 +76,8 @@ RecordedTake buildTake (std::vector<RecordedEvent> events, int64_t recordStart, 
         close (pitch, clipEnd); // still held when recording stopped
     liftPedal (clipEnd);
     take.sustain = normalisedPedal (std::move (take.sustain));
+    take.pitchBend = normalisedControl (std::move (take.pitchBend), -1.0f, 1.0f);
+    take.modWheel = normalisedControl (std::move (take.modWheel), 0.0f, 1.0f);
 
     std::sort (take.notes.begin(), take.notes.end(), [] (const Note& a, const Note& b)
     {

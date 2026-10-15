@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 using namespace meridian;
@@ -267,4 +268,65 @@ TEST_CASE ("Output is always finite, even at extreme settings", "[synth]")
         s.noteOn (pitch, 1.0f);
     const auto block = render (s, 96000);
     CHECK (std::all_of (block.begin(), block.end(), [] (float x) { return std::isfinite (x); }));
+}
+
+TEST_CASE ("Pitch bend: the wheel's ends are exactly two semitones away, halfway one", "[synth][bend]")
+{
+    for (const auto [amount, semitones] : { std::pair { 1.0f, 2.0 }, std::pair { -1.0f, -2.0 }, std::pair { 0.5f, 1.0 } })
+    {
+        synth::PolySynth s;
+        s.prepare (rate);
+        s.setParams (pureSine());
+        s.noteOn (69, 1.0f);
+        s.setPitchBend (amount);
+        render (s, 4800);
+        const auto block = render (s, 48000);
+        CHECK (dsp::estimateFrequency (block.data(), (int) block.size(), rate) == Approx (440.0 * std::exp2 (semitones / 12.0)).margin (0.03));
+    }
+}
+
+TEST_CASE ("Pitch bend and mod wheel at rest change nothing, to the bit", "[synth][bend]")
+{
+    synth::PolySynth plain, centred;
+    for (auto* s : { &plain, &centred })
+    {
+        s->prepare (rate);
+        s->setParams (pureSine());
+        s->noteOn (64, 0.8f);
+    }
+    centred.setPitchBend (0.0f);
+    centred.setModWheel (0.0f);
+    CHECK (render (plain, 9600) == render (centred, 9600));
+}
+
+TEST_CASE ("Mod wheel: vibrato of exactly half a semitone either way around the note", "[synth][bend]")
+{
+    synth::PolySynth s;
+    s.prepare (rate);
+    s.setParams (pureSine());
+    s.noteOn (69, 1.0f);
+    s.setModWheel (1.0f);
+    render (s, 4800);
+    const auto block = render (s, 96000); // 2 s: 11 vibrato cycles
+
+    // The frequency of every cycle, from upward zero crossings (interpolated).
+    std::vector<double> crossings;
+    for (size_t i = 1; i < block.size(); ++i)
+        if (block[i - 1] < 0.0f && block[i] >= 0.0f)
+            crossings.push_back ((double) (i - 1) + block[i - 1] / (block[i - 1] - block[i]));
+    double low = 1.0e9, high = 0.0;
+    for (size_t k = 1; k < crossings.size(); ++k)
+    {
+        const double hz = rate / (crossings[k] - crossings[k - 1]);
+        low = std::min (low, hz);
+        high = std::max (high, hz);
+    }
+    const double depth = synth::PolySynth::vibratoDepthSemitones;
+    CHECK (high == Approx (440.0 * std::exp2 (depth / 12.0)).margin (0.2));
+    CHECK (low == Approx (440.0 * std::exp2 (-depth / 12.0)).margin (0.2));
+    CHECK (dsp::estimateFrequency (block.data(), (int) block.size(), rate) == Approx (440.0).margin (0.1));
+
+    s.allNotesOff();
+    CHECK (s.getPitchBend() == 0.0f);
+    CHECK (s.getModWheel() == 0.0f);
 }

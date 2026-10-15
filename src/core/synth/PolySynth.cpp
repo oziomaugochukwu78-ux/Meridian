@@ -199,9 +199,20 @@ void PolySynth::setSustain (bool down) noexcept
     pedalDown = down;
 }
 
+void PolySynth::setPitchBend (float amount) noexcept
+{
+    bend = std::isfinite (amount) ? std::clamp (amount, -1.0f, 1.0f) : 0.0f;
+}
+
+void PolySynth::setModWheel (float amount) noexcept
+{
+    modulation = std::isfinite (amount) ? std::clamp (amount, 0.0f, 1.0f) : 0.0f;
+}
+
 void PolySynth::allNotesOff() noexcept
 {
     pedalDown = false;
+    bend = modulation = 0.0f;
     for (auto& v : voices)
     {
         v.sustained = false;
@@ -218,6 +229,8 @@ void PolySynth::reset() noexcept
     for (auto& v : voices)
         v = Voice {};
     pedalDown = false;
+    bend = modulation = 0.0f;
+    vibratoPhase = 0.0;
     history.fill (0.0);
     historyPos = 0;
 }
@@ -256,7 +269,23 @@ void PolySynth::render (float* left, float* right, int numSamples) noexcept
         const int n = std::min (chunk, numSamples - done);
         const int internalCount = n * oversampling;
         std::fill (internal.begin(), internal.begin() + internalCount, 0.0);
-        renderVoices (internal.data(), internalCount);
+
+        // The wheels: one pitch factor per internal sample, shared by every voice.
+        // At rest nothing is multiplied, so an unbent render is unchanged to the bit.
+        const bool modulated = bend != 0.0f || modulation != 0.0f;
+        const double vibratoStep = vibratoRateHz / internalRate;
+        for (int i = 0; i < internalCount; ++i)
+        {
+            if (modulated)
+            {
+                const double semitones = bend * bendRangeSemitones
+                                       + modulation * vibratoDepthSemitones * std::sin (2.0 * pi * vibratoPhase);
+                pitchFactor[(size_t) i] = std::exp2 (semitones / 12.0);
+            }
+            vibratoPhase += vibratoStep;
+            vibratoPhase -= std::floor (vibratoPhase);
+        }
+        renderVoices (internal.data(), internalCount, modulated);
 
         // Decimate: push every internal sample through the FIR, keep every
         // `oversampling`-th output. The doubled history keeps each window contiguous.
@@ -285,7 +314,7 @@ void PolySynth::render (float* left, float* right, int numSamples) noexcept
     }
 }
 
-void PolySynth::renderVoices (double* out, int numSamples) noexcept
+void PolySynth::renderVoices (double* out, int numSamples, bool pitchModulated) noexcept
 {
     const double k = 2.0 - 1.9 * params.resonance; // SVF damping: 2 (none) .. 0.1 (strong)
 
@@ -323,12 +352,14 @@ void PolySynth::renderVoices (double* out, int numSamples) noexcept
                 }
             }
 
-            double s = oscillator (v.phase1, v.inc1);
+            const double inc1 = pitchModulated ? v.inc1 * pitchFactor[(size_t) i] : v.inc1;
+            const double inc2 = pitchModulated ? v.inc2 * pitchFactor[(size_t) i] : v.inc2;
+            double s = oscillator (v.phase1, inc1);
             if (params.detuneCents > 0.0)
-                s = 0.5 * (s + oscillator (v.phase2, v.inc2));
-            v.phase1 += v.inc1;
+                s = 0.5 * (s + oscillator (v.phase2, inc2));
+            v.phase1 += inc1;
             v.phase1 -= std::floor (v.phase1);
-            v.phase2 += v.inc2;
+            v.phase2 += inc2;
             v.phase2 -= std::floor (v.phase2);
 
             // Low-pass, cutoff opened by the filter envelope and by velocity.

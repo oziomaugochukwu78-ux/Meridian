@@ -579,6 +579,35 @@ void EngineBridge::buildMidiEvents (const juce::ValueTree& t, TrackRender& rende
             render.events.push_back ({ down, midi::sustainPedal, 0.0f, true });
             render.events.push_back ({ up, midi::sustainPedal, 0.0f, false });
         }
+
+        // The wheels (the event's velocity is the value): every move inside the clip at
+        // its time; a value set before the clip starts applies at its start; at its end
+        // the wheel returns to rest. That reset is an "off", so it sorts before the
+        // next clip's own value at the same time.
+        for (const int control : { midi::pitchBend, midi::modWheel })
+        {
+            const auto points = midimodel::readControl (c, control);
+            if (points.empty())
+                continue;
+            bool carried = false;
+            float carriedValue = 0.0f;
+            for (const auto& p : points)
+            {
+                const auto at = (juce::int64) tempo.samplesFromOrigin (origin, p.tick, rate);
+                if (at < start)
+                {
+                    carried = true;
+                    carriedValue = p.value;
+                }
+                else if (at < end)
+                {
+                    render.events.push_back ({ at, control, p.value, true });
+                }
+            }
+            if (carried)
+                render.events.push_back ({ start, control, carriedValue, true });
+            render.events.push_back ({ end, control, 0.0f, false });
+        }
     }
 
     std::sort (render.events.begin(), render.events.end(), [] (const MidiEvent& a, const MidiEvent& b)
@@ -1032,6 +1061,8 @@ void EngineBridge::finaliseMidiTakes (juce::int64 recordEnd)
         for (const auto& note : take.notes)
             midimodel::addNote (clip, note, &um);
         midimodel::writeSustain (clip, take.sustain, &um);
+        midimodel::writeControl (clip, midi::pitchBend, take.pitchBend, &um);
+        midimodel::writeControl (clip, midi::modWheel, take.modWheel, &um);
     }
 }
 

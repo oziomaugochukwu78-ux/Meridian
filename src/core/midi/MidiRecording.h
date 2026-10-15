@@ -27,6 +27,8 @@ struct RecordedTake
     int64_t clipLength = 0;
     std::vector<Note> notes;
     std::vector<PedalRange> sustain;
+    std::vector<ControlPoint> pitchBend; ///< normalised, -1..+1
+    std::vector<ControlPoint> modWheel;  ///< normalised, 0..1
 };
 
 /** Turns captured events into a take.
@@ -37,8 +39,9 @@ struct RecordedTake
     Notes pair note-on with the next note-off of the same pitch; a note-on
     for a pitch already sounding ends the previous one there; notes still held
     when recording stops end at the stop. The pedal pairs down with the next
-    up the same way (a pedal still down at the stop ends there). Events outside
-    the take are clamped into it; out-of-range pitches are ignored. */
+    up the same way (a pedal still down at the stop ends there). Pitch-wheel
+    and mod-wheel moves become control points (velocity is the value). Events
+    outside the take are clamped into it; out-of-range pitches are ignored. */
 RecordedTake buildTake (std::vector<RecordedEvent> events, int64_t recordStart, int64_t recordEnd,
                         int64_t compensation, const TempoMap&, double sampleRate);
 

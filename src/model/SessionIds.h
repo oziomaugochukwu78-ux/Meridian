@@ -45,6 +45,8 @@
                 NOTE  pitch velocity start length       (ticks)
               SUSTAIN                                   (optional: where the sustain pedal is held)
                 PEDAL  start length                     (ticks; sorted, not overlapping)
+              PITCHBEND / MODWHEEL                      (optional: pitch-wheel -1..+1 / mod-wheel 0..1 moves)
+                CC  start value                         (ticks; sorted, one per tick; holds until the next)
 
     SESSION also holds tempo (BPM, default 120), loop playback (loopEnabled,
     loopStart, loopEnd in samples), punch recording (punchEnabled, punchIn, punchOut), the click (clickEnabled, clickLevelDb),
@@ -80,6 +82,9 @@ MERIDIAN_ID (NOTES)
 MERIDIAN_ID (NOTE)
 MERIDIAN_ID (SUSTAIN)
 MERIDIAN_ID (PEDAL)
+MERIDIAN_ID (PITCHBEND)
+MERIDIAN_ID (MODWHEEL)
+MERIDIAN_ID (CC)
 MERIDIAN_ID (PLAYLISTS)
 MERIDIAN_ID (PLAYLIST)
 MERIDIAN_ID (playlist)

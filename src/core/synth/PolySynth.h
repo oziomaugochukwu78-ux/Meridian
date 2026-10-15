@@ -58,13 +58,25 @@ public:
 
     void noteOn (int pitch, float velocity) noexcept;
     void noteOff (int pitch) noexcept;
-    void allNotesOff() noexcept;      ///< release every voice, and lift the sustain pedal
-    void reset() noexcept;            ///< silence immediately
+    void allNotesOff() noexcept;      ///< release every voice; lift the pedal, centre both wheels
+    void reset() noexcept;            ///< silence immediately (and centre both wheels)
 
     /** The sustain pedal (MIDI CC 64): while down, released keys keep sounding at
         their sustain level; lifting it releases every note whose key is up. */
     void setSustain (bool down) noexcept;
     bool isSustainDown() const noexcept { return pedalDown; }
+
+    /** The pitch wheel, -1..+1: every voice bent by up to bendRangeSemitones. */
+    void setPitchBend (float amount) noexcept;
+    /** The mod wheel (MIDI CC 1), 0..1: vibrato of up to vibratoDepthSemitones
+        either way at vibratoRateHz. */
+    void setModWheel (float amount) noexcept;
+    float getPitchBend() const noexcept { return bend; }
+    float getModWheel() const noexcept { return modulation; }
+
+    static constexpr double bendRangeSemitones = 2.0;
+    static constexpr double vibratoDepthSemitones = 0.5;
+    static constexpr double vibratoRateHz = 5.5;
 
     /** Adds the synth's output into left/right (they are not cleared first). */
     void render (float* left, float* right, int numSamples) noexcept;
@@ -87,7 +99,7 @@ private:
 
     double oscillator (double phase, double increment) const noexcept;
     void startVoice (Voice&, int pitch, float velocity) noexcept;
-    void renderVoices (double* out, int numInternalSamples) noexcept;
+    void renderVoices (double* out, int numInternalSamples, bool pitchModulated) noexcept;
 
     static constexpr int chunk = 256; // output samples per internal pass
 
@@ -98,6 +110,9 @@ private:
     std::array<Voice, maxVoices> voices {};
     uint64_t noteCounter = 0;
     bool pedalDown = false;
+    float bend = 0.0f, modulation = 0.0f;
+    double vibratoPhase = 0.0; ///< cycles, 0..1
+    std::array<double, chunk * oversampling> pitchFactor {}; ///< per internal sample of a chunk: bend x vibrato
 
     std::array<double, decimatorTaps> fir {};
     std::array<double, 2 * decimatorTaps> history {}; // doubled ring: contiguous windows

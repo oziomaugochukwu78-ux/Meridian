@@ -132,6 +132,17 @@ juce::var schema (std::initializer_list<Param> params)
                     { "length_beats", makeObject ({ { "type", "number" }, { "description", "How long it stays down, in beats" } }) } }) },
                 { "required", juce::Array<juce::var> { "start_beats", "length_beats" } } }));
         }
+        else if (juce::String (p.type) == "controlpoints")
+        {
+            // A wheel's moves in a clip: each value holds from start_beats until the next.
+            set (property, "type", "array");
+            set (property, "items", makeObject ({
+                { "type", "object" },
+                { "properties", makeObject ({
+                    { "start_beats", makeObject ({ { "type", "number" }, { "description", "Where the value starts, in beats from the clip start" } }) },
+                    { "value", makeObject ({ { "type", "number" }, { "description", "The wheel's position" } }) } }) },
+                { "required", juce::Array<juce::var> { "start_beats", "value" } } }));
+        }
         else
         {
             set (property, "type", p.type);
@@ -363,7 +374,12 @@ const std::vector<ToolInfo>& toolTable()
                     { "clip", "track", "Clip number (from list_clips) or name", true },
                     { "notes", "notes", "Notes to add, e.g. [{\"pitch\": 60, \"start_beats\": 0, \"length_beats\": 1}] ([] for none)", true },
                     { "replace", "boolean", "Remove the clip's existing notes first (default false)" },
-                    { "sustain", "ranges", "Where the sustain pedal is down, e.g. [{\"start_beats\": 0, \"length_beats\": 4}] ([] lifts it everywhere)" } }) },
+                    { "sustain", "ranges", "Where the sustain pedal is down, e.g. [{\"start_beats\": 0, \"length_beats\": 4}] ([] lifts it everywhere)" },
+                    { "pitch_bend", "controlpoints", "Pitch-wheel moves, -1..+1 (+1 = two semitones up), each holding until the next, "
+                                                     "e.g. [{\"start_beats\": 2, \"value\": 1}, {\"start_beats\": 3, \"value\": 0}]; "
+                                                     "replaces the clip's ([] removes them)" },
+                    { "mod_wheel", "controlpoints", "Mod-wheel moves, 0..1 (vibrato up to half a semitone either way), each holding "
+                                                    "until the next; replaces the clip's ([] removes them)" } }) },
         { "list_notes", "List notes", "The notes of a MIDI clip, and where its sustain pedal is down, in beats from the clip start.",
           schema ({ { "track", "track", "Instrument track number or name", true },
                     { "clip", "track", "Clip number (from list_clips) or name", true } }) },
@@ -1728,9 +1744,33 @@ RemoteTools::Result RemoteTools::addNotes (const juce::var& args)
         }
     }
 
+    // The wheels: {start_beats, value} lists, each replacing the clip's own.
+    struct Wheel { const char* argument; int control; float low; std::vector<midi::ControlPoint> points; bool given = false; };
+    Wheel wheels[] = { { "pitch_bend", midi::pitchBend, -1.0f, {} }, { "mod_wheel", midi::modWheel, 0.0f, {} } };
+    for (auto& w : wheels)
+    {
+        if (! args.hasProperty (w.argument))
+            continue;
+        w.given = true;
+        const auto* points = args[w.argument].getArray();
+        if (points == nullptr || points->size() > 10000)
+            return { false, {}, "\"" + juce::String (w.argument) + "\" must be an array of at most 10000 {start_beats, value}." };
+        for (const auto& p : *points)
+        {
+            const double start = p["start_beats"], value = p["value"];
+            if (start < 0.0 || start > maxBeats || ! std::isfinite (value) || value < w.low || value > 1.0)
+                return { false, {}, "Each " + juce::String (w.argument) + " point needs start_beats of 0 or more and a value from "
+                                        + juce::String (w.low, 0) + " to 1." };
+            w.points.push_back ({ offsetTicks + beatsToTicks (start), (float) value });
+        }
+    }
+
     auto* um = beginEdit ("Add Notes");
     if (setsSustain)
         midimodel::writeSustain (c, sustain, um);
+    for (const auto& w : wheels)
+        if (w.given)
+            midimodel::writeControl (c, w.control, w.points, um);
     const bool replace = args.hasProperty ("replace") && (bool) args["replace"];
     if (replace)
     {
@@ -1772,7 +1812,16 @@ RemoteTools::Result RemoteTools::listNotes (const juce::var& args)
     for (const auto& r : midimodel::readSustain (c))
         pedal.add (makeObject ({ { "start_beats", (double) (r.start - offsetTicks) / (double) midi::ticksPerQuarter },
                                  { "length_beats", (double) r.length / (double) midi::ticksPerQuarter } }));
-    return { true, makeObject ({ { "clip", clip::name (c) }, { "notes", result }, { "sustain", pedal } }), {} };
+    auto wheel = [&] (int control)
+    {
+        juce::Array<juce::var> points;
+        for (const auto& p : midimodel::readControl (c, control))
+            points.add (makeObject ({ { "start_beats", (double) (p.tick - offsetTicks) / (double) midi::ticksPerQuarter },
+                                      { "value", std::round (p.value * 10000.0f) / 10000.0 } }));
+        return points;
+    };
+    return { true, makeObject ({ { "clip", clip::name (c) }, { "notes", result }, { "sustain", pedal },
+                                 { "pitch_bend", wheel (midi::pitchBend) }, { "mod_wheel", wheel (midi::modWheel) } }), {} };
 }
 
 RemoteTools::Result RemoteTools::setSynth (const juce::var& args)

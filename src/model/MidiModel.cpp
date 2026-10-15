@@ -123,6 +123,43 @@ void writeSustain (juce::ValueTree clip, const std::vector<midi::PedalRange>& ra
     clip.appendChild (list, um);
 }
 
+juce::Identifier controlNodeType (int control)
+{
+    return control == midi::pitchBend ? ids::PITCHBEND : ids::MODWHEEL;
+}
+
+float controlLow (int control)
+{
+    return control == midi::pitchBend ? -1.0f : 0.0f;
+}
+
+std::vector<midi::ControlPoint> readControl (const juce::ValueTree& clip, int control)
+{
+    std::vector<midi::ControlPoint> points;
+    for (const auto& p : clip.getChildWithName (controlNodeType (control)))
+        if (p.hasType (ids::CC))
+            points.push_back ({ (int64_t) (juce::int64) p[ids::start], (float) (double) p[ids::value] });
+    return midi::normalisedControl (std::move (points), controlLow (control), 1.0f);
+}
+
+void writeControl (juce::ValueTree clip, int control, const std::vector<midi::ControlPoint>& points, juce::UndoManager* um)
+{
+    if (auto old = clip.getChildWithName (controlNodeType (control)); old.isValid())
+        clip.removeChild (old, um);
+    const auto clean = midi::normalisedControl (points, controlLow (control), 1.0f);
+    if (clean.empty())
+        return;
+    juce::ValueTree list (controlNodeType (control));
+    for (const auto& p : clean)
+    {
+        juce::ValueTree cc (ids::CC);
+        cc.setProperty (ids::start, (juce::int64) p.tick, nullptr);
+        cc.setProperty (ids::value, (double) p.value, nullptr);
+        list.appendChild (cc, nullptr);
+    }
+    clip.appendChild (list, um);
+}
+
 namespace
 {
 juce::ValueTree makeNoteNode (const midi::Note& note)
