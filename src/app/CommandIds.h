@@ -32,6 +32,12 @@ enum : juce::CommandID
     duplicateSelection,
     fadeSelection,
     crossfadeEqualGain,
+    nudgeEarlier,
+    nudgeLater,
+    nudge1ms,
+    nudge10ms,
+    nudge100ms,
+    nudge1s,
 
     // Tools and modes
     slipMode = 0x12100,

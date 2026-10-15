@@ -5050,7 +5050,35 @@ void SelfTest::testCrossfades()
     settings.setValue ("crossfadeEqualGain", previousShape);
     setConsole (true, 6.0, 0.35);
     view.clearSelection();
-    clearTracks();
+
+    // Nudge: the selected clip, then a range, by the nudge amount.
+    {
+        beginGroup ("Edit window: Nudge");
+        clearTracks();
+        auto nt = session->addTrack ("Nudge", 1, nullptr);
+        auto first = session->addClip (nt, tone, 24000, 0, 12000, 96000, "One", nullptr);
+        auto second = session->addClip (nt, tone, 48000, 0, 12000, 96000, "Two", nullptr);
+        const int previousNudge = main.getEditView().getNudgeMilliseconds();
+        commands.invokeDirectly (commands::nudge10ms, false);
+        view.selectClip (first);
+        commands.invokeDirectly (commands::nudgeLater, false);
+        commands.invokeDirectly (commands::nudgeLater, false);
+        expect ("Nudge Later (.) twice moves the selected clip 2 x 10 ms (960 samples)", clip::start (first) == 24960,
+                juce::String (clip::start (first)));
+        commands.invokeDirectly (commands::nudge1s, false);
+        view.setTimeSelection (20000, 70000, { track::id (nt) });
+        commands.invokeDirectly (commands::nudgeEarlier, false);
+        expect ("Nudge Earlier (,) with 1 second moves every clip in the selection, and the selection, but stops at the session start",
+                clip::start (first) == 0 && clip::start (second) == 23040 && view.selectionStart == 0 && view.selectionEnd == 45040,
+                juce::String (clip::start (first)) + " / " + juce::String (clip::start (second)) + ", selection from "
+                    + juce::String (view.selectionStart));
+        um.undo();
+        expect ("one undo per nudge", clip::start (first) == 24960 && clip::start (second) == 48000,
+                juce::String (clip::start (first)) + " / " + juce::String (clip::start (second)));
+        main.getEditView().setNudgeMilliseconds (previousNudge);
+        view.clearSelection();
+        clearTracks();
+    }
 }
 
 void SelfTest::testClipboard()

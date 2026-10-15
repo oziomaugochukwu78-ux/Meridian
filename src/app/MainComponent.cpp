@@ -314,7 +314,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& c)
 {
     using namespace commands;
     c.addArray ({ dashboard, openSession, saveSession, saveSessionAs, importAudio, bounceMix,
-                  undo, redo, cutSelection, copySelection, pasteClipboard, duplicateSelection, fadeSelection, crossfadeEqualGain, separateClip, deleteSelection, elasticAudio, zoomIn, zoomOut,
+                  undo, redo, cutSelection, copySelection, pasteClipboard, duplicateSelection, fadeSelection, crossfadeEqualGain, nudgeEarlier, nudgeLater, nudge1ms, nudge10ms, nudge100ms, nudge1s, separateClip, deleteSelection, elasticAudio, zoomIn, zoomOut,
                   shuffleMode, slipMode, spotMode, gridMode, trimTool, selectorTool, grabberTool, smartTool, pencilTool,
                   newTracks, deleteTrack,
                   playStop, record, returnToZero, loopPlayback, punchRecording, clickToggle, countInOff, countIn1Bar, countIn2Bars, addMarker,
@@ -381,6 +381,27 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                                              "New fades are linear, so a crossfade inside one recording is seamless; "
                                              "off: equal power, for joining different material", "Edit", 0);
                                info.setTicked (app.getSettings().getBoolValue ("crossfadeEqualGain", false)); break;
+        case nudgeEarlier:
+        case nudgeLater:
+        {
+            const bool later = id == nudgeLater;
+            info.setInfo (later ? "Nudge Later" : "Nudge Earlier",
+                          "Move the selected clip, or the clips in the selection, by the nudge amount", "Edit", 0);
+            info.addDefaultKeypress (later ? '.' : ',', 0);
+            info.addDefaultKeypress (later ? K::numberPadAdd : K::numberPadSubtract, 0);
+            info.setActive (hasSession && edit.mode != EditMode::shuffle && editView.hasSelectionToCopy());
+            break;
+        }
+        case nudge1ms:
+        case nudge10ms:
+        case nudge100ms:
+        case nudge1s:
+        {
+            const int ms = id == nudge1ms ? 1 : id == nudge10ms ? 10 : id == nudge100ms ? 100 : 1000;
+            info.setInfo (ms < 1000 ? juce::String (ms) + " ms" : juce::String ("1 second"), "Nudge amount", "Edit", 0);
+            info.setTicked (editView.getNudgeMilliseconds() == ms);
+            break;
+        }
         case separateClip:     info.setInfo ("Separate Clip", "Split clips at the selection or cursor", "Edit", 0);
                                info.addDefaultKeypress ('e', cmd); info.setActive (hasSession); break;
         case deleteSelection:  info.setInfo ("Delete", "Delete the selected clip or time range", "Edit", 0);
@@ -507,6 +528,12 @@ bool MainComponent::perform (const InvocationInfo& info)
             app.getSettings().setValue ("crossfadeEqualGain", ! app.getSettings().getBoolValue ("crossfadeEqualGain", false));
             commandManager.commandStatusChanged();
             break;
+        case nudgeEarlier:    editView.nudge (-1); break;
+        case nudgeLater:      editView.nudge (1); break;
+        case nudge1ms:        editView.setNudgeMilliseconds (1); commandManager.commandStatusChanged(); break;
+        case nudge10ms:       editView.setNudgeMilliseconds (10); commandManager.commandStatusChanged(); break;
+        case nudge100ms:      editView.setNudgeMilliseconds (100); commandManager.commandStatusChanged(); break;
+        case nudge1s:         editView.setNudgeMilliseconds (1000); commandManager.commandStatusChanged(); break;
         case separateClip:    editView.separateAtSelection(); break;
         case deleteSelection: editView.deleteSelection(); break;
         case elasticAudio:    editView.openElasticDialog ({}); break;
@@ -653,6 +680,14 @@ juce::PopupMenu MainComponent::getMenuForIndex (int index, const juce::String&)
             add (separateClip); add (deleteSelection);
             menu.addSeparator();
             add (fadeSelection); add (crossfadeEqualGain);
+            menu.addSeparator();
+            add (nudgeEarlier); add (nudgeLater);
+            {
+                juce::PopupMenu amounts;
+                for (const auto id : { nudge1ms, nudge10ms, nudge100ms, nudge1s })
+                    amounts.addCommandItem (&commandManager, id);
+                menu.addSubMenu ("Nudge Amount", amounts);
+            }
             menu.addSeparator();
             add (elasticAudio);
             menu.addSeparator();

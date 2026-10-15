@@ -55,6 +55,12 @@ public:
     bool hasSelectionToCopy() const;
     /** Fade/Crossfade (Ctrl+F) over the time selection on the selected tracks. */
     void fadeSelection();
+    /** Nudge (, and .): moves the selected clip, or the clips wholly inside the
+        time selection (and the selection with them), by the nudge amount;
+        direction -1 earlier, +1 later. Clips stop at the session start. */
+    void nudge (int direction);
+    int getNudgeMilliseconds() const;
+    void setNudgeMilliseconds (int);
     const clipboard::Contents& getClipboard() const noexcept { return clipboardContents; }
     void openElasticDialog (juce::ValueTree clip);
     void zoomBy (double factor);

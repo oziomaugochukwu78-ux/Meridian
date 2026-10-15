@@ -378,6 +378,50 @@ void EditView::fadeSelection()
                                              "Trim the clips back a little, then try again.");
 }
 
+int EditView::getNudgeMilliseconds() const
+{
+    const int ms = app.getSettings().getIntValue ("nudgeMilliseconds", 10);
+    return ms == 1 || ms == 10 || ms == 100 || ms == 1000 ? ms : 10;
+}
+
+void EditView::setNudgeMilliseconds (int ms)
+{
+    app.getSettings().setValue ("nudgeMilliseconds", ms);
+}
+
+void EditView::nudge (int direction)
+{
+    auto* session = app.getSession();
+    if (session == nullptr || direction == 0 || state.mode == EditMode::shuffle)
+        return;
+    auto delta = (juce::int64) std::llround (getNudgeMilliseconds() * 0.001 * session->getSampleRate()) * (direction > 0 ? 1 : -1);
+
+    juce::Array<juce::ValueTree> moving;
+    const bool clipSelected = state.selectedClip.isValid() && state.selectedClip.getParent().isValid();
+    if (clipSelected)
+        moving.add (state.selectedClip);
+    else if (state.hasTimeRange())
+        for (const auto& t : tracksForEdit())
+            for (const auto& c : track::clips (t))
+                if (clip::start (c) >= state.selectionStart && clip::end (c) <= state.selectionEnd)
+                    moving.add (c);
+    if (moving.isEmpty())
+        return;
+
+    // Everything moves by the same amount, so nothing goes before the session start.
+    for (const auto& c : moving)
+        delta = std::max (delta, -clip::start (c));
+    if (delta == 0)
+        return;
+
+    auto& um = session->getUndoManager();
+    um.beginNewTransaction ("Nudge");
+    for (auto& c : moving)
+        c.setProperty (ids::start, clip::start (c) + delta, &um);
+    if (! clipSelected)
+        state.setTimeSelection (std::max<juce::int64> (0, state.selectionStart + delta), state.selectionEnd + delta, state.selectedTrackIds);
+}
+
 bool EditView::hasSelectionToCopy() const
 {
     if (state.selectedClip.isValid() && state.selectedClip.getParent().isValid())
