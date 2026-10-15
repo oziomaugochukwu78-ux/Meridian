@@ -4367,6 +4367,45 @@ void SelfTest::testPianoRoll()
     expect ("undo brings both notes back", notes.getNumChildren() == 2, juce::String (notes.getNumChildren()));
     expect ("piano-roll edits leave the session valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
 
+    // The controller lane: the pitch wheel, then the mod wheel, drawn with the mouse.
+    beginGroup ("MIDI editor: controller lane (simulated mouse)");
+    pr->setGridTicks (960);
+    const auto lane = pr->laneArea();
+    const auto xAt = [&] (juce::int64 tick) { return pr->positionFor (tick, 60).x + 2.0f; };
+    click ({ xAt (960), pr->yForLaneValue (1.0f) });
+    auto bend = midimodel::readControl (clipNode, midi::pitchBend);
+    expect ("a click at the top of the Bend lane sets the pitch wheel to +1 from that grid position",
+            lane.getHeight() > 0 && bend.size() == 1 && bend[0].tick == 960 && juce::exactlyEqual (bend[0].value, 1.0f),
+            juce::String ((int) bend.size()) + " points");
+    click ({ xAt (1920), pr->yForLaneValue (0.0f) + 1.0f });
+    bend = midimodel::readControl (clipNode, midi::pitchBend);
+    expect ("a click just off the centre snaps to rest (0)", bend.size() == 2 && juce::exactlyEqual (bend[1].value, 0.0f),
+            bend.size() == 2 ? fmt (bend[1].value) : juce::String ((int) bend.size()) + " points");
+    click ({ xAt (960), pr->yForLaneValue (1.0f) }, juce::ModifierKeys::altModifier);
+    expect ("Alt-click deletes the point under the mouse", midimodel::readControl (clipNode, midi::pitchBend).size() == 1, {});
+    um.undo();
+    expect ("undo puts it back (one step)", midimodel::readControl (clipNode, midi::pitchBend).size() == 2, {});
+
+    pr->setLaneControl (midi::modWheel);
+    const juce::Point<float> from { xAt (0), pr->yForLaneValue (0.5f) };
+    pr->mouseDown (mouseEvent (*pr, from, from, false, {}));
+    for (int beat = 1; beat <= 3; ++beat)
+    {
+        const juce::Point<float> to { xAt (beat * 960), pr->yForLaneValue (0.5f) };
+        pr->mouseDrag (mouseEvent (*pr, to, from, true, {}));
+    }
+    pr->mouseUp (mouseEvent (*pr, from, from, true, {}));
+    const auto mod = midimodel::readControl (clipNode, midi::modWheel);
+    bool halfway = mod.size() == 4;
+    for (size_t i = 0; halfway && i < mod.size(); ++i)
+        halfway = mod[i].tick == (int64_t) i * 960 && std::abs (mod[i].value - 0.5f) < 0.02f;
+    expect ("dragging across the Mod lane writes a point per grid position at the drawn value (0.5 on beats 1-4)", halfway,
+            juce::String ((int) mod.size()) + " points");
+    um.undo();
+    expect ("the whole drag is one undo step", midimodel::readControl (clipNode, midi::modWheel).empty(), {});
+    expect ("controller edits leave the session valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+    snapshot (*pr, "piano_roll_lane.png");
+
     editView.closePianoRoll();
     session->removeTrack (keys, nullptr);
     um.clearUndoHistory();

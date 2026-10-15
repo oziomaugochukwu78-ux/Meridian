@@ -62,7 +62,7 @@ What a home producer, songwriter or podcaster needs.
 - done: click with a count-in
 
 **MIDI and instruments**
-- done: MIDI input recording (keyboard, live play-through, latency compensated); VST3 instrument hosting; sustain pedal (clips, keyboard, recording, plug-ins); pitch wheel and mod wheel (clips, keyboard, recording, plug-ins); still to do: showing and drawing their lanes in the MIDI editor, other controllers
+- done: MIDI input recording (keyboard, live play-through, latency compensated); VST3 instrument hosting; sustain pedal (clips, keyboard, recording, plug-ins); pitch wheel and mod wheel (clips, keyboard, recording, plug-ins); drawn in the MIDI editor's controller lane; still to do: other controllers
 - done: a piano-roll editor, quantise, and velocity editing
 - done: sample-accurate MIDI timing (notes, sustain pedal, plug-in instruments; clips keep musical time after tempo changes)
 

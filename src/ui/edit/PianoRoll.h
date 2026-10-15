@@ -24,6 +24,11 @@ namespace meridian
         mouse wheel              scroll pitch;  shift+wheel: scroll time;  ctrl+wheel: zoom time
         Space                    play / stop
 
+    The controller lane along the bottom shows the pitch wheel or the mod wheel
+    (the selector at its left). Click or drag in it to set the wheel from that
+    grid position on (the pitch wheel's centre is rest, and snaps there);
+    Alt-click a point to delete it.
+
     Every gesture is one undo step. The time axis is in ticks from the clip's
     content origin; notes outside the clip's playing range are shown dimmed. */
 class PianoRollComponent final : public juce::Component,
@@ -48,6 +53,12 @@ public:
     void transposeSelection (int semitones);
     void deleteSelection();
 
+    // The controller lane, public for the self test.
+    int getLaneControl() const noexcept;               ///< midi::pitchBend or midi::modWheel
+    void setLaneControl (int control);
+    juce::Rectangle<int> laneArea() const;
+    float yForLaneValue (float value) const noexcept;  ///< in the lane's own scale
+
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
@@ -68,6 +79,11 @@ private:
     };
 
     juce::Rectangle<int> gridArea() const;
+    float laneValueAtY (float y) const noexcept;
+    void laneDown (const juce::MouseEvent&);
+    void laneDrag (const juce::MouseEvent&);
+    void writeLanePoint (int64_t tick, float value, int64_t clearFrom, int64_t clearTo);
+    void paintLane (juce::Graphics&);
     int64_t tickAtX (float x) const noexcept;
     int pitchAtY (float y) const noexcept;
     float xForTick (int64_t tick) const noexcept;
@@ -93,7 +109,7 @@ private:
     juce::ValueTree clipNode;
 
     // View
-    static constexpr int toolbarHeight = 36, rulerHeight = 20, noteRowHeight = 13;
+    static constexpr int toolbarHeight = 36, rulerHeight = 20, noteRowHeight = 13, laneHeight = 64;
     bool drumKit = false;          // rows are drums (General MIDI names) instead of piano keys
     int keyboardWidth = 64;        // wider on drum tracks, for the drum names
     double pixelsPerTick = 0.08;   // 76.8 px per beat
@@ -107,8 +123,10 @@ private:
     struct Original { juce::ValueTree note; int64_t start; int64_t length; int pitch; };
     std::vector<Original> originals;
     juce::Point<float> dragStart;
+    bool drawingLane = false;
+    int64_t lastLaneTick = 0;
 
-    juce::ComboBox gridBox;
+    juce::ComboBox gridBox, laneBox;
     juce::TextButton quantizeButton { "Quantize" }, octaveDown { "-12" }, semitoneDown { "-1" },
                      semitoneUp { "+1" }, octaveUp { "+12" };
     juce::Slider velocity;

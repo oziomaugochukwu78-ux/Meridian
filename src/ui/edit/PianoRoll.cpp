@@ -55,6 +55,14 @@ PianoRollComponent::PianoRollComponent (AppController& a, juce::ValueTree c) : a
     gridBox.setTooltip ("Where new and moved notes snap to");
     addAndMakeVisible (gridBox);
 
+    laneBox.addItem ("Bend", 1);
+    laneBox.addItem ("Mod", 2);
+    laneBox.setSelectedId (1, juce::dontSendNotification);
+    laneBox.onChange = [this] { repaint(); };
+    laneBox.setTooltip ("Controller lane: the pitch wheel (Bend) or the mod wheel (Mod)");
+    laneBox.setWantsKeyboardFocus (false);
+    addAndMakeVisible (laneBox);
+
     quantizeButton.setTooltip ("Snap the selected notes (or all notes) to the grid");
     quantizeButton.onClick = [this] { quantizeSelection(); };
     octaveDown.onClick = [this] { transposeSelection (-12); };
@@ -115,7 +123,41 @@ juce::UndoManager* PianoRollComponent::undoManager() const
 
 juce::Rectangle<int> PianoRollComponent::gridArea() const
 {
-    return getLocalBounds().withTrimmedTop (toolbarHeight + rulerHeight).withTrimmedLeft (keyboardWidth);
+    return getLocalBounds().withTrimmedTop (toolbarHeight + rulerHeight).withTrimmedBottom (laneHeight).withTrimmedLeft (keyboardWidth);
+}
+
+juce::Rectangle<int> PianoRollComponent::laneArea() const
+{
+    return getLocalBounds().removeFromBottom (laneHeight).withTrimmedLeft (keyboardWidth);
+}
+
+int PianoRollComponent::getLaneControl() const noexcept
+{
+    return laneBox.getSelectedId() == 2 ? midi::modWheel : midi::pitchBend;
+}
+
+void PianoRollComponent::setLaneControl (int control)
+{
+    laneBox.setSelectedId (control == midi::modWheel ? 2 : 1, juce::dontSendNotification);
+    repaint();
+}
+
+float PianoRollComponent::yForLaneValue (float value) const noexcept
+{
+    const auto area = laneArea();
+    const float low = midimodel::controlLow (getLaneControl());
+    const float position = (value - low) / (1.0f - low);
+    return (float) area.getY() + 4.0f + ((float) area.getHeight() - 8.0f) * (1.0f - position);
+}
+
+float PianoRollComponent::laneValueAtY (float y) const noexcept
+{
+    const auto area = laneArea();
+    const float low = midimodel::controlLow (getLaneControl());
+    const float position = juce::jlimit (0.0f, 1.0f, 1.0f - (y - (float) area.getY() - 4.0f) / ((float) area.getHeight() - 8.0f));
+    const float value = low + position * (1.0f - low);
+    // The pitch wheel springs back to the centre: within about a pixel and a half of it is the centre.
+    return getLaneControl() == midi::pitchBend && std::abs (value) < 0.05f ? 0.0f : value;
 }
 
 float PianoRollComponent::xForTick (int64_t tick) const noexcept
@@ -341,22 +383,27 @@ void PianoRollComponent::paint (juce::Graphics& g)
             g.fillRect (x0, (float) (toolbarHeight + rulerHeight - 4), x1 - x0, 3.0f);
     }
 
-    // Notes.
-    for (const auto& n : clip::notes (clipNode))
+    // Notes, kept inside the grid (a note above or below the visible rows must not
+    // draw over the ruler or the controller lane).
     {
-        const auto r = noteRect (n);
-        if (r.getRight() < (float) grid.getX() || r.getX() > (float) grid.getRight())
-            continue;
-        const auto start = ticksOf (n[ids::start]);
-        const bool plays = start >= rangeStart && start < rangeEnd;
-        const float vel = (float) (double) n.getProperty (ids::velocity, 0.8);
-        auto colour = juce::Colour (0xff3fbf9f).withMultipliedBrightness (0.55f + 0.45f * vel);
-        if (! plays)
-            colour = colour.withAlpha (0.35f);
-        g.setColour (colour);
-        g.fillRoundedRectangle (r, 2.0f);
-        g.setColour (isSelected (n) ? theme::selectionEdge : colour.darker (0.6f));
-        g.drawRoundedRectangle (r, 2.0f, isSelected (n) ? 2.0f : 1.0f);
+        juce::Graphics::ScopedSaveState notesOnly (g);
+        g.reduceClipRegion (grid);
+        for (const auto& n : clip::notes (clipNode))
+        {
+            const auto r = noteRect (n);
+            if (r.getRight() < (float) grid.getX() || r.getX() > (float) grid.getRight())
+                continue;
+            const auto start = ticksOf (n[ids::start]);
+            const bool plays = start >= rangeStart && start < rangeEnd;
+            const float vel = (float) (double) n.getProperty (ids::velocity, 0.8);
+            auto colour = juce::Colour (0xff3fbf9f).withMultipliedBrightness (0.55f + 0.45f * vel);
+            if (! plays)
+                colour = colour.withAlpha (0.35f);
+            g.setColour (colour);
+            g.fillRoundedRectangle (r, 2.0f);
+            g.setColour (isSelected (n) ? theme::selectionEdge : colour.darker (0.6f));
+            g.drawRoundedRectangle (r, 2.0f, isSelected (n) ? 2.0f : 1.0f);
+        }
     }
 
     // Keyboard: piano keys, or for drum tracks the drum each row plays.
@@ -388,10 +435,50 @@ void PianoRollComponent::paint (juce::Graphics& g)
     }
     g.setColour (theme::divider);
     g.drawVerticalLine (keyboardWidth - 1, (float) toolbarHeight, (float) getHeight());
+
+    paintLane (g);
+}
+
+void PianoRollComponent::paintLane (juce::Graphics& g)
+{
+    const auto area = laneArea();
+    g.setColour (theme::panel);
+    g.fillRect (0, area.getY(), getWidth(), area.getHeight());
+    g.setColour (theme::divider);
+    g.drawHorizontalLine (area.getY(), 0.0f, (float) getWidth());
+
+    juce::Graphics::ScopedSaveState saved (g);
+    g.reduceClipRegion (area);
+
+    // Rest: the pitch wheel's centre, the mod wheel's bottom.
+    const float restY = yForLaneValue (0.0f);
+    g.setColour (theme::gridBar);
+    g.drawHorizontalLine ((int) restY, (float) area.getX(), (float) area.getRight());
+
+    // The moves, as steps: each value holds until the next.
+    const auto points = midimodel::readControl (clipNode, getLaneControl());
+    juce::Path line;
+    float lastY = restY;
+    line.startNewSubPath ((float) area.getX(), lastY);
+    for (const auto& p : points)
+    {
+        const float x = juce::jlimit ((float) area.getX() - 4.0f, (float) area.getRight() + 4.0f, xForTick (p.tick));
+        const float y = yForLaneValue (p.value);
+        line.lineTo (x, lastY);
+        line.lineTo (x, y);
+        lastY = y;
+    }
+    line.lineTo ((float) area.getRight(), lastY);
+    g.setColour (theme::automation);
+    g.strokePath (line, juce::PathStrokeType (1.6f));
+    for (const auto& p : points)
+        g.fillRect (juce::Rectangle<float> (xForTick (p.tick) - 2.5f, yForLaneValue (p.value) - 2.5f, 5.0f, 5.0f));
 }
 
 void PianoRollComponent::resized()
 {
+    laneBox.setBounds (getLocalBounds().removeFromBottom (laneHeight).removeFromLeft (keyboardWidth).reduced (4, 6).removeFromTop (22));
+
     auto bar = getLocalBounds().removeFromTop (toolbarHeight).reduced (6, 5);
     gridBox.setBounds (bar.removeFromLeft (150));
     bar.removeFromLeft (6);
@@ -410,6 +497,11 @@ void PianoRollComponent::resized()
 
 void PianoRollComponent::mouseMove (const juce::MouseEvent& e)
 {
+    if (laneArea().contains (e.getPosition()))
+    {
+        setMouseCursor (juce::MouseCursor::CrosshairCursor);
+        return;
+    }
     if (! gridArea().contains (e.getPosition()))
     {
         setMouseCursor (juce::MouseCursor::NormalCursor);
@@ -425,6 +517,12 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
     drag = Drag::none;
+    drawingLane = false;
+    if (laneArea().contains (e.getPosition()))
+    {
+        laneDown (e);
+        return;
+    }
     if (! gridArea().contains (e.getPosition()))
         return;
 
@@ -477,6 +575,11 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
 
 void PianoRollComponent::mouseDrag (const juce::MouseEvent& e)
 {
+    if (drawingLane)
+    {
+        laneDrag (e);
+        return;
+    }
     auto* um = undoManager();
     if (drag == Drag::none || um == nullptr || originals.empty())
         return;
@@ -504,8 +607,63 @@ void PianoRollComponent::mouseDrag (const juce::MouseEvent& e)
     }
 }
 
+void PianoRollComponent::laneDown (const juce::MouseEvent& e)
+{
+    auto* um = undoManager();
+    if (um == nullptr)
+        return;
+    const int control = getLaneControl();
+    um->beginNewTransaction (control == midi::pitchBend ? "Draw Pitch Wheel" : "Draw Mod Wheel");
+
+    if (e.mods.isAltDown())
+    {
+        // Alt-click: delete the point under the mouse.
+        auto points = midimodel::readControl (clipNode, control);
+        const auto found = std::find_if (points.begin(), points.end(), [&] (const midi::ControlPoint& p)
+        {
+            return std::abs (xForTick (p.tick) - e.position.x) < 6.0f && std::abs (yForLaneValue (p.value) - e.position.y) < 8.0f;
+        });
+        if (found != points.end())
+        {
+            points.erase (found);
+            midimodel::writeControl (clipNode, control, points, um);
+        }
+        return;
+    }
+
+    const auto tick = std::max<int64_t> (0, snap (tickAtX (e.position.x), true));
+    writeLanePoint (tick, laneValueAtY (e.position.y), tick, tick);
+    lastLaneTick = tick;
+    drawingLane = true;
+}
+
+void PianoRollComponent::laneDrag (const juce::MouseEvent& e)
+{
+    // Freehand: one point per grid position the mouse passes; what it passes over is replaced.
+    const auto tick = std::max<int64_t> (0, snap (tickAtX (e.position.x), true));
+    if (tick > lastLaneTick)
+        writeLanePoint (tick, laneValueAtY (e.position.y), lastLaneTick + 1, tick);
+    else if (tick < lastLaneTick)
+        writeLanePoint (tick, laneValueAtY (e.position.y), tick, lastLaneTick - 1);
+    else
+        writeLanePoint (tick, laneValueAtY (e.position.y), tick, tick);
+    lastLaneTick = tick;
+}
+
+void PianoRollComponent::writeLanePoint (int64_t tick, float value, int64_t clearFrom, int64_t clearTo)
+{
+    const int control = getLaneControl();
+    auto points = midimodel::readControl (clipNode, control);
+    points.erase (std::remove_if (points.begin(), points.end(),
+                                  [=] (const midi::ControlPoint& p) { return p.tick >= clearFrom && p.tick <= clearTo; }),
+                  points.end());
+    points.push_back ({ tick, value });
+    midimodel::writeControl (clipNode, control, points, undoManager());
+}
+
 void PianoRollComponent::mouseUp (const juce::MouseEvent& e)
 {
+    drawingLane = false;
     // A plain click (no drag) on a note in a group selects just that note;
     // dragging it moves the whole group.
     if (drag == Drag::move && e.getDistanceFromDragStart() < 2 && ! e.mods.isShiftDown() && dragNote.isValid())
