@@ -291,7 +291,8 @@ const std::vector<ToolInfo>& toolTable()
         { "set_plugin_parameter", "Set a plug-in control",
           "Set one control of the plug-in in an insert slot, by id or name, in its own units (Hz, dB, seconds, "
           "0-1 amounts; 1 or 0 for on/off). Give \"normalized\" (0-1) instead for controls that do not accept "
-          "typed values. Not part of the undo history.",
+          "typed values. Not part of the undo history. While playing, a track in Touch, Latch or Write "
+          "automation records the move into the control's lane.",
           schema ({ { "track", "track", trackHelp, true },
                     { "slot", "string", "Insert slot A-J (or 1-10)", true },
                     { "parameter", "string", "Control id or name (from list_plugin_parameters)", true },
@@ -1337,7 +1338,10 @@ RemoteTools::Result RemoteTools::setPluginParameter (const juce::var& args)
     const float normalized = args.hasProperty ("normalized")
                                  ? juce::jlimit (0.0f, 1.0f, (float) (double) args["normalized"])
                                  : juce::jlimit (0.0f, 1.0f, target->getValueForText (juce::String ((double) args["value"])));
+    // As a gesture, like a knob turned in the plug-in's window: Touch/Latch record it.
+    target->beginChangeGesture();
     target->setValueNotifyingHost (normalized);
+    target->endChangeGesture();
     return { true, makeObject ({ { "plugin", plugin->getName() }, { "parameter", describeParameter (*target) } }), {} };
 }
 

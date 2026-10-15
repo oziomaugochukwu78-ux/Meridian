@@ -2,6 +2,7 @@
 
 #include <dsp/LinearRamp.h>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <utility>
@@ -41,6 +42,20 @@ struct TrackRealtimeState
     std::atomic<uint32_t> touched { 0 };
     static constexpr uint32_t touchVolume = 1u, touchPan = 2u, touchMute = 4u;
     static constexpr uint32_t touchSend (int slot) noexcept { return 8u << slot; }
+
+    /** Plug-in parameters being held (Touch/Latch), by AudioProcessorParameter
+        address: the engine leaves them where the user puts them instead of
+        playing their lanes. Empty entries are null. */
+    static constexpr int maxTouchedParameters = 4;
+    std::array<std::atomic<const void*>, maxTouchedParameters> touchedParameters {};
+
+    bool isParameterTouched (const void* parameter) const noexcept
+    {
+        for (const auto& p : touchedParameters)
+            if (p.load (std::memory_order_relaxed) == parameter)
+                return true;
+        return false;
+    }
 
     // Audio thread -> UI: peak since the UI last collected it (post-fader).
     std::atomic<float> peakLeft { 0.0f };

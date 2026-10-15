@@ -2252,6 +2252,75 @@ void SelfTest::testAutomation()
             std::abs (laneLevel - (toneDb + panCentreDb - 20.0)) < 0.02 && std::abs (heldLevel - (toneDb + panCentreDb)) < 0.02,
             "lane " + fmt (laneLevel) + " dB, held " + fmt (heldLevel) + " dB");
 
+    // Plug-in controls in their own windows: a change gesture is a touch. Meridian EQ's
+    // Output, untouched until 1.0 s, turned to -12 dB and let go at 1.5 s, in Touch.
+    clearTracks();
+    t = addToneTrack ("Plugin Touch", 1, tone, clipStart);
+    app.getBridge().insertPlugin (t, 0, eq, error);
+    call ("set_track", R"({"track":"Plugin Touch","automation_mode":"touch"})");
+    const int pluginTouchId = track::id (t);
+    juce::AudioProcessorParameter* eqOutput = nullptr;
+    if (auto insert = app.getBridge().getInsert (pluginTouchId, 0); insert != nullptr && insert->plugin != nullptr)
+        for (auto* p : insert->plugin->getParameters())
+            if (p->getName (64) == "Output")
+                eqOutput = p;
+    expect ("Meridian EQ has an Output control to touch", eqOutput != nullptr, {});
+    if (eqOutput != nullptr)
+    {
+        const auto outputLane = automation::pluginParameter (0, eqOutput->getParameterIndex());
+        const double resting = eqOutput->getValue(), turned = eqOutput->getValueForText ("-12");
+        auto pluginLaneAt = [&] (double seconds)
+        {
+            return automation::valueAt (automation::points (automation::lane (t, outputLane)), at (seconds));
+        };
+        runPass (0.5, 2.5, [&] (double s)
+        {
+            if (s >= 1.0 && s < 1.01)
+            {
+                eqOutput->beginChangeGesture();
+                eqOutput->setValueNotifyingHost ((float) turned);
+            }
+            if (s >= 1.5 && s < 1.51)
+                eqOutput->endChangeGesture();
+        });
+        const double settled = 1.5 + AutomationRecorder::changeHoldSeconds + AutomationRecorder::glideSeconds + 0.1;
+        expect ("Touch in a plug-in window: the knob is recorded while held, then glides back to where it rested",
+                std::abs (pluginLaneAt (0.8) - resting) < 0.002 && std::abs (pluginLaneAt (1.25) - turned) < 0.002
+                    && std::abs (pluginLaneAt (settled) - resting) < 0.002,
+                fmt (pluginLaneAt (0.8)) + " / " + fmt (pluginLaneAt (1.25)) + " / " + fmt (pluginLaneAt (settled)));
+        int pluginLanes = 0;
+        for (const auto& lane : track::automation (t))
+            pluginLanes += automation::pluginTarget (lane[ids::parameter].toString()).first >= 0 ? 1 : 0;
+        expect ("only the touched control gets a lane (the EQ's other controls stay unautomated)", pluginLanes == 1,
+                juce::String (pluginLanes) + " plug-in lanes");
+
+        // Held in Touch, the engine leaves the control where the user puts it instead of playing the lane.
+        eqOutput->setValueNotifyingHost (eqOutput->getValueForText ("0"));
+        b = bounce ("plugin_lane", 0, end);
+        const double pluginLaneLevel = levelIn (b, 0, 1.1, 1.4);
+        recorder.setTouched (pluginTouchId, outputLane, true);
+        eqOutput->setValueNotifyingHost (eqOutput->getValueForText ("0"));
+        b = bounce ("plugin_held", 0, end);
+        const double pluginHeldLevel = levelIn (b, 0, 1.1, 1.4);
+        recorder.setTouched (pluginTouchId, outputLane, false);
+        expect ("holding a plug-in control overrides its lane: the -12 dB stretch plays at 0 dB while held",
+                std::abs (pluginHeldLevel - pluginLaneLevel - 12.0) < 0.1,
+                "lane " + fmt (pluginLaneLevel) + " dB, held " + fmt (pluginHeldLevel) + " dB");
+
+        // An AI move (set_plugin_parameter) is a gesture too: recorded in Latch from 1.0 s to the stop.
+        call ("set_track", R"({"track":"Plugin Touch","automation_mode":"latch"})");
+        runPass (0.5, 2.5, [&] (double s)
+        {
+            if (s >= 1.0 && s < 1.01)
+                call ("set_plugin_parameter", R"({"track":"Plugin Touch","slot":"A","parameter":"Output","value":-6})");
+        });
+        const double sixDown = eqOutput->getValueForText ("-6");
+        expect ("Latch: an AI move of a plug-in control is recorded from the move to the stop",
+                std::abs (pluginLaneAt (1.1) - sixDown) < 0.002 && std::abs (pluginLaneAt (2.4) - sixDown) < 0.002
+                    && std::abs (pluginLaneAt (0.8) - resting) < 0.002,
+                fmt (pluginLaneAt (0.8)) + " / " + fmt (pluginLaneAt (1.1)) + " / " + fmt (pluginLaneAt (2.4)));
+    }
+
     // Damaged lanes are repaired: an unknown parameter, a pan beyond hard right, a mute of 0.4.
     auto automationNode = track::automation (t);
     juce::ValueTree bogus (ids::LANE);

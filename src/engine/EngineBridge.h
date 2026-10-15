@@ -74,6 +74,10 @@ public:
     /** A control is held (Touch/Latch): the engine follows the control, not its lane.
         bit: TrackRealtimeState::touchVolume, touchPan, touchMute or touchSend (slot). */
     void setControlTouched (int trackId, uint32_t bit, bool isTouched);
+    /** The same for a plug-in parameter (held in its window): the engine stops
+        playing its lane while held. At most TrackRealtimeState::maxTouchedParameters
+        per track at once; false if that many are already held. */
+    bool setParameterTouched (int trackId, const juce::AudioProcessorParameter* parameter, bool isTouched);
 
     // Plug-in delay compensation --------------------------------------------------------
     void setDelayCompensationEnabled (bool enabled);

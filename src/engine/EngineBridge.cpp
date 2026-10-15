@@ -1028,6 +1028,30 @@ void EngineBridge::setControlTouched (int trackId, uint32_t bit, bool isTouched)
         it->second->touched.fetch_and (~bit, std::memory_order_relaxed);
 }
 
+bool EngineBridge::setParameterTouched (int trackId, const juce::AudioProcessorParameter* parameter, bool isTouched)
+{
+    const auto it = trackStates.find (trackId);
+    if (it == trackStates.end() || parameter == nullptr)
+        return false;
+    auto& entries = it->second->touchedParameters;
+    if (! isTouched)
+    {
+        for (auto& e : entries)
+            if (e.load() == parameter)
+                e.store (nullptr);
+        return true;
+    }
+    if (it->second->isParameterTouched (parameter))
+        return true;
+    for (auto& e : entries)
+    {
+        const void* expected = nullptr;
+        if (e.compare_exchange_strong (expected, parameter))
+            return true;
+    }
+    return false;
+}
+
 void EngineBridge::drainRecordedMidi()
 {
     AudioEngine::RecordedMidi m;

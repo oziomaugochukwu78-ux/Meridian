@@ -471,6 +471,11 @@ void AudioEngine::renderTrack (TrackRender& t, const BlockContext& ctx) noexcept
     {
         for (auto& automated : t.parameterAutomation)
         {
+            if (t.state->isParameterTouched (automated.parameter))
+            {
+                automated.lastValue = -1.0f; // re-applied on release
+                continue;
+            }
             const auto value = (float) juce::jlimit (0.0, 1.0, automated.curve.valueAt (ctx.position));
             if (! juce::exactlyEqual (value, automated.lastValue))
             {
