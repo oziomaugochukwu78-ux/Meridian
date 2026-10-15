@@ -59,3 +59,23 @@ TEST_CASE ("Cubic curve output is bounded", "[saturation]")
     REQUIRE (c.process (2000.0) == ceiling);
     REQUIRE_THAT (c.process (-1000.0), WithinAbs (-ceiling, 1e-15));
 }
+
+TEST_CASE ("Drive below 0 dB keeps unity small-signal gain and moves the knee above full scale; it stops at -12 dB", "[saturation]")
+{
+    for (const auto type : { SaturationCurve::Type::tanh, SaturationCurve::Type::cubic })
+        for (const double asym : { 0.0, 0.3, 1.0 })
+        {
+            const auto c = makeCurve (type, -12.0, asym);
+            REQUIRE (c.process (0.0) == 0.0);
+            REQUIRE_THAT (c.process (1.0e-5), WithinRel (1.0e-5, 1.0e-3));
+        }
+
+    // At -12 dB, a full-scale peak is only gently compressed (well under 1 dB);
+    // at +6 dB the same peak is squashed by several dB.
+    const auto gentle = makeCurve (SaturationCurve::Type::tanh, -12.0, 0.0);
+    const auto driven = makeCurve (SaturationCurve::Type::tanh, 6.0, 0.0);
+    CHECK (20.0 * std::log10 (gentle.process (1.0)) > -0.5);
+    CHECK (20.0 * std::log10 (driven.process (1.0)) < -3.0);
+
+    CHECK_THAT (makeCurve (SaturationCurve::Type::tanh, -40.0, 0.0).getDriveGain(), WithinRel (std::pow (10.0, -12.0 / 20.0), 1.0e-12));
+}

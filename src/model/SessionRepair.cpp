@@ -6,6 +6,7 @@
 #include "Routing.h"
 
 #include <dsp/FaderTaper.h>
+#include <dsp/SaturationCurve.h>
 
 #include <cmath>
 #include <set>
@@ -112,7 +113,7 @@ private:
             set (s, ids::fileFormat, "wav", "session", "file format");
 
         clampNumber (s, ids::masterVolumeDb, dsp::FaderTaper::minDb, dsp::FaderTaper::maxDb, 0.0, "session");
-        clampNumber (s, ids::consoleDrive, 0.0, 24.0, 6.0, "session");
+        clampNumber (s, ids::consoleDrive, dsp::SaturationCurve::minDriveDb, dsp::SaturationCurve::maxDriveDb, 6.0, "session");
         clampNumber (s, ids::consoleCharacter, 0.0, 1.0, 0.35, "session");
         if (s.hasProperty (ids::consoleCurve) && (int) s[ids::consoleCurve] != 0 && (int) s[ids::consoleCurve] != 1)
             set (s, ids::consoleCurve, 0, "session", "console curve");

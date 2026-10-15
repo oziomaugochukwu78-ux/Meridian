@@ -41,6 +41,8 @@ target_sources(Meridian PRIVATE
 
     model/Automation.cpp
     model/Automation.h
+    model/ConsolePresets.cpp
+    model/ConsolePresets.h
     model/MidiModel.cpp
     model/MidiModel.h
     model/Playlists.cpp

@@ -90,6 +90,7 @@ private:
     void testFadesAndAutomation();
     void testEditingAndUndo();
     void testConsoleSaturation();
+    void testConsolePresets();
     void testSessionRoundTrip();
     void testImportAndResampling();
     void testElasticAudio();

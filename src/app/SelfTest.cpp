@@ -3,6 +3,7 @@
 #include "CommandIds.h"
 #include "media/AudioImporter.h"
 #include "model/Automation.h"
+#include "model/ConsolePresets.h"
 #include "model/MidiModel.h"
 #include "model/Playlists.h"
 #include "model/Routing.h"
@@ -69,6 +70,7 @@ void SelfTest::start()
         testFadesAndAutomation();
         testEditingAndUndo();
         testConsoleSaturation();
+        testConsolePresets();
         testSessionRoundTrip();
         testImportAndResampling();
         testElasticAudio();
@@ -488,6 +490,67 @@ void SelfTest::testConsoleSaturation()
 
     setConsole (false);
     clearTracks();
+}
+
+//==============================================================================
+// Console presets: each one's measured character, through a real bounce of a
+// 1 kHz sine at -6 dBFS (ROADMAP.md: "defined by measurable targets").
+
+void SelfTest::testConsolePresets()
+{
+    beginGroup ("Console presets (measured character)");
+    auto& tools = app.getRemoteTools();
+    auto call = [&tools] (const juce::String& tool, const juce::String& arguments) { return tools.call (tool, juce::JSON::parse (arguments)); };
+    auto* session = app.getSession();
+    auto state = session->getState();
+    const juce::var before[] = { state[ids::consoleEnabled], state[ids::consoleDrive], state[ids::consoleCharacter], state[ids::consoleCurve] };
+
+    clearTracks();
+    addToneTrack ("Preset Tone", 2, media.getChildFile ("tone1k_stereo.wav"), clipStart); // -6.02 dBFS per channel
+    const auto end = clipStart + (juce::int64) (2.0 * sampleRate) + 4800;
+
+    for (const auto& preset : consolepresets::all())
+    {
+        const juce::String name (preset.name);
+        auto r = call ("set_master", "{\"preset\":\"" + name + "\"}");
+        const auto audio = readAudio (bounce ("preset_" + name.removeCharacters (" "), 0, end).file);
+
+        // One second, from 0.2 s into the tone: whole cycles of every harmonic of 1 kHz.
+        const float* p = audio.getReadPointer (0, (int) clipStart + 9600);
+        const int n = (int) sampleRate;
+        double harmonics[11] = {};
+        for (int k = 1; k <= 10; ++k)
+            harmonics[k] = dsp::toneAmplitude (p, n, 1000.0 * k, sampleRate);
+        double distortion = 0.0;
+        for (int k = 2; k <= 10; ++k)
+            distortion += harmonics[k] * harmonics[k];
+        const double thd = 100.0 * std::sqrt (distortion) / harmonics[1];
+        const bool balanced = preset.dominantHarmonic == 2 ? harmonics[2] >= harmonics[3]
+                            : preset.dominantHarmonic == 3 ? harmonics[3] >= harmonics[2]
+                                                           : true;
+        expect (name + ": THD within " + fmt (preset.minThdPercent, 1) + "-" + fmt (preset.maxThdPercent, 3) + " %"
+                    + (preset.dominantHarmonic != 0 ? ", H" + juce::String (preset.dominantHarmonic) + " the larger of H2 and H3" : juce::String()),
+                r.ok && thd >= preset.minThdPercent && thd <= preset.maxThdPercent && balanced
+                    && consolepresets::current (state) == name,
+                r.error + fmt (thd, 4) + " % THD, H2/H3 " + fmt (db (harmonics[2]) - db (harmonics[3]), 1) + " dB");
+    }
+
+    auto r = call ("set_master", R"({"preset":"Warm Tape"})");
+    auto tweaked = call ("set_master", R"({"drive_db":0})");
+    const auto status = call ("get_status", "{}");
+    expect ("changing a control after a preset reports \"Custom\"; one undo goes back to the preset",
+            r.ok && tweaked.ok && consolepresets::current (state) == "Custom"
+                && status.data["master"]["preset"].toString() == "Custom",
+            consolepresets::current (state));
+    session->getUndoManager().undo();
+    expect ("undo restores Warm Tape", consolepresets::current (state) == "Warm Tape", consolepresets::current (state));
+    expect ("an unknown preset is refused", ! call ("set_master", R"({"preset":"Loud"})").ok, {});
+
+    clearTracks();
+    state.setProperty (ids::consoleEnabled, before[0], nullptr);
+    state.setProperty (ids::consoleDrive, before[1], nullptr);
+    state.setProperty (ids::consoleCharacter, before[2], nullptr);
+    state.setProperty (ids::consoleCurve, before[3], nullptr);
 }
 
 void SelfTest::testSessionRoundTrip()

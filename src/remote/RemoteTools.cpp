@@ -2,11 +2,13 @@
 
 #include "app/AppController.h"
 #include "model/Automation.h"
+#include "model/ConsolePresets.h"
 #include "model/MidiModel.h"
 #include "model/Playlists.h"
 #include "model/Routing.h"
 #include "plugins/BuiltinEffects.h"
 
+#include <dsp/SaturationCurve.h>
 #include <dsp/SignalAnalysis.h>
 #include <remote/JsonLimits.h>
 
@@ -385,10 +387,13 @@ const std::vector<ToolInfo>& toolTable()
                     { "filter_env_octaves", "number", "How far each note opens the filter, in octaves (-8 to 8)" },
                     { "gain_db", "number", "Synth output level, -60 to +12 dB" } }) },
         { "set_master", "Master bus",
-          "Master fader and the analog console emulation (saturation) on the master bus.",
+          "Master fader and the analog console emulation (saturation) on the master bus. A preset sets the console "
+          "to a measured character: Clean (bypassed), Warm Tape (0.3-1% THD at -6 dBFS, even harmonics: warmth), "
+          "Vintage Console (0.1-0.5%, odd: density), Gritty (3-8%, odd: audible drive). Other arguments apply after it.",
           schema ({ { "volume_db", "number", "Master fader in dB" },
+                    { "preset", "string", "Console preset", false, { "Clean", "Warm Tape", "Vintage Console", "Gritty" } },
                     { "console", "boolean", "Console emulation on/off" },
-                    { "drive_db", "number", "Console drive, 0-24 dB (how early saturation starts)" },
+                    { "drive_db", "number", "Console drive, -12 to +24 dB (how early saturation starts; below 0 only colours)" },
                     { "character", "number", "Console asymmetry 0-1 (more = more 2nd harmonic warmth)" },
                     { "curve", "string", "Saturation curve", false, { "tanh", "cubic" } } }) },
         { "bounce", "Bounce (export) the mix",
@@ -767,6 +772,7 @@ RemoteTools::Result RemoteTools::getStatus()
                                           { "length_seconds", samplesToSeconds (app.getSessionEnd()) } }));
     set (status, "master", makeObject ({ { "volume_db", dbOrNull (s.getProperty (ids::masterVolumeDb, 0.0)) },
                                          { "console", (bool) s.getProperty (ids::consoleEnabled, true) },
+                                         { "preset", consolepresets::current (s) },
                                          { "drive_db", (double) s.getProperty (ids::consoleDrive, 6.0) },
                                          { "character", (double) s.getProperty (ids::consoleCharacter, 0.35) },
                                          { "curve", (int) s.getProperty (ids::consoleCurve, 0) == 1 ? "cubic" : "tanh" } }));
@@ -1807,9 +1813,17 @@ RemoteTools::Result RemoteTools::setMaster (const juce::var& args)
 {
     auto state = app.getSession()->getState();
     auto* um = beginEdit ("Master");
+    if (args.hasProperty ("preset"))
+    {
+        const auto* preset = consolepresets::find (args["preset"].toString());
+        if (preset == nullptr)
+            return { false, {}, "Unknown preset: use Clean, Warm Tape, Vintage Console or Gritty." };
+        consolepresets::apply (state, *preset, um);
+    }
     if (args.hasProperty ("volume_db"))  state.setProperty (ids::masterVolumeDb, readDb (args["volume_db"]), um);
     if (args.hasProperty ("console"))    state.setProperty (ids::consoleEnabled, (bool) args["console"], um);
-    if (args.hasProperty ("drive_db"))   state.setProperty (ids::consoleDrive, juce::jlimit (0.0, 24.0, (double) args["drive_db"]), um);
+    if (args.hasProperty ("drive_db"))   state.setProperty (ids::consoleDrive, juce::jlimit (dsp::SaturationCurve::minDriveDb, dsp::SaturationCurve::maxDriveDb,
+                                                                                         (double) args["drive_db"]), um);
     if (args.hasProperty ("character"))  state.setProperty (ids::consoleCharacter, juce::jlimit (0.0, 1.0, (double) args["character"]), um);
     if (args.hasProperty ("curve"))      state.setProperty (ids::consoleCurve, args["curve"].toString() == "cubic" ? 1 : 0, um);
     return getStatus();

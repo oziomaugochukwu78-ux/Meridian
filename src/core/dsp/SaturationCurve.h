@@ -29,7 +29,11 @@ class SaturationCurve
 public:
     enum class Type { tanh, cubic };
 
-    /** Drive in dB, 0..+24. 0 dB = knee at full scale, i.e. almost transparent. */
+    /** Drive range, dB. 0 dB puts the knee at full scale; below 0 it sits above
+        full scale, so even loud mixes are only coloured (the gentle presets). */
+    static constexpr double minDriveDb = -12.0, maxDriveDb = 24.0;
+
+    /** Drive in dB, minDriveDb..maxDriveDb. */
     void setDriveDecibels (double driveDb) noexcept;
 
     /** 0 = perfectly symmetric (odd harmonics only) .. 1 = strongly asymmetric. */

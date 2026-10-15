@@ -242,7 +242,7 @@ Each step is sized to a small but measurable change, such as +0.5 dB H2/H1, and 
 
 | Milestone | Preset work |
 |---|---|
-| 2 | Data model, validator and migrator; `console`, `template`, `layout` and `theme` kinds; factory console presets tuned to their measured bands; `list_presets`, `describe_preset`, `apply_preset` and `create_session_from_template` |
+| 2 | Done: factory console presets tuned to their measured bands (Clean 0 %, Warm Tape 0.66 %, Vintage Console 0.25 %, Gritty 4.6 % THD), applied from the master strip or `set_master {preset}`. To do: data model, validator and migrator; `console` (user presets), `template`, `layout` and `theme` kinds; `list_presets`, `describe_preset`, `apply_preset` and `create_session_from_template` |
 | 2 | `recipe` kind (needs the built-in EQ and compressor), `set_up`, `adjust` |
 | 3 | User presets, export/import, a preset browser, the `keymap` kind and shortcut editor, `save_preset`/`export_preset` |
 

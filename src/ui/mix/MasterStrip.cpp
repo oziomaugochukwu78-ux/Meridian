@@ -1,8 +1,10 @@
 #include "MasterStrip.h"
 
+#include "model/ConsolePresets.h"
 #include "ui/Theme.h"
 
 #include <dsp/FaderTaper.h>
+#include <dsp/SaturationCurve.h>
 
 namespace meridian
 {
@@ -41,7 +43,26 @@ MasterStrip::MasterStrip (AppController& a) : app (a)
     };
     addAndMakeVisible (consoleButton);
 
-    setupKnob (driveKnob, 0.0, 24.0, 6.0, "Drive: how early saturation starts (0 dB = almost transparent)");
+    for (int i = 0; i < (int) consolepresets::all().size(); ++i)
+        presetSelector.addItem (consolepresets::all()[(size_t) i].name, i + 1);
+    presetSelector.setTooltip ("Console preset, each tuned to a measured character (1 kHz at -6 dBFS): "
+                               "Clean (bypassed), Warm Tape (0.3-1% THD, even harmonics), "
+                               "Vintage Console (0.1-0.5%, odd), Gritty (3-8%, odd)");
+    presetSelector.onChange = [this]
+    {
+        const int index = presetSelector.getSelectedId() - 1;
+        auto* s = app.getSession();
+        if (s == nullptr || ! juce::isPositiveAndBelow (index, (int) consolepresets::all().size()))
+            return;
+        const auto& preset = consolepresets::all()[(size_t) index];
+        s->getUndoManager().beginNewTransaction ("Preset: " + juce::String (preset.name));
+        consolepresets::apply (s->getState(), preset, &s->getUndoManager());
+        refresh();
+    };
+    addAndMakeVisible (presetSelector);
+
+    setupKnob (driveKnob, dsp::SaturationCurve::minDriveDb, dsp::SaturationCurve::maxDriveDb, 6.0,
+               "Drive: how early saturation starts (below 0 dB the knee is above full scale: colour only)");
     driveKnob.onDragStart = [this] { if (auto* um = app.getUndoManager()) um->beginNewTransaction ("Console Drive"); };
     driveKnob.onValueChange = [this, &console]
     {
@@ -150,6 +171,15 @@ void MasterStrip::refresh()
     characterKnob.setValue (console.character.load(), juce::dontSendNotification);
     curveSelector.setSelectedId (console.curveType.load() == 1 ? 2 : 1, juce::dontSendNotification);
 
+    if (auto* s = app.getSession())
+    {
+        const auto name = consolepresets::current (s->getState());
+        if (const auto* preset = consolepresets::find (name))
+            presetSelector.setSelectedId ((int) (preset - consolepresets::all().data()) + 1, juce::dontSendNotification);
+        else
+            presetSelector.setText (name, juce::dontSendNotification); // "Custom"
+    }
+
     driveLabel.setText ("DRIVE " + juce::String (driveKnob.getValue(), 1), juce::dontSendNotification);
     characterLabel.setText ("CHAR " + juce::String (juce::roundToInt (characterKnob.getValue() * 100.0)) + "%",
                             juce::dontSendNotification);
@@ -222,6 +252,8 @@ void MasterStrip::resized()
     consoleHeader = area.removeFromTop (196);
     auto console = consoleHeader.reduced (6);
     consoleButton.setBounds (console.removeFromTop (24));
+    console.removeFromTop (6);
+    presetSelector.setBounds (console.removeFromTop (22));
     console.removeFromTop (6);
 
     auto knobs = console.removeFromTop (54);

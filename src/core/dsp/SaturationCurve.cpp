@@ -15,7 +15,7 @@ constexpr double maxBias = 0.35;
 
 void SaturationCurve::setDriveDecibels (double driveDb) noexcept
 {
-    drive = std::pow (10.0, std::clamp (driveDb, 0.0, 24.0) / 20.0);
+    drive = std::pow (10.0, std::clamp (driveDb, minDriveDb, maxDriveDb) / 20.0);
     recalculate();
 }
 

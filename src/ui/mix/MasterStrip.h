@@ -9,7 +9,8 @@ namespace meridian
 {
 
 /** The master fader strip, with the analog console section on top:
-    on/off, drive, character (asymmetry → even harmonics) and curve. */
+    on/off, a factory preset (Clean, Warm Tape, Vintage Console, Gritty),
+    drive, character (asymmetry → even harmonics) and curve. */
 class MasterStrip final : public juce::Component
 {
 public:
@@ -24,6 +25,9 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    /** For the self test, which drives the real control. */
+    juce::ComboBox& getPresetSelector() noexcept { return presetSelector; }
+
 private:
     void store (const juce::Identifier&, const juce::var&, const juce::String& undoName);
 
@@ -32,7 +36,7 @@ private:
     juce::TextButton consoleButton { "CONSOLE" };
     juce::Slider driveKnob { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
     juce::Slider characterKnob { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
-    juce::ComboBox curveSelector;
+    juce::ComboBox curveSelector, presetSelector;
     juce::Label driveLabel, characterLabel, latencyLabel;
 
     juce::Slider fader { juce::Slider::LinearVertical, juce::Slider::NoTextBox };
