@@ -4,6 +4,7 @@
 #include "media/TimeStretchEngine.h"
 #include "model/MidiModel.h"
 #include "model/SessionBackups.h"
+#include "plugins/BuiltinEffects.h"
 #include "ui/TimeFormat.h"
 
 #include <remote/JsonWriter.h>
@@ -142,12 +143,34 @@ juce::Result AppController::createSession (const juce::File& parentFolder, const
         return juce::Result::fail (error);
 
     if (sessionTemplate != nullptr)
-    {
         applyTemplate (*newSession, *sessionTemplate);
-        newSession->save (error);
-    }
 
     installSession (std::move (newSession));
+
+    // The template's effects need the engine, so they go in once the session is installed.
+    if (sessionTemplate != nullptr)
+    {
+        const auto descriptions = BuiltinEffectFormat::getDescriptions();
+        for (const auto& spec : sessionTemplate->tracks)
+        {
+            auto t = session->getTracksNode().getChildWithProperty (ids::name, spec.name);
+            for (int slot = 0; slot < spec.inserts.size() && slot < Session::maxInserts; ++slot)
+                for (const auto& d : descriptions)
+                {
+                    if (d.name != spec.inserts[slot])
+                        continue;
+                    juce::String insertError;
+                    if (! bridge->insertPlugin (t, slot, d, insertError) || ! track::isAux (t))
+                        continue;
+                    // On a bus the effect is fully wet: the dry signal already reaches the mix.
+                    if (const auto insert = bridge->getInsert (track::id (t), slot); insert != nullptr && insert->plugin != nullptr)
+                        for (auto* p : insert->plugin->getParameters())
+                            if (auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (p); hosted != nullptr && hosted->getParameterID() == "mix")
+                                p->setValueNotifyingHost (1.0f);
+                }
+        }
+        return saveSession();
+    }
     return juce::Result::ok();
 }
 

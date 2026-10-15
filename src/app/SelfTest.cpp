@@ -3285,6 +3285,72 @@ bool allFinite (const juce::AudioBuffer<float>& audio)
 }
 } // namespace
 
+//==============================================================================
+// Session templates: real sessions made from the Hip-Hop and Film templates.
+// (Runs inside testRobustness, which reopens the self-test session afterwards.)
+
+void SelfTest::testSessionTemplates()
+{
+    beginGroup ("Session templates");
+    auto templateNamed = [] (const juce::String& name) -> const SessionTemplate*
+    {
+        for (const auto& t : builtInTemplates())
+            if (t.name == name)
+                return &t;
+        return nullptr;
+    };
+    auto create = [&] (const juce::String& name)
+    {
+        Session::Settings settings;
+        settings.name = "Template " + name.upToFirstOccurrenceOf (" ", false, false);
+        settings.sampleRate = sampleRate;
+        return app.createSession (output.getChildFile ("templates"), settings, templateNamed (name));
+    };
+    auto named = [this] (const juce::String& name) { return app.getSession()->getTracksNode().getChildWithProperty (ids::name, name); };
+    auto insertNames = [this] (const juce::ValueTree& t)
+    {
+        juce::StringArray names;
+        for (int slot = 0; slot < Session::maxInserts; ++slot)
+            if (const auto insert = app.getBridge().getInsert (track::id (t), slot); insert != nullptr && insert->plugin != nullptr)
+                names.add (insert->plugin->getName());
+        return names;
+    };
+
+    auto created = create ("Hip-Hop");
+    auto* session = app.getSession();
+    const auto drums = named ("Drums"), bass = named ("808"), vox = named ("Lead Vox"), reverb = named ("Reverb");
+    expect ("Hip-Hop: six tracks of the right kinds (a drum machine, instruments, audio and a reverb bus), 90 BPM, Warm Tape",
+            created.wasOk() && session->getNumTracks() == 6 && track::isDrumKit (drums) && track::isInstrument (bass)
+                && track::isAudio (vox) && track::isAux (reverb) && juce::exactlyEqual (session->getTempo(), 90.0)
+                && consolepresets::current (session->getState()) == "Warm Tape",
+            created.getErrorMessage() + juce::String (session->getNumTracks()) + " tracks, " + fmt (session->getTempo()) + " BPM, "
+                + consolepresets::current (session->getState()));
+    expect ("the vocal chain is on Lead Vox: EQ, Compressor and De-Esser in inserts A to C",
+            insertNames (vox) == juce::StringArray { "Meridian EQ", "Meridian Compressor", "Meridian De-Esser" },
+            insertNames (vox).joinIntoString (", "));
+
+    const auto send = routing::findSend (vox, 0);
+    float wet = -1.0f;
+    if (const auto insert = app.getBridge().getInsert (track::id (reverb), 0); insert != nullptr && insert->plugin != nullptr)
+        for (auto* p : insert->plugin->getParameters())
+            if (auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (p); hosted != nullptr && hosted->getParameterID() == "mix")
+                wet = p->getValue();
+    expect ("Lead Vox sends to the Reverb bus at -18 dB, and the bus's reverb is fully wet",
+            send.isValid() && send::target (send) == track::id (reverb) && juce::exactlyEqual (send::levelDb (send), -18.0)
+                && juce::exactlyEqual (wet, 1.0f),
+            "mix " + fmt (wet));
+    expect ("the Hip-Hop session is valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+
+    created = create ("Film (Dialogue / Music / Effects)");
+    session = app.getSession();
+    expect ("Film: dialogue, music and effects feed the DX, MX and FX buses",
+            created.wasOk() && track::outputBus (named ("Dialogue 2")) == track::id (named ("DX"))
+                && track::outputBus (named ("Music")) == track::id (named ("MX"))
+                && track::outputBus (named ("Ambience")) == track::id (named ("FX"))
+                && track::isAux (named ("DX")) && findSessionProblem (*session).isEmpty(),
+            created.getErrorMessage() + findSessionProblem (*session));
+}
+
 void SelfTest::testRobustness()
 {
     beginGroup ("Robustness (damaged files, hostile input)");
@@ -3295,6 +3361,7 @@ void SelfTest::testRobustness()
     testDamagedSessions (original);
     testRemoteFuzz();
     testSessionSafety();
+    testSessionTemplates();
 
     beginGroup ("Robustness (damaged files, hostile input)");
     const auto reopened = app.openSession (original);
