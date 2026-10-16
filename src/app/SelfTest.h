@@ -101,6 +101,7 @@ private:
     void testGoldenRenders();
     void testInstruments();
     void testSampler();
+    void testLoFiEffect();
     void testBuiltinEffects();
     void testLoopClickMarkers();
     void testMidiInput();

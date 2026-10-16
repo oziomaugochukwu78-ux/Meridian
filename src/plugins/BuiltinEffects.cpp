@@ -1,5 +1,6 @@
 #include "BuiltinEffects.h"
 
+#include <dsp/LoFi.h>
 #include <dsp/Compressor.h>
 #include <dsp/DeEsser.h>
 #include <dsp/FdnReverb.h>
@@ -21,7 +22,8 @@ constexpr const char* gateId = "meridian:gate";
 constexpr const char* delayId = "meridian:delay";
 constexpr const char* deEsserId = "meridian:deesser";
 constexpr const char* tunerId = "meridian:tuner";
-constexpr const char* allIds[] = { eqId, compressorId, limiterId, gateId, deEsserId, delayId, reverbId, tunerId };
+constexpr const char* loFiId = "meridian:lofi";
+constexpr const char* allIds[] = { eqId, compressorId, limiterId, gateId, deEsserId, delayId, reverbId, loFiId, tunerId };
 
 juce::NormalisableRange<float> frequencyRange (float lo, float hi, float centre)
 {
@@ -723,6 +725,73 @@ private:
 };
 
 //==============================================================================
+/** Meridian Lo-Fi: tape wow and flutter, vinyl crackle and hiss, bit and
+    sample-rate reduction and a darker tone (dsp::LoFi). Delays the signal by
+    10 ms, reported as latency so the track stays in time with the others. */
+class MeridianLoFi final : public BuiltinEffect
+{
+public:
+    MeridianLoFi() : BuiltinEffect ("Meridian Lo-Fi", "Effect", loFiId)
+    {
+        wow = add ("wow", "Wow", { 0.0f, 1.0f }, 0.3f, {});
+        flutter = add ("flutter", "Flutter", { 0.0f, 1.0f }, 0.3f, {});
+        noise = add ("noise", "Vinyl Noise", { 0.0f, 1.0f }, 0.2f, {});
+        bits = add ("bits", "Bits", { 4.0f, 16.0f, 1.0f }, 16.0f, {});
+        downsample = add ("downsample", "Downsample", { 1.0f, 8.0f, 1.0f }, 1.0f, "x");
+        tone = add ("tone", "Tone", frequencyRange (500.0f, 20000.0f, 4000.0f), 8000.0f, "Hz");
+        mix = add ("mix", "Mix", { 0.0f, 1.0f }, 1.0f, {});
+    }
+
+    void prepareToPlay (double sampleRate, int) override
+    {
+        lofi.prepare (sampleRate); // allocates: prepareToPlay runs off the audio thread
+        setLatencySamples (lofi.getLatencySamples());
+        applied = {};
+        applied.bits = -1; // force the first apply
+        applyParameters();
+    }
+
+    void processAudio (juce::AudioBuffer<float>& buffer) override
+    {
+        applyParameters();
+        lofi.process (buffer.getWritePointer (0), buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr,
+                      buffer.getNumSamples());
+    }
+
+    double getTailLengthSeconds() const override { return 2.0 * dsp::LoFi::centreDelaySeconds; }
+    void reset() override { lofi.reset(); }
+
+private:
+    void applyParameters()
+    {
+        dsp::LoFi::Params p;
+        p.wow = value (wow);
+        p.flutter = value (flutter);
+        p.noise = value (noise);
+        p.bits = (int) std::lround (value (bits));
+        p.downsample = (int) std::lround (value (downsample));
+        p.toneHz = value (tone);
+        p.mix = value (mix);
+        if (p.bits != applied.bits || p.downsample != applied.downsample || ! juce::exactlyEqual (p.wow, applied.wow)
+            || ! juce::exactlyEqual (p.flutter, applied.flutter) || ! juce::exactlyEqual (p.noise, applied.noise)
+            || ! juce::exactlyEqual (p.toneHz, applied.toneHz) || ! juce::exactlyEqual (p.mix, applied.mix))
+        {
+            lofi.setParams (p);
+            applied = p;
+        }
+    }
+
+    dsp::LoFi lofi;
+    dsp::LoFi::Params applied;
+    EffectParameter* wow = nullptr;
+    EffectParameter* flutter = nullptr;
+    EffectParameter* noise = nullptr;
+    EffectParameter* bits = nullptr;
+    EffectParameter* downsample = nullptr;
+    EffectParameter* tone = nullptr;
+    EffectParameter* mix = nullptr;
+};
+
 class MeridianGate final : public BuiltinEffect, public GainReductionMeter
 {
 public:
@@ -907,6 +976,7 @@ std::unique_ptr<juce::AudioPluginInstance> createEffect (const juce::String& ide
     if (identifier == gateId)       return std::make_unique<MeridianGate>();
     if (identifier == deEsserId)    return std::make_unique<MeridianDeEsser>();
     if (identifier == delayId)      return std::make_unique<MeridianDelay>();
+    if (identifier == loFiId)       return std::make_unique<MeridianLoFi>();
     if (identifier == reverbId)     return std::make_unique<MeridianReverb>();
     return nullptr;
 }

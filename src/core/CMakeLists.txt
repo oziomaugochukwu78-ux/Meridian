@@ -27,6 +27,8 @@ add_library(meridian_core STATIC
     dsp/Limiter.cpp
     dsp/Limiter.h
     dsp/LinearRamp.h
+    dsp/LoFi.cpp
+    dsp/LoFi.h
     dsp/Loudness.cpp
     dsp/Loudness.h
     dsp/MeterScale.h

@@ -82,6 +82,7 @@ void SelfTest::start()
         testGoldenRenders();
         testInstruments();
         testSampler();
+        testLoFiEffect();
         testBuiltinEffects();
         testLoopClickMarkers();
         testMidiInput();
@@ -1155,6 +1156,36 @@ double sineDelay (const juce::AudioBuffer<float>& audio, int from, int count, do
     return -std::atan2 (q, i) / w;
 }
 } // namespace
+
+void SelfTest::testLoFiEffect()
+{
+    beginGroup ("Meridian Lo-Fi (in a session)");
+    auto& tools = app.getRemoteTools();
+    auto call = [&tools] (const juce::String& tool, const juce::String& arguments) { return tools.call (tool, juce::JSON::parse (arguments)); };
+    clearTracks();
+    setConsole (false);
+    const auto tone = media.getChildFile ("tone1k_mono.wav");
+    addToneTrack ("LoFi Tone", 1, tone, 24000);
+    const auto plain = readAudio (bounce ("lofi_plain", 0, 96000).file);
+
+    auto r = call ("insert_plugin", R"({"track":"LoFi Tone","slot":"A","plugin":"Meridian Lo-Fi"})");
+    call ("set_plugin_parameter", R"({"track":"LoFi Tone","slot":"A","parameter":"mix","value":0})");
+    const auto dry = readAudio (bounce ("lofi_dry", 0, 96000).file);
+    double worst = dry.getNumSamples() == plain.getNumSamples() ? 0.0 : 1.0;
+    for (int i = 0; i < std::min (dry.getNumSamples(), plain.getNumSamples()); ++i)
+        worst = std::max (worst, (double) std::abs (dry.getSample (0, i) - plain.getSample (0, i)));
+    expect ("Meridian Lo-Fi loads, and its 10 ms delay is compensated: at mix 0 the track nulls against itself without it",
+            r.ok && worst < 1.0e-6, r.error + " largest difference " + juce::String (worst));
+
+    call ("set_plugin_parameter", R"({"track":"LoFi Tone","slot":"A","parameter":"mix","value":1})");
+    call ("set_plugin_parameter", R"({"track":"LoFi Tone","slot":"A","parameter":"noise","value":1})");
+    const auto wet = readAudio (bounce ("lofi_wet", 0, 96000).file);
+    const auto beforeTone = dsp::measureLevels (wet.getReadPointer (0, 1000), 20000);  // only vinyl here
+    expect ("with vinyl noise on, the silence before the tone carries hiss and crackle (well below the music)",
+            db (beforeTone.rms) > -70.0 && db (beforeTone.rms) < -35.0, fmt (db (beforeTone.rms), 1) + " dB RMS");
+    setConsole (true, 6.0, 0.35);
+    clearTracks();
+}
 
 void SelfTest::testSampler()
 {
