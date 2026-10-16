@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Session.h"
+#include <synth/Sampler.h>
 
 #include <midi/MeterMap.h>
 #include <midi/NoteSequence.h>
@@ -63,6 +64,8 @@ synth::PolySynth::Params readSynthParams (const juce::ValueTree& synthNode);
 
 /** A drum track's SYNTH node as drum-machine parameters. */
 synth::DrumSynth::Params readDrumParams (const juce::ValueTree& synthNode);
+/** The sampler's settings (its zones are read by the engine, which loads their audio). */
+synth::Sampler::Params readSamplerParams (const juce::ValueTree& synthNode);
 
 /** Waveform names as stored in the session: "sine", "saw", "square". */
 juce::String waveformName (synth::PolySynth::Waveform);

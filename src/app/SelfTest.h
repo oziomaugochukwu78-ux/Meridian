@@ -100,6 +100,7 @@ private:
     void testRemoteCommands();
     void testGoldenRenders();
     void testInstruments();
+    void testSampler();
     void testBuiltinEffects();
     void testLoopClickMarkers();
     void testMidiInput();

@@ -63,6 +63,8 @@ add_library(meridian_core STATIC
     synth/DrumSynth.cpp
     synth/DrumSynth.h
     synth/PolySynth.cpp
+    synth/Sampler.cpp
+    synth/Sampler.h
     synth/PolySynth.h
 
     remote/Base64.cpp

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ClipStream.h"
+#include <synth/Sampler.h>
 #include "TrackRealtimeState.h"
 
 #include <dsp/AutomationCurve.h>
@@ -102,6 +103,7 @@ struct InstrumentState
 {
     synth::PolySynth synth;
     synth::DrumSynth drums;        // used instead of `synth` on drum tracks
+    synth::Sampler sampler;        // used instead on sampler tracks
     double preparedRate = 0.0;
     uint64_t appliedParamsVersion = 0;
     juce::int64 nextPosition = -1; ///< where playback continues if nothing jumps; -1 = not rolling
@@ -154,6 +156,9 @@ struct TrackRender
     // repeated note retriggers cleanly).
     std::shared_ptr<InstrumentState> instrument;
     bool drumKit = false;                          ///< play `drums` instead of `synth`
+    bool sampler = false;                          ///< play `sampler` instead of `synth`
+    synth::Sampler::Params samplerParams;
+    std::shared_ptr<const synth::ZoneMap> zoneMap; ///< the sampler's sounds, kept alive by this graph
     /** A plug-in instrument (VST3/AU...) in insert A plays the MIDI instead of the
         built-in synth: it receives `midi` for the block, sample-accurate. */
     bool pluginInstrument = false;

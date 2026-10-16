@@ -164,6 +164,7 @@ namespace track
     inline bool isAudio (const juce::ValueTree& t)            { return ! isAux (t) && ! isInstrument (t); }
     inline juce::ValueTree synth (const juce::ValueTree& t)   { return t.getChildWithName (ids::SYNTH); }
     inline bool isDrumKit (const juce::ValueTree& t)          { return isInstrument (t) && synth (t).getProperty (ids::engine, "synth").toString() == "drums"; }
+    inline bool isSampler (const juce::ValueTree& t)          { return isInstrument (t) && synth (t).getProperty (ids::engine, "synth").toString() == "sampler"; }
     inline int outputBus (const juce::ValueTree& t)           { return t.getProperty (ids::outputBus, 0); } ///< aux track id, 0 = master
     inline juce::ValueTree sends (const juce::ValueTree& t)   { return t.getChildWithName (ids::SENDS); }
     inline int channels (const juce::ValueTree& t)            { return juce::jlimit (1, 2, (int) t.getProperty (ids::channels, 1)); }

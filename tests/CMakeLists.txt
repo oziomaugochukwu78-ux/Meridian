@@ -33,6 +33,7 @@ add_executable(meridian_core_tests
     remote/WebSocketReaderTests.cpp
     synth/DrumSynthTests.cpp
     synth/PolySynthTests.cpp
+    synth/SamplerTests.cpp
 )
 
 target_link_libraries(meridian_core_tests PRIVATE Meridian::core Catch2::Catch2WithMain)

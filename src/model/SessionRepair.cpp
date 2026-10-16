@@ -337,8 +337,25 @@ private:
         if (waveform != "saw" && waveform != "square" && waveform != "sine")
             set (first, ids::waveform, "saw", where + " synth", "waveform");
         const auto engine = first.getProperty (ids::engine, "synth").toString();
-        if (engine != "synth" && engine != "drums")
+        if (engine != "synth" && engine != "drums" && engine != "sampler")
             set (first, ids::engine, "synth", where + " synth", "engine");
+        // Sampler zones: a file and a valid key range; anything else inside SYNTH goes.
+        for (int i = first.getNumChildren(); --i >= 0;)
+        {
+            auto z = first.getChild (i);
+            if (! z.hasType (ids::ZONE) || z[ids::file].toString().trim().isEmpty())
+            {
+                note (where, "removed an invalid sampler zone");
+                first.removeChild (i, nullptr);
+                continue;
+            }
+            clampNumber (z, ids::rootNote, 0.0, 127.0, 60.0, where + " zone");
+            clampNumber (z, ids::lowNote, 0.0, 127.0, 0.0, where + " zone");
+            clampNumber (z, ids::highNote, 0.0, 127.0, 127.0, where + " zone");
+            clampNumber (z, ids::gainDb, -60.0, 12.0, 0.0, where + " zone");
+            if ((int) z.getProperty (ids::lowNote, 0) > (int) z.getProperty (ids::highNote, 127))
+                set (z, ids::highNote, (int) z.getProperty (ids::lowNote, 0), where + " zone", "key range");
+        }
         const auto synthWhere = where + " synth";
         clampNumber (first, ids::tune, -12.0, 12.0, 0.0, synthWhere);
         clampNumber (first, ids::decayScale, 0.25, 4.0, 1.0, synthWhere);
@@ -789,8 +806,18 @@ juce::String findSessionProblem (const Session& session)
             if (wf != "saw" && wf != "square" && wf != "sine")
                 return name + " synth waveform " + wf;
             const auto engine = sy.getProperty (ids::engine, "synth").toString();
-            if (engine != "synth" && engine != "drums")
+            if (engine != "synth" && engine != "drums" && engine != "sampler")
                 return name + " synth engine " + engine;
+            for (const auto& z : sy)
+            {
+                if (! z.hasType (ids::ZONE) || z[ids::file].toString().trim().isEmpty())
+                    return name + " has an invalid sampler zone";
+                for (const auto* p : { &ids::rootNote, &ids::lowNote, &ids::highNote })
+                    if (z.hasProperty (*p) && ! finiteIn (z[*p], 0.0, 127.0))
+                        return name + " sampler zone " + p->toString() + " " + z[*p].toString();
+                if ((int) z.getProperty (ids::lowNote, 0) > (int) z.getProperty (ids::highNote, 127))
+                    return name + " sampler zone key range";
+            }
             for (const auto& [id, lo, hi] : { std::tuple { &ids::detune, 0.0, 50.0 }, { &ids::attack, 0.0005, 10.0 },
                                               { &ids::decay, 0.001, 10.0 }, { &ids::sustain, 0.0, 1.0 },
                                               { &ids::release, 0.001, 20.0 }, { &ids::cutoff, 20.0, 20000.0 },

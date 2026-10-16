@@ -545,6 +545,65 @@ void EngineBridge::buildSegments (const juce::ValueTree& t, TrackRender& render,
                [] (const ClipSegment& a, const ClipSegment& b) { return a.start < b.start; });
 }
 
+std::shared_ptr<const synth::Sample> EngineBridge::loadSample (const juce::File& file)
+{
+    // Cached by path, size and time: the same file is read once, however many zones use it.
+    const auto key = file.getFullPathName() + "|" + juce::String (file.getSize()) + "|"
+                     + juce::String (file.getLastModificationTime().toMilliseconds());
+    if (const auto found = sampleCache.find (key); found != sampleCache.end())
+        return found->second;
+
+    std::unique_ptr<juce::AudioFormatReader> reader (formatManager.createReaderFor (file));
+    if (reader == nullptr || reader->lengthInSamples <= 0 || reader->sampleRate <= 0.0)
+        return nullptr;
+    // A sampler holds sounds in memory: one minute at most per sample.
+    const int length = (int) std::min<juce::int64> (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 60.0));
+    juce::AudioBuffer<float> audio ((int) juce::jlimit (1u, 2u, reader->numChannels), length);
+    reader->read (&audio, 0, length, 0, true, true);
+    auto sample = std::make_shared<synth::Sample>();
+    sample->sampleRate = reader->sampleRate;
+    sample->left.assign (audio.getReadPointer (0), audio.getReadPointer (0) + length);
+    if (audio.getNumChannels() > 1)
+        sample->right.assign (audio.getReadPointer (1), audio.getReadPointer (1) + length);
+    sampleCache[key] = sample;
+    return sample;
+}
+
+std::shared_ptr<const synth::ZoneMap> EngineBridge::zoneMapFor (const juce::ValueTree& t)
+{
+    // The same map object while the zones are unchanged, so a rebuild (any edit) never
+    // makes the sampler drop its sounding voices.
+    const auto synthNode = track::synth (t);
+    juce::String key;
+    for (const auto& z : synthNode)
+        if (z.hasType (ids::ZONE))
+        {
+            const auto file = session->resolveStoredPath (z[ids::file].toString());
+            key << file.getFullPathName() << "|" << file.getLastModificationTime().toMilliseconds() << "|"
+                << z[ids::rootNote].toString() << "|" << z[ids::lowNote].toString() << "|" << z[ids::highNote].toString()
+                << "|" << z[ids::gainDb].toString() << ";";
+        }
+    auto& cached = zoneMaps[track::id (t)];
+    if (cached.second != nullptr && cached.first == key)
+        return cached.second;
+
+    auto map = std::make_shared<synth::ZoneMap>();
+    for (const auto& z : synthNode)
+    {
+        if (! z.hasType (ids::ZONE))
+            continue;
+        auto sample = loadSample (session->resolveStoredPath (z[ids::file].toString()));
+        if (sample == nullptr)
+            continue; // missing or unreadable: those keys stay silent
+        map->zones.push_back ({ std::move (sample), juce::jlimit (0, 127, (int) z.getProperty (ids::rootNote, 60)),
+                                juce::jlimit (0, 127, (int) z.getProperty (ids::lowNote, 0)),
+                                juce::jlimit (0, 127, (int) z.getProperty (ids::highNote, 127)),
+                                (double) z.getProperty (ids::gainDb, 0.0) });
+    }
+    cached = { key, map };
+    return map;
+}
+
 void EngineBridge::buildMidiEvents (const juce::ValueTree& t, TrackRender& render) const
 {
     // Notes are in ticks from each clip's content origin, timed by the tempo map
@@ -727,6 +786,12 @@ std::unique_ptr<RenderGraph> EngineBridge::buildGraph (double sampleRate, int ma
                     live = std::make_shared<InstrumentState>();
                 render.instrument = sharedStreams ? live : std::make_shared<InstrumentState>();
                 render.drumKit = track::isDrumKit (t);
+                render.sampler = track::isSampler (t);
+                if (render.sampler)
+                {
+                    render.samplerParams = midimodel::readSamplerParams (track::synth (t));
+                    render.zoneMap = zoneMapFor (t);
+                }
                 render.synthParams = midimodel::readSynthParams (track::synth (t));
                 render.drumParams = midimodel::readDrumParams (track::synth (t));
                 render.synthParamsVersion = ++graphVersion;
@@ -831,6 +896,7 @@ void EngineBridge::assignDelayCompensation (RenderGraph& graph, bool sharedDelay
     {
         // An instrument's own synth delays its output like a plug-in would.
         int pluginLatency = t.instrument == nullptr || t.pluginInstrument ? 0 // a plug-in instrument reports its own, below
+                          : t.sampler ? synth::Sampler::getLatencySamples()
                           : t.drumKit ? synth::DrumSynth::getLatencySamples() : synth::PolySynth::getLatencySamples();
         for (const auto& slot : t.inserts)
             if (! slot->bypassed.load())

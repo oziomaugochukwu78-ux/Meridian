@@ -135,6 +135,21 @@ juce::var schema (std::initializer_list<Param> params)
                     { "length_beats", makeObject ({ { "type", "number" }, { "description", "How long it stays down, in beats" } }) } }) },
                 { "required", juce::Array<juce::var> { "start_beats", "length_beats" } } }));
         }
+        else if (juce::String (p.type) == "samples")
+        {
+            // Sampler zones: a sound file and the keys that play it.
+            set (property, "type", "array");
+            set (property, "items", makeObject ({
+                { "type", "object" },
+                { "properties", makeObject ({
+                    { "file", makeObject ({ { "type", "string" }, { "description", "Full path of a WAV, AIFF, FLAC or MP3 file" } }) },
+                    { "note", makeObject ({ { "type", "integer" }, { "description", "Drums: the one key that plays it (36 kick, 38 snare, 42 closed hat, 46 open hat...)" } }) },
+                    { "root_note", makeObject ({ { "type", "integer" }, { "description", "Keys: the note the sample was recorded at (60 = middle C)" } }) },
+                    { "low_note", makeObject ({ { "type", "integer" }, { "description", "Keys: lowest note it plays (default: root_note - 12)" } }) },
+                    { "high_note", makeObject ({ { "type", "integer" }, { "description", "Keys: highest note it plays (default: root_note + 12)" } }) },
+                    { "gain_db", makeObject ({ { "type", "number" }, { "description", "Level of this sample, -60 to +12 dB" } }) } }) },
+                { "required", juce::Array<juce::var> { "file" } } }));
+        }
         else if (juce::String (p.type) == "tracklist")
         {
             set (property, "type", "array");
@@ -424,6 +439,20 @@ const std::vector<ToolInfo>& toolTable()
                     { "drive_db", "number", "Console drive, -12 to +24 dB (how early saturation starts; below 0 only colours)" },
                     { "character", "number", "Console asymmetry 0-1 (more = more 2nd harmonic warmth)" },
                     { "curve", "string", "Saturation curve", false, { "tanh", "cubic" } } }) },
+        { "set_sampler", "Play recorded samples on an instrument track",
+          "Turns an instrument track into a sampler playing real recordings from MIDI: drum one-shots (mode drums: "
+          "each file on one key, General MIDI layout: 36 kick, 37 side stick, 38 snare, 39 clap, 42 closed hat, "
+          "44 pedal hat, 46 open hat (choked by 42/44), 49 crash, 51 ride) or a melodic instrument (mode keys: each "
+          "file recorded at root_note, transposed by speed across low_note..high_note; several samples across the "
+          "keyboard sound most natural). The files are copied into the session's Samples folder. Then write notes "
+          "with add_midi_clip and add_notes as for any instrument.",
+          schema ({ { "track", "track", "Instrument track number or name", true },
+                    { "mode", "string", "drums (one-shots) or keys (held notes with a release)", true, { "drums", "keys" } },
+                    { "samples", "samples", "The sounds (replace the track's current ones)", true },
+                    { "attack", "number", "Keys: seconds to fade in, 0-10 (default 0)" },
+                    { "release", "number", "Keys: seconds to fade out after the key is released (default 0.25)" },
+                    { "tune_semitones", "number", "Transpose every sample, -12 to +12" },
+                    { "gain_db", "number", "Output level, -60 to +12 dB (default -6)" } }) },
         { "strip_silence", "Strip silence from a track",
           "Removes the quiet parts of an audio track's clips (between takes, pauses between sentences, a drum mic's "
           "bleed), leaving one clip for each audible stretch. Only audio below the threshold goes, so what remains "
@@ -662,6 +691,7 @@ RemoteTools::Result RemoteTools::call (const juce::String& name, const juce::var
     if (name == "list_presets")       return listPresets (args);
     if (name == "group")              return group (args);
     if (name == "strip_silence")      return stripSilence (args);
+    if (name == "set_sampler")        return setSampler (args);
     if (name == "set_master")         return setMaster (args);
     if (name == "bounce")             return bounce (args);
     if (name == "undo")               return undoRedo (args, true);
@@ -1992,6 +2022,90 @@ const std::vector<Recipe>& setUpRecipes()
     return recipes;
 }
 } // namespace
+
+RemoteTools::Result RemoteTools::setSampler (const juce::var& args)
+{
+    juce::String error;
+    auto t = findInstrumentTrack (args["track"], error);
+    if (! t.isValid())
+        return { false, {}, error };
+    const bool drums = args["mode"].toString() == "drums";
+    const auto* list = args["samples"].getArray();
+    if (list == nullptr || list->isEmpty())
+        return { false, {}, "Give at least one sample: [{\"file\": \"C:/.../kick.wav\", \"note\": 36}]." };
+    if (list->size() > 128)
+        return { false, {}, "At most 128 samples." };
+
+    // Check every file before changing anything.
+    auto* session = app.getSession();
+    struct Wanted { juce::File file; int root, low, high; double gainDb; };
+    std::vector<Wanted> wanted;
+    for (const auto& item : *list)
+    {
+        const juce::File file (item["file"].toString().trim());
+        if (! juce::File::isAbsolutePath (item["file"].toString().trim()) || ! file.existsAsFile())
+            return { false, {}, "No such file: \"" + item["file"].toString() + "\" (give a full path)." };
+        if (std::unique_ptr<juce::AudioFormatReader> reader (app.getFormatManager().createReaderFor (file)); reader == nullptr)
+            return { false, {}, "\"" + file.getFileName() + "\" is not an audio file Meridian can read." };
+        Wanted w;
+        w.file = file;
+        if (drums)
+        {
+            if (! item.hasProperty ("note"))
+                return { false, {}, "Drums mode: give each sample its \"note\" (36 kick, 38 snare, 42 closed hat...)." };
+            w.root = w.low = w.high = juce::jlimit (0, 127, (int) item["note"]);
+        }
+        else
+        {
+            w.root = juce::jlimit (0, 127, item.hasProperty ("root_note") ? (int) item["root_note"] : 60);
+            w.low = juce::jlimit (0, 127, item.hasProperty ("low_note") ? (int) item["low_note"] : w.root - 12);
+            w.high = juce::jlimit (w.low, 127, item.hasProperty ("high_note") ? (int) item["high_note"] : w.root + 12);
+        }
+        w.gainDb = item.hasProperty ("gain_db") ? juce::jlimit (-60.0, 12.0, (double) item["gain_db"]) : 0.0;
+        wanted.push_back (w);
+    }
+
+    // Copy into the session (it stays self-contained), then set the zones.
+    const auto folder = session->getFolder().getChildFile ("Samples");
+    folder.createDirectory();
+    auto* um = beginEdit ("Sampler");
+    auto synthNode = track::synth (t);
+    synthNode.setProperty (ids::engine, "sampler", um);
+    synthNode.setProperty (ids::oneShot, drums, um);
+    for (int i = synthNode.getNumChildren(); --i >= 0;)
+        if (synthNode.getChild (i).hasType (ids::ZONE))
+            synthNode.removeChild (i, um);
+    juce::Array<juce::var> described;
+    for (const auto& w : wanted)
+    {
+        auto copy = folder.getChildFile (w.file.getFileName());
+        if (copy != w.file && ! (copy.existsAsFile() && copy.getSize() == w.file.getSize()))
+        {
+            if (copy.existsAsFile())
+                copy = folder.getNonexistentChildFile (w.file.getFileNameWithoutExtension(), w.file.getFileExtension(), false);
+            if (! w.file.copyFileTo (copy))
+                return { false, {}, "Could not copy \"" + w.file.getFileName() + "\" into the session's Samples folder." };
+        }
+        juce::ValueTree zone (ids::ZONE);
+        zone.setProperty (ids::file, session->makeStoredPath (copy), nullptr);
+        zone.setProperty (ids::rootNote, w.root, nullptr);
+        zone.setProperty (ids::lowNote, w.low, nullptr);
+        zone.setProperty (ids::highNote, w.high, nullptr);
+        zone.setProperty (ids::gainDb, w.gainDb, nullptr);
+        synthNode.appendChild (zone, um);
+        described.add (makeObject ({ { "file", copy.getFileName() }, { "root_note", w.root }, { "low_note", w.low }, { "high_note", w.high } }));
+    }
+    auto setClamped = [&] (const char* argument, const juce::Identifier& property, double lo, double hi)
+    {
+        if (args.hasProperty (argument))
+            synthNode.setProperty (property, juce::jlimit (lo, hi, (double) args[argument]), um);
+    };
+    setClamped ("attack", ids::attack, 0.0005, 10.0);
+    setClamped ("release", ids::release, 0.001, 20.0);
+    setClamped ("tune_semitones", ids::tune, -12.0, 12.0);
+    setClamped ("gain_db", ids::gainDb, -60.0, 12.0);
+    return { true, makeObject ({ { "track", track::name (t) }, { "mode", drums ? "drums" : "keys" }, { "samples", described } }), {} };
+}
 
 RemoteTools::Result RemoteTools::stripSilence (const juce::var& args)
 {

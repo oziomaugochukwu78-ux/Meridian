@@ -95,6 +95,7 @@ private:
     Result listPresets (const juce::var&);
     Result group (const juce::var&);
     Result stripSilence (const juce::var&);
+    Result setSampler (const juce::var&);
     Result bounce (const juce::var&);
     Result undoRedo (const juce::var&, bool undo);
     Result saveSession();

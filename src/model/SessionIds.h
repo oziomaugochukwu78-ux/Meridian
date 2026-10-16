@@ -36,6 +36,8 @@
           SYNTH  engine ("synth" or "drums") gainDb
                  synth: waveform detune attack decay sustain release cutoff resonance filterEnv
                  drums: tune decayScale tone        (instrument tracks only)
+                 sampler: oneShot attack release tune gainDb
+            ZONE  file rootNote lowNote highNote gainDb   (sampler: file relative to the session folder)
 
     MIDI clips are CLIP nodes with kind="midi" on instrument tracks. They have
     no file; start/length/offset are timeline samples as for audio clips, and
@@ -198,7 +200,12 @@ MERIDIAN_ID (release)
 MERIDIAN_ID (cutoff)
 MERIDIAN_ID (resonance)
 MERIDIAN_ID (filterEnv)
-MERIDIAN_ID (engine)        // "synth" (PolySynth) or "drums" (DrumSynth)
+MERIDIAN_ID (engine)        // "synth" (PolySynth), "drums" (DrumSynth) or "sampler" (Sampler)
+MERIDIAN_ID (ZONE)          // sampler: a sample and the keys that play it
+MERIDIAN_ID (rootNote)
+MERIDIAN_ID (lowNote)
+MERIDIAN_ID (highNote)
+MERIDIAN_ID (oneShot)       // sampler: drums (true) or keys (false)
 MERIDIAN_ID (tune)          // drums: semitones
 MERIDIAN_ID (decayScale)    // drums
 MERIDIAN_ID (tone)          // drums: 0 dark .. 1 bright

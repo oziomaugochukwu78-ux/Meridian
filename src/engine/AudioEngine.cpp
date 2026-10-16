@@ -594,6 +594,7 @@ void AudioEngine::renderInstrument (TrackRender& t, const BlockContext& ctx) noe
     {
         inst.synth.prepare (rate);
         inst.drums.prepare (rate);
+        inst.sampler.prepare (rate);
         inst.preparedRate = rate;
         inst.appliedParamsVersion = 0;
     }
@@ -722,7 +723,12 @@ void AudioEngine::renderInstrument (TrackRender& t, const BlockContext& ctx) noe
         inst.nextPosition = rolling ? end : -1;
     };
 
-    if (t.drumKit)
+    if (t.sampler)
+    {
+        inst.sampler.setZones (t.zoneMap.get()); // the same map across rebuilds unless its zones change
+        play (inst.sampler, t.samplerParams);
+    }
+    else if (t.drumKit)
         play (inst.drums, t.drumParams);
     else
         play (inst.synth, t.synthParams);

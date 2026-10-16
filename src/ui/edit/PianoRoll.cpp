@@ -43,7 +43,8 @@ juce::String noteName (int pitch)
 //==============================================================================
 PianoRollComponent::PianoRollComponent (AppController& a, juce::ValueTree c) : app (a), clipNode (std::move (c))
 {
-    drumKit = track::isDrumKit (clip::owningTrack (clipNode));
+    const auto owner = clip::owningTrack (clipNode);
+    drumKit = track::isDrumKit (owner) || (track::isSampler (owner) && (bool) track::synth (owner).getProperty (ids::oneShot, true));
     keyboardWidth = drumKit ? 104 : 64;
     clipNode.addListener (this);
     setWantsKeyboardFocus (true);

@@ -81,6 +81,7 @@ void SelfTest::start()
         testBusesAndSends();
         testGoldenRenders();
         testInstruments();
+        testSampler();
         testBuiltinEffects();
         testLoopClickMarkers();
         testMidiInput();
@@ -1154,6 +1155,76 @@ double sineDelay (const juce::AudioBuffer<float>& audio, int from, int count, do
     return -std::atan2 (q, i) / w;
 }
 } // namespace
+
+void SelfTest::testSampler()
+{
+    beginGroup ("Sampler (built-in, recorded sounds)");
+    auto* session = app.getSession();
+    auto& tools = app.getRemoteTools();
+    auto call = [&tools] (const juce::String& tool, const juce::String& arguments) { return tools.call (tool, juce::JSON::parse (arguments)); };
+    auto path = [] (const juce::File& f) { return f.getFullPathName().replace ("\\", "/"); };
+
+    // Two "drum" samples at 44.1 kHz (the session runs at 48): a 100 Hz thump and a 2 kHz tick,
+    // and a "keys" sample: a 220 Hz tone recorded as A3 (57).
+    auto writeSample = [this] (const juce::String& name, double rate, double frequency, double seconds)
+    {
+        const auto file = media.getChildFile (name + ".wav");
+        juce::String error;
+        auto writer = createSessionWriter (file, rate, 1, 32, false, error);
+        juce::AudioBuffer<float> buffer (1, (int) (seconds * rate));
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+            buffer.setSample (0, i, (float) (0.5 * std::sin (juce::MathConstants<double>::twoPi * frequency * i / rate)));
+        if (writer != nullptr)
+            writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples());
+        return file;
+    };
+    const auto thump = writeSample ("sample_thump", 44100.0, 100.0, 0.25);
+    const auto tick = writeSample ("sample_tick", 44100.0, 2000.0, 0.05);
+    const auto tone = writeSample ("sample_a3", 48000.0, 220.0, 2.0);
+
+    clearTracks();
+    setConsole (false);
+    call ("set_tempo", R"({"bpm":120})");
+    call ("create_track", R"({"kind":"instrument","name":"Kit"})");
+    auto r = call ("set_sampler", R"({"track":"Kit","mode":"drums","gain_db":0,"samples":[{"file":")" + path (thump)
+                                  + R"(","note":36},{"file":")" + path (tick) + R"(","note":42}]})");
+    expect ("set_sampler loads drum samples and copies them into the session", r.ok
+                && session->getFolder().getChildFile ("Samples").getChildFile ("sample_thump.wav").existsAsFile(), r.error);
+    call ("add_midi_clip", R"({"track":"Kit","start_beat":0,"length_beats":4})");
+    call ("add_notes", R"({"track":"Kit","clip":1,"notes":[{"pitch":36,"start_beats":1,"length_beats":0.25,"velocity":1},{"pitch":42,"start_beats":2,"length_beats":0.25,"velocity":1}]})");
+    const auto mix = readAudio (bounce ("sampler_drums", 0, 96000).file);
+    // Beat 1 at 120 BPM is sample 24000; the thump starts there (its first sample is 0, the
+    // next is not; the 0.5 ms anti-click fade-in makes the first ones small, but not zero).
+    int onset = -1;
+    for (int i = 23000; onset < 0 && i < 25000; ++i)
+        if (! juce::exactlyEqual (mix.getSample (0, i), 0.0f))
+            onset = i;
+    const double thumpHz = dsp::estimateFrequency (mix.getReadPointer (0, 24100), 8000, sampleRate);
+    const double tickHz = dsp::estimateFrequency (mix.getReadPointer (0, 48100), 2000, sampleRate);
+    expect ("a sampler hit lands on its beat to the sample, at the sample's own pitch (44.1 kHz file in a 48 kHz session)",
+            onset == 24001 && std::abs (thumpHz - 100.0) < 0.5 && std::abs (tickHz - 2000.0) < 2.0,
+            "onset " + juce::String (onset) + ", " + fmt (thumpHz, 2) + " Hz, " + fmt (tickHz, 1) + " Hz");
+
+    call ("create_track", R"({"kind":"instrument","name":"Sampled Keys"})");
+    r = call ("set_sampler", R"({"track":"Sampled Keys","mode":"keys","gain_db":0,"release":0.05,"samples":[{"file":")" + path (tone)
+                             + R"(","root_note":57}]})");
+    call ("set_track", R"({"track":"Kit","mute":true})");
+    call ("add_midi_clip", R"({"track":"Sampled Keys","start_beat":0,"length_beats":4})");
+    call ("add_notes", R"({"track":"Sampled Keys","clip":1,"notes":[{"pitch":64,"start_beats":0,"length_beats":2,"velocity":1}]})");
+    const auto keys = readAudio (bounce ("sampler_keys", 0, 96000).file);
+    const double e4 = dsp::estimateFrequency (keys.getReadPointer (0, 4800), 24000, sampleRate);
+    const auto afterRelease = dsp::measureLevels (keys.getReadPointer (0, 48000 + 2400 + 480), 4800);
+    expect ("keys mode transposes by the note (A3 sample played as E4 = 329.63 Hz) and stops after its release",
+            r.ok && std::abs (e4 - 329.63) < 0.5 && db (afterRelease.peak) < -59.0,
+            fmt (e4, 2) + " Hz, " + fmt (db (afterRelease.peak), 1) + " dB after the release");
+
+    r = call ("set_sampler", R"({"track":"Sampled Keys","mode":"drums","samples":[{"file":"C:/no/such/file.wav","note":36}]})");
+    expect ("set_sampler refuses a missing file and changes nothing", ! r.ok && r.error.contains ("No such file")
+                && track::synth (session->getTrack (1)).getProperty (ids::oneShot, true).equals (false), r.error);
+    expect ("a session with sampler tracks is valid", findSessionProblem (*session).isEmpty(), findSessionProblem (*session));
+    setConsole (true, 6.0, 0.35);
+    clearTracks();
+}
 
 void SelfTest::testInstruments()
 {
@@ -4087,8 +4158,8 @@ void SelfTest::testMcpTools()
     if (toolArray != nullptr)
         for (const auto& tool : *toolArray)
             allDescribed = allDescribed && tool["inputSchema"].isObject() && tool["description"].toString().length() > 20;
-    expect ("tools/list describes all 48 tools, each with a description and a JSON schema",
-            allDescribed && toolArray->size() == 48, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
+    expect ("tools/list describes all 49 tools, each with a description and a JSON schema",
+            allDescribed && toolArray->size() == 49, juce::String (toolArray != nullptr ? toolArray->size() : 0) + " tools");
 
     auto r = toolCall ("get_status", "{}");
     expect ("get_status returns the session and tracks", ! failed (r) && callText (r).contains ("\"Vocal\""), callText (r).substring (0, 160));

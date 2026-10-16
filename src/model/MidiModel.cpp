@@ -273,6 +273,17 @@ synth::PolySynth::Params readSynthParams (const juce::ValueTree& s)
     return p;
 }
 
+synth::Sampler::Params readSamplerParams (const juce::ValueTree& s)
+{
+    synth::Sampler::Params p; // setParams clamps
+    p.oneShot = s.getProperty (ids::oneShot, true);
+    p.attack = s.getProperty (ids::attack, 0.0005);
+    p.release = s.getProperty (ids::release, p.release);
+    p.tuneSemitones = s.getProperty (ids::tune, p.tuneSemitones);
+    p.gainDb = s.getProperty (ids::gainDb, p.gainDb);
+    return p;
+}
+
 synth::DrumSynth::Params readDrumParams (const juce::ValueTree& s)
 {
     synth::DrumSynth::Params p; // setParams clamps
