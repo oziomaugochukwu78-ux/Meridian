@@ -11,6 +11,11 @@ early release (see ROADMAP.md for what comes next).
 Double-click Meridian.exe. Nothing needs installing: the program is
 self-contained, and you can keep this folder anywhere.
 
+The first time, Windows may say "Windows protected your PC". That is
+because Meridian is not signed with a paid certificate, not because
+anything is wrong: click "More info", then "Run anyway". (The complete
+source code is public; see SOURCE.txt.)
+
 The Dashboard opens. On the "Create" tab, name a new session (a project)
 and click Create; "Create From Template" starts with ready-made tracks,
 effects and routing (Hip-Hop, Electronic, Band Tracking, Singer-Songwriter,
@@ -74,9 +79,15 @@ computer only, and every AI edit can be undone with Ctrl+Z.
 
 Claude Desktop (the free plan works):
   1. Install Node.js (the LTS version) from https://nodejs.org
-  2. Start Meridian.
-  3. In Claude Desktop: Settings > Developer > Edit Config, and put this
-     in claude_desktop_config.json:
+  2. Double-click "Connect to Claude.cmd" in this folder. If Claude
+     Desktop is open, it asks you to quit it first (right-click the
+     Claude icon by the clock > Quit), because Claude saves over its
+     settings when it quits.
+  3. Start Meridian, then Claude Desktop. Settings > Developer should
+     list "meridian".
+
+  To do it by hand instead: Settings > Developer > Edit Config, add this
+  to claude_desktop_config.json, then quit Claude fully and reopen it:
 
      {
        "mcpServers": {
@@ -84,8 +95,6 @@ Claude Desktop (the free plan works):
                        "args": ["-y", "mcp-remote", "http://127.0.0.1:47800/mcp"] }
        }
      }
-
-  4. Quit and reopen Claude Desktop.
 
 Claude Code: run
   claude mcp add --transport http meridian http://127.0.0.1:47800/mcp
@@ -104,8 +113,9 @@ do not use it. Setup > AI Remote Control Info... shows the connection details.
 -------------------------------------
 In it: recording with punch-in and count-in, playlists and comping,
 editing with crossfades, groups and Strip Silence, MIDI with a piano roll,
-a built-in synth and drum machine, VST3 instruments and effects, built-in
-EQ, compressor, limiter, gate, de-esser, delay, reverb and tuner,
+a built-in synth, drum machine and sampler, VST3 instruments and effects,
+built-in EQ, compressor, limiter, gate, de-esser, delay, reverb, Lo-Fi
+(tape wow, vinyl, bit crush) and tuner,
 automation, an analog-style console on the master, loudness metering,
 and export to WAV, AIFF, FLAC and MP3.
 

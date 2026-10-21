@@ -1,0 +1,20 @@
+MERIDIAN @PROJECT_VERSION@ - SOURCE CODE
+==========================
+
+Meridian is free software under the GNU Affero General Public License,
+version 3 (LICENSE.txt). You can get the complete source code of this
+build, and build it yourself, from:
+
+  https://github.com/oziomaugochukwu78-ux/Meridian
+
+This build was made from commit:
+
+  @MERIDIAN_SOURCE_COMMIT@
+
+To get exactly that version:
+
+  git clone https://github.com/oziomaugochukwu78-ux/Meridian
+  git -C Meridian checkout @MERIDIAN_SOURCE_COMMIT@
+
+The README explains how to build it. The libraries inside Meridian, and
+their licences, are listed in the licenses folder.

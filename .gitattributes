@@ -8,6 +8,7 @@ CMakeLists.txt text
 *.json text
 *.md  text
 *.ps1 text eol=crlf
+*.cmd text eol=crlf
 
 *.wav binary
 *.aif binary

@@ -20,7 +20,7 @@ This is an early foundation, not a finished DAW. Everything listed as working co
 | Mixing maths | 64-bit compensated summing bus, SIMD (SSE2/AVX/NEON) mix kernels, constant-power pan, 4x-oversampled tanh/cubic console saturation (drive -12 to +24 dB), with factory presets each tuned to a measured THD band and harmonic balance | Per-track console channels |
 | Plug-ins | VST3 and LV2 hosting (plus AU on macOS), scanning with crash protection, editors, bypass, state saved in the session; instrument plug-ins in insert A of an instrument track, played sample-accurately from its MIDI clips and the keyboard | CLAP hosting (needs a CLAP-SDK format adapter), sidechains, multi-output instruments |
 | Built-in effects | Meridian Lo-Fi: tape wow (up to +/-12 cents) and flutter, vinyl crackle and hiss, bit and sample-rate reduction and a darker tone; its 10 ms delay is reported and compensated. Meridian EQ: 7 bands (high-pass, low shelf, 3 peaks, high shelf, low-pass) plus output gain. It matches its design curve within 0.05 dB and passes audio bit-for-bit when flat. Meridian Compressor: threshold, ratio, soft knee, attack, release, makeup and mix (parallel compression). Its static curve is exact on steady signals, attack and release are the true 63% times, and at 1:1 it passes audio bit for bit. Meridian Limiter: look-ahead brickwall with true-peak detection (4x interpolation). No sample can exceed the ceiling (a proof is in the code); true peaks stay within 0.2 dB of it on programme material; the gain ramps so it cannot click; and its 1.8 ms latency is compensated. Meridian Gate: threshold with hysteresis (no chatter), range, attack, hold, release; bit-exact when open, exactly the range when closed, hold exact to the sample. Meridian De-Esser: threshold, frequency (2–12 kHz) and range. It listens above the frequency and turns down a high shelf by (level − threshold) × 3/4 dB, never more than the range; below the band, audio passes bit for bit, and the cut matches the shelf's designed response. Meridian Delay: up to 2 s, feedback, ping-pong, high-cut in the loop; echoes exact to the sample and each repeat exactly the feedback quieter. Meridian Reverb: 8-line feedback delay network with size, decay, damping, pre-delay, mix and width; its decay time measures within 10% of the setting, and the left/right tails are decorrelated. All appear in the plug-in list without a scan and are controlled by AI tools. The dynamics (Compressor, Limiter, Gate, De-Esser) show a gain-reduction meter in their windows and report it to the AI tools; on a steady tone each reads its specification's reduction to within 0.15 dB. Meridian Tuner: note, cents and frequency with an adjustable reference (A4 = 430–450 Hz); audio passes bit for bit; sines from 30 Hz to 2 kHz and bright sawtooths read within 1 cent at 44.1, 48 and 96 kHz, and silence and noise read as no pitch; the AI tools can read it too. | Channel strip, tempo-synced delay times |
-| Instruments and MIDI | Instrument tracks playing MIDI clips through a built-in polyphonic synth with measured quality: in tune, sample-accurate, folded aliasing under -87 dB; drum tracks with a built-in synthesised drum machine on the General MIDI map (kick, snare, clap, side stick, closed/pedal/open hi-hat with choke, three toms, crash, ride, cowbell; tune, decay and tone controls); a tempo map (tempo changes at any bar and beat) and time signatures (3/4, 6/8, ... from any bar), with notes stored in beats so they follow both (a clip keeps musical time wherever it sits in the tempo map); the click, ruler, grid, counter, count-in and MIDI editor follow them too; a Tempo ruler shows every tempo and time-signature change, and adds (double-click), edits, ramps or deletes (right-click) them, one undo step each; tempo ramps (an accelerando or ritardando glides linearly to the next change, with exact closed-form timing; set_tempo's ramp); double-click a lane to create a MIDI clip; MIDI keyboards: every MIDI input is opened (also when plugged in later), a record-armed instrument track plays what you play (one block of latency, constant, no jitter) and records it into a new MIDI clip, placed where you played it (latency compensated); the sustain pedal (in clips, from the keyboard, recorded, sent to plug-in instruments as CC 64, shown in the MIDI editor); the pitch wheel (two semitones either way) and the mod wheel (vibrato up to half a semitone), in clips, from the keyboard, recorded, sent to plug-in instruments (pitch wheel, CC 1), and drawn in the MIDI editor's controller lane; MIDI editor (piano roll: add, move, resize, delete, multi-select, quantize, transpose, velocity); AI tools to write notes and shape the sound | Other controllers, MIDI input selection per track, note audition |
+| Instruments and MIDI | Instrument tracks playing MIDI clips through a built-in polyphonic synth with measured quality: in tune, sample-accurate, folded aliasing under -87 dB; drum tracks with a built-in synthesised drum machine on the General MIDI map (kick, snare, clap, side stick, closed/pedal/open hi-hat with choke, three toms, crash, ride, cowbell; tune, decay and tone controls); a built-in sampler that plays recorded sounds (WAV, AIFF, FLAC, MP3) from MIDI: one-shot zones for drum kits (a hi-hat group chokes) or a sound per key range, pitched from its root note (Hermite interpolation), with a gain per zone and attack, release and tuning for the instrument (the AI tool set_sampler copies the files into the session); a tempo map (tempo changes at any bar and beat) and time signatures (3/4, 6/8, ... from any bar), with notes stored in beats so they follow both (a clip keeps musical time wherever it sits in the tempo map); the click, ruler, grid, counter, count-in and MIDI editor follow them too; a Tempo ruler shows every tempo and time-signature change, and adds (double-click), edits, ramps or deletes (right-click) them, one undo step each; tempo ramps (an accelerando or ritardando glides linearly to the next change, with exact closed-form timing; set_tempo's ramp); double-click a lane to create a MIDI clip; MIDI keyboards: every MIDI input is opened (also when plugged in later), a record-armed instrument track plays what you play (one block of latency, constant, no jitter) and records it into a new MIDI clip, placed where you played it (latency compensated); the sustain pedal (in clips, from the keyboard, recorded, sent to plug-in instruments as CC 64, shown in the MIDI editor); the pitch wheel (two semitones either way) and the mod wheel (vibrato up to half a semitone), in clips, from the keyboard, recorded, sent to plug-in instruments (pitch wheel, CC 1), and drawn in the MIDI editor's controller lane; MIDI editor (piano roll: add, move, resize, delete, multi-select, quantize, transpose, velocity); AI tools to write notes and shape the sound | Other controllers, MIDI input selection per track, note audition |
 | Elastic Audio | Offline time-compress/expand and pitch shift with Rubber Band (R3 engine), Alt-drag TCE on clip edges | Real-time (preview) elastic mode, warp markers |
 | AI remote | MCP server (49 tools; every argument checked against the published schema), JSON tools and text commands (PLAY, STOP, RECORD, TOGGLE_WINDOW, MUTE_TRACK_X, SET_VOLUME_TRACK_X_YdB, BOUNCE, STATUS, HELP) on 127.0.0.1; strict input validation (RFC 8259 JSON, UTF-8, nesting limit) | Presets applied by plain request (see the roadmap) |
 
@@ -31,18 +31,18 @@ Meridian has a built-in port that AI apps can drive: Claude can create tracks, w
 **Claude Desktop (the free plan works):**
 
 1. Install [Node.js](https://nodejs.org) (the LTS version). Claude Desktop uses it to reach Meridian.
-2. Start Meridian.
-3. In Claude Desktop open **Settings > Developer > Edit Config** and put this in `claude_desktop_config.json` (on Windows it is in `%APPDATA%\Claude\`):
+2. On Windows, double-click **Connect to Claude.cmd** in the Meridian folder. It finds Claude Desktop's config (wherever your version keeps it), adds Meridian and keeps a backup. If Claude is open it waits for you to quit it, because Claude saves over its config when it quits.
+3. Start Meridian, then Claude Desktop. **Settings > Developer** lists "meridian".
 
-   ```json
-   {
-     "mcpServers": {
-       "meridian": { "command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:47800/mcp"] }
-     }
-   }
-   ```
+To do it by hand: in Claude Desktop open **Settings > Developer > Edit Config**, add this to `claude_desktop_config.json`, then quit Claude fully (from the tray icon on Windows) and reopen it:
 
-4. Quit and reopen Claude Desktop. "meridian" appears in the tools menu of the message box.
+```json
+{
+  "mcpServers": {
+    "meridian": { "command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:47800/mcp"] }
+  }
+}
+```
 
 **Claude Code:** one command, with Meridian running:
 
@@ -89,7 +89,7 @@ cmake --build build/app --config Release --target Meridian
 
 ### Portable package
 
-This builds a self-contained ZIP: `Meridian.exe` with the C++ runtime linked in, a quick-start guide, the documentation and third-party licences. It runs on any 64-bit Windows 10/11 PC with nothing to install.
+This builds a self-contained ZIP: `Meridian.exe` with the C++ runtime linked in, a quick-start guide, `Connect to Claude.cmd`, the documentation, the licences and `SOURCE.txt` (the commit it was built from, so build from a clean checkout for a release). It runs on any 64-bit Windows 10/11 PC with nothing to install.
 
 ```bash
 cmake -S . -B build/dist -A x64 -DMERIDIAN_BUILD_TESTS=OFF
@@ -375,12 +375,14 @@ Every job treats warnings as errors. Each run uploads the self-test report, prog
 
 ## Licensing
 
-Meridian's own code is intended for release under the **GNU AGPLv3**, as required for open-source use of JUCE 9. Its components:
+Meridian's own code is licensed under the **GNU AGPLv3** ([LICENSE](LICENSE)), as required for open-source use of JUCE 9. Its components:
 
-- **JUCE 9:** AGPLv3 or commercial licence. The bundled ASIO SDK is GPLv3 and the VST3 SDK MIT.
+- **JUCE 9:** AGPLv3 or commercial licence. The bundled ASIO SDK is GPLv3 and the VST3 SDK MIT. JUCE also compiles in zlib, FLAC, Ogg, Vorbis, Opus, libpng, the IJG JPEG library, libwebp, HarfBuzz, SheenBidi, LunaSVG/PlutoVG and the LV2 libraries (permissive licences, listed in JUCE's `JUCE.spdx.json`).
 - **Rubber Band Library:** GPLv2-or-later (compatible with AGPLv3) or commercial.
 - **LAME 3.100:** LGPLv2-or-later (compatible with AGPLv3), built from source as a static library; its licence ships in the package.
 - **Catch2:** BSL-1.0 (tests only).
+
+The package carries all of these licences in its `licenses` folder, Meridian's own as `LICENSE.txt`, and a `SOURCE.txt` naming the exact commit it was built from.
 
 Shipping Meridian as a closed-source product would require commercial licences for JUCE and Rubber Band.
 

@@ -3,6 +3,7 @@
 juce_add_gui_app(Meridian
     PRODUCT_NAME "${MERIDIAN_PRODUCT_NAME}"
     COMPANY_NAME "Meridian Project"
+    COMPANY_COPYRIGHT "Copyright (C) 2026 the Meridian contributors. Licensed under the GNU AGPL v3."
     BUNDLE_ID "org.meridian-daw.meridian"
     VERSION "${PROJECT_VERSION}"
     MICROPHONE_PERMISSION_ENABLED TRUE
