@@ -117,7 +117,7 @@ TEST_CASE ("Tempo ramp: 120 to 240 BPM over 4 beats takes exactly 2 ln 2 seconds
 
 TEST_CASE ("Tempo ramp: ticks, seconds and samples round-trip exactly, speeding up and slowing down", "[tempo]")
 {
-    for (const auto [from, to] : { std::pair { 60.0, 180.0 }, std::pair { 200.0, 70.0 } })
+    for (const auto& [from, to] : { std::pair { 60.0, 180.0 }, std::pair { 200.0, 70.0 } })
     {
         TempoMap map (from);
         map.addChange (0, from, true);

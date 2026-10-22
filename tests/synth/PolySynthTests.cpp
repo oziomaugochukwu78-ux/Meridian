@@ -272,7 +272,7 @@ TEST_CASE ("Output is always finite, even at extreme settings", "[synth]")
 
 TEST_CASE ("Pitch bend: the wheel's ends are exactly two semitones away, halfway one", "[synth][bend]")
 {
-    for (const auto [amount, semitones] : { std::pair { 1.0f, 2.0 }, std::pair { -1.0f, -2.0 }, std::pair { 0.5f, 1.0 } })
+    for (const auto& [amount, semitones] : { std::pair { 1.0f, 2.0 }, std::pair { -1.0f, -2.0 }, std::pair { 0.5f, 1.0 } })
     {
         synth::PolySynth s;
         s.prepare (rate);

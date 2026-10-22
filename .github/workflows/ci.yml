@@ -1,16 +1,16 @@
 # Builds and tests Meridian on every push to main and every pull request.
 #
 #   core     - the dependency-free core library and its unit tests, on Linux
-#              (and macOS in a full run)
+#              and macOS
 #   linux    - the full application: unit tests, then the end-to-end self test
 #              (numeric audio checks, golden-file null tests, simulated UI input),
 #              under a virtual display
-#   windows, sanitizers (ASan + UBSan), macos - the same, in a full run only
+#   windows, sanitizers (ASan + UBSan) - the same, on Windows and under the
+#              sanitizers
+#   macos    - the application on macOS, started by hand (Run workflow)
 #
-# Pushes run only the Linux jobs: the repository is private, Actions minutes
-# are limited (Windows bills 2x, macOS 10x), and Windows is built and
-# self-tested on the development machine before every commit. Start a full
-# run from the Actions tab (Run workflow, "full") before a release.
+# Every push runs all of these except the macOS application. A manual run can
+# leave out the slower jobs (untick "full").
 #
 # CI machines have no sound card, so the self test runs with
 # --allow-no-audio-device: live-device checks are reported as SKIP, never PASS.
@@ -45,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.full && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.full && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -53,13 +53,14 @@ jobs:
       - name: Configure
         run: cmake -S . -B build/core -DMERIDIAN_BUILD_APP=OFF -DCMAKE_BUILD_TYPE=Release -DMERIDIAN_WARNINGS_AS_ERRORS=ON
       - name: Build
-        run: cmake --build build/core --parallel 4
+        # -k: keep going after an error, so one run reports every problem
+        run: cmake --build build/core --parallel 4 -- -k
       - name: Unit tests
         run: ctest --test-dir build/core --output-on-failure
 
   windows:
     name: Application (Windows)
-    if: github.event_name == 'workflow_dispatch' && inputs.full
+    if: github.event_name != 'workflow_dispatch' || inputs.full
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
@@ -131,7 +132,7 @@ jobs:
 
   sanitizers:
     name: AddressSanitizer + UBSan (Linux)
-    if: github.event_name == 'workflow_dispatch' && inputs.full
+    if: github.event_name != 'workflow_dispatch' || inputs.full
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:

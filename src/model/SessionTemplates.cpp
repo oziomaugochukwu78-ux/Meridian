@@ -26,6 +26,12 @@ T aux (const juce::String& name, const juce::String& effect)
 }
 } // namespace
 
+// The table below lists only the fields each track needs ({ "Drums", 2 }); the
+// rest keep their defaults on purpose, which GCC's -Wextra would flag.
+#if defined(__GNUC__)
+ #pragma GCC diagnostic push
+ #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#endif
 const std::vector<SessionTemplate>& builtInTemplates()
 {
     static const std::vector<SessionTemplate> templates {
@@ -80,6 +86,9 @@ const std::vector<SessionTemplate>& builtInTemplates()
     };
     return templates;
 }
+#if defined(__GNUC__)
+ #pragma GCC diagnostic pop
+#endif
 
 juce::StringArray templateGroups()
 {

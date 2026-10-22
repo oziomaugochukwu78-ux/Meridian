@@ -567,7 +567,7 @@ void SelfTest::testConsolePresets()
             distortion += h[k] * h[k];
         return 100.0 * std::sqrt (distortion) / h[1];
     };
-    auto value = [] (const RemoteTools::Result& r, const char* when, const char* what) { return (double) r.data[when][what]; };
+    auto value = [] (const RemoteTools::Result& reply, const char* when, const char* what) { return (double) reply.data[when][what]; };
 
     call ("set_master", R"({"preset":"Warm Tape"})");
     const auto warmer = call ("adjust", R"({"attribute":"warmth","direction":"more"})");
@@ -2607,7 +2607,7 @@ void SelfTest::testPitchAndModWheels()
     const auto reloaded = loaded != nullptr ? midimodel::readControl (track::clips (loaded->getTrack (0)).getChild (0), midi::pitchBend)
                                             : std::vector<midi::ControlPoint>();
     expect ("save and reload keep the wheel moves",
-            reloaded.size() == 2 && reloaded[0].value == -0.5f && reloaded[1].tick == 960 && reloaded[1].value == 0.25f,
+            reloaded.size() == 2 && juce::exactlyEqual (reloaded[0].value, -0.5f) && reloaded[1].tick == 960 && juce::exactlyEqual (reloaded[1].value, 0.25f),
             saved.getErrorMessage() + error);
 
     auto list = bendClip.getChildWithName (ids::PITCHBEND);
@@ -2620,7 +2620,7 @@ void SelfTest::testPitchAndModWheels()
     const auto repaired = midimodel::readControl (bendClip, midi::pitchBend);
     expect ("a damaged pitch-wheel list is found, then sorted and clamped by repair",
             problem.isNotEmpty() && findSessionProblem (*session).isEmpty() && repaired.size() == 3 && repaired[1].tick == 480
-                && repaired[1].value == 1.0f,
+                && juce::exactlyEqual (repaired[1].value, 1.0f),
             problem);
     clearTracks();
 }
@@ -5900,7 +5900,7 @@ void SelfTest::testTempoRuler()
         auto state = session->getState();
         expect ("the Timecode ruler defaults to 25 fps from 00:00:00:00", ruler.timecodeAt (72000) == "00:00:01:12", ruler.timecodeAt (72000));
         state.setProperty (ids::timecodeRate, "29.97df", nullptr);
-        state.setProperty (ids::timecodeStart, midi::toFrameCount ({ 1, 0, 0, 0 }, midi::FrameRate::fps29_97drop), nullptr);
+        state.setProperty (ids::timecodeStart, (juce::int64) midi::toFrameCount ({ 1, 0, 0, 0 }, midi::FrameRate::fps29_97drop), nullptr);
         const auto hourLater = ruler.timecodeAt ((juce::int64) (3600.0 * sampleRate));
         expect ("at 29.97 drop-frame from 01:00:00;00, one real hour later reads 02:00:00;00",
                 hourLater == "02:00:00;00" && findSessionProblem (*session).isEmpty(), hourLater);

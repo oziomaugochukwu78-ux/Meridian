@@ -65,7 +65,8 @@ Result apply (Session& session, juce::AudioFormatManager& formats, juce::ValueTr
             piece.setProperty (ids::id, session.allocateId(), nullptr);
             piece.setProperty (ids::start, from + region.start, nullptr);
             piece.setProperty (ids::offset, clip::offset (model) + region.start, nullptr);
-            piece.setProperty (ids::length, region.end - region.start, nullptr);
+            const auto length = (juce::int64) (region.end - region.start); // int64_t is long on Linux
+            piece.setProperty (ids::length, length, nullptr);
             // A region edge inside the span is a new edge: no fade there.
             if (region.start > 0)
                 for (const auto& id : { ids::fadeIn, ids::fadeInShape, ids::crossfadeIn, ids::extendedIn })
@@ -73,7 +74,6 @@ Result apply (Session& session, juce::AudioFormatManager& formats, juce::ValueTr
             if (from + region.end < to)
                 for (const auto& id : { ids::fadeOut, ids::fadeOutShape, ids::extendedOut })
                     piece.removeProperty (id, nullptr);
-            const auto length = region.end - region.start;
             piece.setProperty (ids::fadeIn, std::min (clip::fadeIn (piece), length), nullptr);
             piece.setProperty (ids::fadeOut, std::min (clip::fadeOut (piece), length - clip::fadeIn (piece)), nullptr);
             list.appendChild (piece, um);

@@ -326,7 +326,7 @@ void TimelineRuler::showTimecodeMenu()
     }
     menu.addSeparator();
     menu.addSectionHeader ("Session Start");
-    const auto hour = midi::toFrameCount ({ 1, 0, 0, 0 }, current);
+    const auto hour = (juce::int64) midi::toFrameCount ({ 1, 0, 0, 0 }, current); // int64_t is long on Linux
     menu.addItem ("00:00:00:00", true, start == 0, [set] { set (ids::timecodeStart, 0, "Timecode Start"); });
     menu.addItem ("01:00:00:00 (film and TV)", true, start == hour, [set, hour] { set (ids::timecodeStart, hour, "Timecode Start"); });
     menu.addItem ("Other...", [this, current, set]
@@ -341,7 +341,7 @@ void TimelineRuler::showTimecodeMenu()
             if (result != 1)
                 return;
             if (const auto tc = midi::parse (window->getTextEditorContents ("start").toStdString(), current))
-                set (ids::timecodeStart, midi::toFrameCount (*tc, current), "Timecode Start");
+                set (ids::timecodeStart, (juce::int64) midi::toFrameCount (*tc, current), "Timecode Start");
         }), true);
     });
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this));
