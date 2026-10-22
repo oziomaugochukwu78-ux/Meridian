@@ -23,6 +23,30 @@ juce::String timestamp (juce::Time t)
 }
 constexpr int stampLength = 19; // "20261013-091500-123"
 constexpr const char* sinceKey = "since=";
+
+/** Orders backup names by time, then by the counter added when two land in the same
+    millisecond ("...-123.meridian", then "...-123-1.meridian", "...-123-2", ... "-10").
+    Plain name order gets that wrong: '.' sorts after '-', and "-10" before "-2". */
+struct BackupOrder
+{
+    juce::String stamp;
+    int counter = 0;
+
+    BackupOrder (const juce::File& f, const juce::File& sessionFile)
+    {
+        const auto rest = f.getFileNameWithoutExtension().substring (prefixFor (sessionFile).length());
+        stamp = rest.substring (0, stampLength);
+        if (rest.length() > stampLength + 1 && rest[stampLength] == '-')
+            counter = rest.substring (stampLength + 1).getIntValue();
+    }
+
+    bool isNewerThan (const BackupOrder& other) const
+    {
+        if (stamp != other.stamp)
+            return stamp > other.stamp;
+        return counter > other.counter;
+    }
+};
 } // namespace
 
 juce::File folderFor (const juce::File& sessionFile)
@@ -38,9 +62,9 @@ juce::Array<juce::File> list (const juce::File& sessionFile)
             result.add (f);
 
     // Newest first. Names carry the time, so this does not depend on file-system timestamps.
-    std::sort (result.begin(), result.end(), [] (const juce::File& a, const juce::File& b)
+    std::sort (result.begin(), result.end(), [&sessionFile] (const juce::File& a, const juce::File& b)
     {
-        return a.getFileName() > b.getFileName();
+        return BackupOrder (a, sessionFile).isNewerThan (BackupOrder (b, sessionFile));
     });
     return result;
 }

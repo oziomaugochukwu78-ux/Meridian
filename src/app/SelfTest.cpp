@@ -3963,6 +3963,24 @@ void SelfTest::testSessionSafety()
                 newestHasLastEdit = newestHasLastEdit || track::name (t) == "Edit 6";
     }
     expect ("every backup is a valid session; the newest holds the latest unsaved edit", allValid && newestHasLastEdit, {});
+    {
+        // Backups made in the same millisecond get "-1", "-2", ... after the time. They must still
+        // list newest first: plain name order puts "-123" above "-123-1", and "-10" above "-2".
+        const auto orderSession = output.getChildFile ("Backup Order").getChildFile ("Order.meridian");
+        const auto orderFolder = backups::folderFor (orderSession);
+        orderFolder.createDirectory();
+        const juce::String stampBase = "Order.bak.20261022-194500-123";
+        for (const auto* suffix : { "", "-1", "-2", "-10" })
+            orderFolder.getChildFile (stampBase + suffix + Session::fileExtension).replaceWithText ("x");
+        orderFolder.getChildFile (juce::String ("Order.bak.20261022-194500-122") + Session::fileExtension).replaceWithText ("x");
+        juce::StringArray listed;
+        for (const auto& f : backups::list (orderSession))
+            listed.add (f.getFileNameWithoutExtension().fromLastOccurrenceOf (".", false, false));
+        expect ("backups made in the same millisecond still list newest first",
+                listed.joinIntoString (" ") == "20261022-194500-123-10 20261022-194500-123-2 20261022-194500-123-1 "
+                                               "20261022-194500-123 20261022-194500-122",
+                listed.joinIntoString (" "));
+    }
     expect ("backups never touch the session file (it still has none of the edits)",
             [&] { juce::String e; auto s = Session::load (file, e); return s != nullptr && s->getNumTracks() == 1; }(), {});
 
