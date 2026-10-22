@@ -2042,9 +2042,12 @@ RemoteTools::Result RemoteTools::setSampler (const juce::var& args)
     std::vector<Wanted> wanted;
     for (const auto& item : *list)
     {
-        const juce::File file (item["file"].toString().trim());
-        if (! juce::File::isAbsolutePath (item["file"].toString().trim()) || ! file.existsAsFile())
+        // Checked before a File is made from it: a relative path (or a Windows one on
+        // Linux, such as "C:/...") is not a valid File and would trip JUCE's assertion.
+        const auto path = item["file"].toString().trim();
+        if (! juce::File::isAbsolutePath (path) || ! juce::File (path).existsAsFile())
             return { false, {}, "No such file: \"" + item["file"].toString() + "\" (give a full path)." };
+        const juce::File file (path);
         if (std::unique_ptr<juce::AudioFormatReader> reader (app.getFormatManager().createReaderFor (file)); reader == nullptr)
             return { false, {}, "\"" + file.getFileName() + "\" is not an audio file Meridian can read." };
         Wanted w;
