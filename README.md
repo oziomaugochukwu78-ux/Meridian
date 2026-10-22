@@ -2,10 +2,16 @@
 
 An open-source digital audio workstation for Windows and macOS, written in C++20 on JUCE 9. It is laid out like a classic console-style DAW (Edit and Mix windows), and adds two things of its own:
 
-- a 64-bit double-precision mix engine with compensated (double-double) summing and an oversampled analog-console stage on the master bus, and
-- a local AI remote-control port: a WebSocket server that lets an AI agent or script drive the session with plain text commands.
+- an AI remote control: an MCP server with 49 tools, so Claude (or any MCP app) can build, edit, mix and export a session, every step undoable, and
+- a 64-bit double-precision mix engine with compensated (double-double) summing and an oversampled analog-console stage on the master bus.
 
-"Meridian" is a working title, set in one place: `MERIDIAN_PRODUCT_NAME` in `CMakeLists.txt`.
+## Download
+
+**Windows 10/11 (64-bit):** get `Meridian-0.1.0-windows-x64.zip` from the [latest release](https://github.com/oziomaugochukwu78-ux/Meridian/releases/latest), unzip it anywhere and run `Meridian.exe`. Nothing needs installing. Windows may warn that the app is unrecognised (it is not code-signed): click **More info**, then **Run anyway**. `QUICKSTART.txt` in the folder covers the basics, and `Connect to Claude.cmd` sets up Claude Desktop ([below](#make-music-with-claude-2-minute-setup)).
+
+macOS and Linux: build from source ([Building](#building)); packages will follow.
+
+The product name is set in one place: `MERIDIAN_PRODUCT_NAME` in `CMakeLists.txt`.
 
 ## Status
 
