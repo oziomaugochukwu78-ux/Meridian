@@ -89,6 +89,12 @@ typedef long double ieee854_float80_t;
     else()
         target_compile_options(mp3lame PRIVATE -w)
         target_link_libraries(mp3lame PUBLIC m)
+        if(MERIDIAN_ENABLE_ASAN)
+            # LAME relies on C behaviour UBSan reports but every compiler defines the
+            # same way, e.g. ~(-1 << n) for a bit mask in VbrTag.c. AddressSanitizer
+            # still checks LAME's memory use; UBSan keeps checking Meridian's own code.
+            target_compile_options(mp3lame PRIVATE -fno-sanitize=undefined)
+        endif()
     endif()
     set_target_properties(mp3lame PROPERTIES FOLDER "ThirdParty" POSITION_INDEPENDENT_CODE ON)
     add_library(Meridian::lame ALIAS mp3lame)
